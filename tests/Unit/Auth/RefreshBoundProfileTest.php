@@ -452,6 +452,60 @@ final class RefreshBoundProfileTest extends TestCase
     }
 
     /**
+     * Item 1. With no profile resolver wired (a null profile manager) a profile claim cannot be verified.
+     * The token is refused, the same null as a failed claim lookup. It must not fall through to
+     * resolveProfileForUser(), which returns null and so would let the account-active profile stand in.
+     */
+    public function testAClaimedAccessTokenIsRefusedWhenNoProfileResolverIsWired(): void
+    {
+        $jwt = $this->jwt();
+        $token = $jwt->createAccessToken(self::USER, [JwtHandler::CLAIM_PROFILE_ID => self::BOUND]);
+
+        self::assertNull(
+            $this->managerWithoutProfileResolver($jwt)->validateAccessToken($token),
+            'a claim with no resolver wired refuses the token, it does not resolve to the account default'
+        );
+    }
+
+    /**
+     * Item 1, the unchanged path. A token with NO profile claim keeps its behaviour with no resolver wired:
+     * the token is accepted and carries no profile, exactly as before the fix.
+     */
+    public function testAClaimlessAccessTokenIsUnchangedWhenNoProfileResolverIsWired(): void
+    {
+        $jwt = $this->jwt();
+        $token = $jwt->createAccessToken(self::USER);
+
+        $info = $this->managerWithoutProfileResolver($jwt)->validateAccessToken($token);
+
+        self::assertIsArray($info);
+        self::assertNull($info['profile_id'], 'a pre-S80 token with no resolver carries no profile, as before');
+    }
+
+    /**
+     * The manager with no UserProfileManager at all. The helper manager() cannot express this, because its
+     * null-coalescing default always supplies one.
+     */
+    private function managerWithoutProfileResolver(JwtHandler $jwt): AuthManager
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('getAuthState')->willReturn(['status' => 'active', 'tokensNotValidAfter' => 0]);
+        $repo->method('findById')->willReturn([
+            'id' => self::USER,
+            'username' => 'nina',
+            'status' => 'active',
+        ]);
+        $repo->method('mustChangePassword')->willReturn(false);
+
+        return new AuthManager(
+            $repo,
+            $jwt,
+            $this->createMock(AuditLogger::class),
+            new StructuredLogger('test', ['handlers' => []]),
+        );
+    }
+
+    /**
      * Finding 3. The refresh verifies the bound profile once and mints exactly that id. The mint does
      * not look the profile up a second time, so there is no second read for a removal to land in.
      */

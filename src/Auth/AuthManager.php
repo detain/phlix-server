@@ -1948,17 +1948,23 @@ class AuthManager
         // of its lifetime, so a locked child profile would be governed by the default's
         // schedule. The refresh path refuses for the same reason
         // (refuseUnownedRefreshProfile()). A token with NO claim (pre-S80) keeps the
-        // account default. A profile lookup that fails outright (the DB is unavailable)
-        // REFUSES the token too, the same null as an unowned claim. It must not yield a
-        // null profile: a null profile falls back to the account-active profile, which
-        // would run the token as the default. The cost is that a DB outage refuses
-        // claim-bearing access tokens for its duration, rather than admitting them as
-        // the default. That lookup is not retried through resolveProfileForUser(): the
-        // retry re-ran the same claim lookup, and an unowned claim there fell back to
-        // the default.
+        // account default. A profile lookup that fails outright (the DB is unavailable), or
+        // a claim with no resolver wired to verify it, REFUSES the token too, the same null
+        // as an unowned claim. It must not yield a null profile: a null profile falls back
+        // to the account-active profile, which would run the token as the default. The cost
+        // is that a DB outage refuses claim-bearing access tokens for its duration, rather
+        // than admitting them as the default. That lookup is not retried through
+        // resolveProfileForUser(): the retry re-ran the same claim lookup, and an unowned
+        // claim there fell back to the default.
         $claimedProfileId = JwtHandler::profileIdClaim($payload);
-        if ($claimedProfileId === null || $this->profileManager === null) {
-            $profileId = $this->resolveProfileForUser($userId, $claimedProfileId);
+        if ($claimedProfileId === null) {
+            $profileId = $this->resolveProfileForUser($userId, null);
+        } elseif ($this->profileManager === null) {
+            $this->logger->warning('Access token profile claim cannot be verified with no profile resolver wired; refusing the token', [
+                'user_id' => $userId,
+            ]);
+
+            return null;
         } else {
             try {
                 $profileId = $this->profileManager->resolveProfileIdForUser($userId, $claimedProfileId);

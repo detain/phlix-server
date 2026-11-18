@@ -128,7 +128,10 @@ trait TranscodeFileServer
         $cacheControl = self::cacheControlFor($file, $completeVod);
         $mtime = filemtime($path);
         $lastModified = $mtime !== false ? gmdate('D, d M Y H:i:s', $mtime) . ' GMT' : null;
-        $etag = $completeVod && $mtime !== false ? self::etagFor($mtime, $fileSize) : null;
+        $stat = stat($path);
+        $etag = $completeVod && $stat !== false
+            ? self::etagFor((int) $stat['ino'], $fileSize, (int) $stat['mtime'], (int) $stat['ctime'])
+            : null;
 
         // Conditional GET: immutable segments carry a year-long max-age, so a
         // revalidating client/cache can be answered 304 without re-sending the body.
@@ -232,15 +235,21 @@ trait TranscodeFileServer
     }
 
     /**
-     * The validator for a finished VOD playlist: a digest of its mtime and size, so
-     * it changes whenever the bytes can have changed (#13c).
+     * The validator for a finished VOD playlist: a digest of its inode, size, mtime
+     * and ctime, so it changes whenever the bytes can have changed (#13c).
      *
-     * @param int $mtime Last-modified time, seconds.
+     * mtime and ctime have one-second resolution, so a same-size rewrite within the
+     * same second keeps both. An atomic replace (write to a new file, rename over
+     * the old) gets a new inode, which is what makes the validator change then.
+     *
+     * @param int $inode Inode number.
      * @param int $size  File size, bytes.
+     * @param int $mtime Last-modified time, seconds.
+     * @param int $ctime Inode change time, seconds.
      */
-    private static function etagFor(int $mtime, int $size): string
+    private static function etagFor(int $inode, int $size, int $mtime, int $ctime): string
     {
-        return '"' . md5($mtime . ':' . $size) . '"';
+        return '"' . md5($inode . ':' . $size . ':' . $mtime . ':' . $ctime) . '"';
     }
 
     /**

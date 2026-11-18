@@ -188,6 +188,25 @@ final class TranscodeFileServerCacheTest extends TestCase
         self::assertNotNull($resp->filePath);
     }
 
+    public function test_an_atomic_same_size_rewrite_changes_the_etag(): void
+    {
+        // mtime and ctime are whole seconds, so a same-size rewrite inside one second
+        // used to keep the ETag. An atomic replace gets a new inode, and the inode is
+        // in the validator now. The replacement is the same length (seg-1 -> seg-2).
+        $oldEtag = $this->serve('vod.m3u8')->headers['ETag'];
+
+        $replacement = str_replace('seg-1.m4s', 'seg-2.m4s', self::VOD_PLAYLIST);
+        self::assertSame(strlen(self::VOD_PLAYLIST), strlen($replacement));
+        $tmp = $this->jobDir . '/vod.tmp';
+        file_put_contents($tmp, $replacement);
+        self::assertTrue(rename($tmp, $this->jobDir . '/vod.m3u8'));
+
+        $resp = $this->serve('vod.m3u8', ['If-None-Match' => $oldEtag]);
+
+        self::assertSame(200, $resp->statusCode, 'the old validator must not match the replaced playlist');
+        self::assertNotSame($oldEtag, $resp->headers['ETag']);
+    }
+
     public function test_a_segment_still_answers_304_to_a_matching_if_modified_since(): void
     {
         // The date check is kept for immutable segments: only playlists were carved out.

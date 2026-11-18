@@ -263,7 +263,10 @@ final class QuickConnectController
             ]);
         }
 
-        $result = $this->pairs->approve($code, $secret, $userId);
+        // The profile the approving request is running as is the one its schedule
+        // gate just checked (RequestAuthenticator's ownership-checked pid). Storing
+        // it lets the TV's token leg bind to the same profile, not the account default.
+        $result = $this->pairs->approve($code, $secret, $userId, $request->profileId);
         if ($result === QuickConnectStateStore::RESULT_APPROVED) {
             return (new Response())->json(['state' => QuickConnectPair::STATE_APPROVED]);
         }
@@ -327,7 +330,11 @@ final class QuickConnectController
         }
 
         try {
-            $auth = $this->authManager->buildAuthResponse($pair->userId);
+            // Bind to the profile the APPROVING session ran as (never the account
+            // default when one was known): the schedule gate checks that profile on
+            // every request, so the TV's session cannot outlive its window on another
+            // profile. buildAuthResponse re-checks ownership and falls back to default.
+            $auth = $this->authManager->buildAuthResponse($pair->userId, $pair->profileId);
         } catch (PasswordChangeRequiredException $e) {
             // SRV-M17: the APPROVING account is held, so the mint seam refuses —
             // the TV gets the contracts-registered distinct 403, never a bare

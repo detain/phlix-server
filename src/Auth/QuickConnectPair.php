@@ -34,6 +34,13 @@ namespace Phlix\Auth;
  * - `userId` — set only once a real authenticated session approved the pairing;
  *              this is the identity the token endpoint later mints for.
  * - `expiresAt` — unix second after which the row is dead to every read.
+ * - `profileId` — the profile the APPROVING session was running as (its schedule
+ *              gate passed on it). The token endpoint binds the minted session to
+ *              this profile, not to the account default, so a TV paired from an
+ *              open profile P cannot end up holding a session on an unscheduled
+ *              default profile D. Null when the approving request carried no
+ *              profile claim; the mint then falls back to the account default,
+ *              which is the profile the legacy-token gate checked.
  *
  * @package Phlix\Auth
  * @since 1.2.3
@@ -55,6 +62,7 @@ final class QuickConnectPair
         public readonly string $state,
         public readonly ?string $userId,
         public readonly int $expiresAt,
+        public readonly ?string $profileId = null,
     ) {
     }
 

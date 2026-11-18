@@ -177,7 +177,7 @@ final class QuickConnectStateStore implements QuickConnectStateStoreInterface
      *
      * @return string One of RESULT_APPROVED / RESULT_UNKNOWN / RESULT_BAD_SECRET / RESULT_NOT_READY.
      */
-    public function approve(string $code, string $secret, string $userId): string
+    public function approve(string $code, string $secret, string $userId, ?string $profileId = null): string
     {
         $this->db->beginTrans();
         try {
@@ -198,10 +198,13 @@ final class QuickConnectStateStore implements QuickConnectStateStoreInterface
                 return self::RESULT_BAD_SECRET;
             }
 
+            // The approving session's profile rides in the same JSON blob (no
+            // schema change): the token leg binds the minted session to it.
             $data = json_encode([
                 'secret' => $pair->secret,
                 'state' => QuickConnectPair::STATE_APPROVED,
                 'user_id' => $userId,
+                'profile_id' => $profileId !== null && $profileId !== '' ? $profileId : null,
             ]);
             $updated = $this->db->query(
                 'UPDATE oauth_state_store SET data = ? WHERE provider = ? AND state_value = ?',
@@ -354,6 +357,7 @@ final class QuickConnectStateStore implements QuickConnectStateStoreInterface
         }
 
         $userId = $data['user_id'] ?? null;
+        $profileId = $data['profile_id'] ?? null;
         $expires = $row['expires_epoch'] ?? null;
 
         return new QuickConnectPair(
@@ -362,6 +366,7 @@ final class QuickConnectStateStore implements QuickConnectStateStoreInterface
             $state,
             is_string($userId) && $userId !== '' ? $userId : null,
             is_numeric($expires) ? (int) $expires : 0,
+            is_string($profileId) && $profileId !== '' ? $profileId : null,
         );
     }
 

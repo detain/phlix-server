@@ -207,6 +207,58 @@ final class QuickConnectStateStoreTest extends TestCase
         self::assertSame('s3cret', $data['secret']);
     }
 
+    public function testApproveRecordsTheApprovingProfileInTheSameRow(): void
+    {
+        $captured = [];
+        $db = $this->db(
+            selectRows: $this->liveRow('s3cret', QuickConnectPair::STATE_PENDING, null),
+            updateResult: 1,
+            captured: $captured,
+        );
+        $store = new QuickConnectStateStore($db);
+
+        self::assertSame(
+            QuickConnectStateStore::RESULT_APPROVED,
+            $store->approve('ACDFGH', 's3cret', 'user-9', 'profile-P')
+        );
+        $data = json_decode((string) $captured['update']['params'][0], true);
+        self::assertSame('profile-P', $data['profile_id']);
+        self::assertSame('user-9', $data['user_id']);
+    }
+
+    public function testConsumeApprovedHydratesTheBoundProfile(): void
+    {
+        $row = [[
+            'data' => json_encode([
+                'secret' => 's3cret',
+                'state' => QuickConnectPair::STATE_APPROVED,
+                'user_id' => 'user-9',
+                'profile_id' => 'profile-P',
+            ]),
+            'expires_epoch' => time() + 300,
+        ]];
+        $store = new QuickConnectStateStore($this->db(selectRows: $row, deleteResult: 1));
+
+        [$result, $pair] = $store->consumeApproved('ACDFGH', 's3cret');
+
+        self::assertSame(QuickConnectStateStore::RESULT_APPROVED, $result);
+        self::assertInstanceOf(QuickConnectPair::class, $pair);
+        self::assertSame('profile-P', $pair->profileId);
+    }
+
+    public function testRowApprovedWithoutAProfileHydratesToNullProfile(): void
+    {
+        $store = new QuickConnectStateStore($this->db(
+            selectRows: $this->liveRow('s3cret', QuickConnectPair::STATE_APPROVED, 'user-9'),
+            deleteResult: 1,
+        ));
+
+        [, $pair] = $store->consumeApproved('ACDFGH', 's3cret');
+
+        self::assertInstanceOf(QuickConnectPair::class, $pair);
+        self::assertNull($pair->profileId);
+    }
+
     public function testApproveRejectsWrongSecretAndPersistsNothing(): void
     {
         $captured = [];

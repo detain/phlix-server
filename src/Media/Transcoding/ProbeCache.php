@@ -27,27 +27,28 @@ use Workerman\Timer;
  *    realpath, size, mtime, ctime and inode, and a read is a hit only when all five
  *    still match. ctime and inode catch a replace-by-rename. mtime and ctime are whole
  *    seconds, so a same-size in-place rewrite within the same second as the probe leaves all
- *    five unchanged. The racy-stat guard ({@see isRacy()}) covers that: when the file's mtime
- *    or ctime is not more than RACY_WINDOW_SECONDS older than the wall clock at probe time, or is
- *    ahead of it at all, the result is neither persisted nor kept in the in-process memo, so the
- *    next probe runs ffprobe again. A future timestamp is racy however far ahead it is, so a
- *    server clock that runs ahead of this host (NFS, SMB) keeps its files re-probed until the
- *    clock passes them. The cost of that rule is paid on every probe, not once. For a file whose
- *    stamp is far ahead (bad metadata, or a clock hours ahead), each {@see FfmpegRunner::probe()}
- *    call runs ffprobe until the clock passes the stamp. FfmpegRunner calls probe() once per HLS
- *    segment build for an SDR file without a threaded tone-map filter, so a 2-hour film with such a
- *    stamp costs about 1,200 ffprobe launches (7200 s at 6 s per segment). A cap on the future
- *    distance was considered and not used. A cap reopens the same-second rewrite risk for a file
- *    written recently on a mount whose clock runs ahead by more than the cap, and no bound on that
- *    skew is set in the code or config. A rewrite after that window cannot leave the stamp unchanged:
- *    the mtime has moved on, so it is a miss. The residue is a filesystem whose timestamps are 4 seconds
- *    or coarser. A non-racy stamp is at least RACY_WINDOW_SECONDS + 1 (3) seconds old when it is probed,
- *    so a later rewrite keeps the stamp only if the granularity is above 3 seconds. The other residue is
- *    a wall clock that moves backwards after the probe, so that a rewrite lands on the stored second.
- *    The guard also assumes that ctime is not refreshed on every stat. A mount whose ctime tracks
- *    the wall clock on every stat makes every file racy. Each probe then runs ffprobe, and nothing
- *    is memoized or persisted. The result stays correct, so this costs only the cache. Nothing
- *    logs it.
+ *    five unchanged. The racy-stat guard ({@see isRacy()}) covers that: when the file's mtime or
+ *    ctime is at most RACY_WINDOW_SECONDS older than the wall clock at probe time, or is ahead of it
+ *    by no more than MAX_FUTURE_SKEW_SECONDS, the result is neither persisted nor kept in the
+ *    in-process memo, so the next probe runs ffprobe again. A stamp further ahead than that cap is
+ *    not racy, and its result is persisted and memoized like an old one. So a racy file is re-probed
+ *    on every {@see FfmpegRunner::probe()} call, with or without this cache, until the clock passes
+ *    its stamp plus RACY_WINDOW_SECONDS. That is at most MAX_FUTURE_SKEW_SECONDS + RACY_WINDOW_SECONDS
+ *    (86 402 s) after the probe. Each probe() call that runs is one ffprobe launch. The per-segment
+ *    counts for the software and hwaccel paths are in docs/dev/BLOCKING_IO_EXCEPTIONS.md, Exception 11.
+ *    A rewrite after the window cannot leave the stamp unchanged, because the mtime has moved on, so
+ *    it is a miss. The residue is a filesystem whose timestamps are 4 seconds or coarser. A non-racy
+ *    past stamp is at least RACY_WINDOW_SECONDS + 1 (3) seconds old when it is probed, so a later
+ *    rewrite keeps the stamp only if the granularity is above 3 seconds. Another residue is a wall
+ *    clock that moves backwards after the probe, so that a rewrite lands on the stored second. The
+ *    last residue is the cap itself: a mount whose clock runs ahead of this host by more than
+ *    MAX_FUTURE_SKEW_SECONDS stamps its files past the cap, so they are not racy. A same-second
+ *    rewrite by that clock keeps the stamp unchanged, and a stale probe can then be served. A plain
+ *    write from a host with sane skew cannot reach a stamp that far ahead, so the cap accepts this
+ *    risk. No bound on that skew is set in the code or config. The guard also assumes that ctime is
+ *    not refreshed on every stat. A mount whose ctime tracks the wall clock on every stat makes every
+ *    file racy. Each probe then runs ffprobe, and nothing is memoized or persisted. The result stays
+ *    correct, so this costs only the cache. Nothing logs it.
  *  - Trust: the directory is used only when all of these hold. The configured path is
  *    absolute and has no "." or ".." segment, which is refused rather than normalised,
  *    because lstat follows a link through "." (for example /x/link/.). Its trailing
@@ -111,10 +112,26 @@ final class ProbeCache
 
     /**
      * Racy-stat window, in whole seconds. A file whose mtime or ctime is this many seconds older than
-     * the wall clock at probe time, or is ahead of it, is not persisted and is not memoized. See
-     * {@see isRacy()}.
+     * the wall clock at probe time, or is ahead of it by no more than {@see MAX_FUTURE_SKEW_SECONDS},
+     * is not persisted and is not memoized. See {@see isRacy()}.
      */
     public const RACY_WINDOW_SECONDS = 2;
+
+    /**
+     * Largest distance, in whole seconds, that a file timestamp may lie ahead of the wall clock and
+     * still be racy. A stamp further ahead than this is not racy: it is persisted and memoized like an
+     * old stamp, so it costs no repeat probe.
+     *
+     * The racy rule exists for a same-second rewrite. Such a rewrite leaves the stored stamp unchanged
+     * only when the writer's clock reads the stored second, so the writer's clock must be about as far
+     * ahead of this host's as the stamp is. A plain write from a host with sane skew cannot stamp a file
+     * a day ahead. An explicit utime restore changes ctime to the restore time, and the ctime term of
+     * {@see isRacy()} guards that. So for a stamp far past any plausible skew, the racy rule costs one
+     * ffprobe per probe call and protects nothing. One day is well beyond the skew of an NFS or SMB
+     * server, and it bounds how long a stamp can stay racy: at most this value plus RACY_WINDOW_SECONDS.
+     * The residual risk of this cap is in the class docblock.
+     */
+    public const MAX_FUTURE_SKEW_SECONDS = 86400;
 
     /**
      * Entry-count cap. A prune pass evicts only while the count is above this cap, and once
@@ -272,19 +289,21 @@ final class ProbeCache
     }
 
     /**
-     * True when a file's mtime or ctime is at most {@see self::RACY_WINDOW_SECONDS} older than $now,
-     * or is ahead of $now at all. A future timestamp is racy however far ahead it is, because of clock
-     * skew on a network mount: such a file's stamp is set by a clock that runs ahead of this host.
-     * Such a file can be rewritten in place without changing its size, mtime, ctime or inode, so its
-     * probe result must not be stored. A racy stamp is never memoized either, so each probe of it runs
-     * ffprobe again (see the class docblock for the per-segment cost of a far-future stamp). The caller
-     * passes time(): this compares wall-clock file timestamps, which the hrtime() rule for elapsed
-     * intervals does not cover.
+     * True when a file's mtime or ctime is racy. With age = $now - $stamp, a stamp is racy when
+     * age <= {@see self::RACY_WINDOW_SECONDS} AND age >= -{@see self::MAX_FUTURE_SKEW_SECONDS}, that is,
+     * when its age lies in the inclusive band from -MAX_FUTURE_SKEW_SECONDS to RACY_WINDOW_SECONDS.
+     * So a stamp is racy when it is no more than RACY_WINDOW_SECONDS older than $now, or when it is
+     * ahead of $now by no more than MAX_FUTURE_SKEW_SECONDS. A stamp further ahead than the cap is not
+     * racy. A racy stamp can be
+     * rewritten in place without changing its size, mtime, ctime or inode, so its probe result must
+     * not be stored or memoized, and each probe of it runs ffprobe again. The cap and its residual
+     * risk are described in the class docblock. The caller passes time(): this compares wall-clock
+     * file timestamps, which the hrtime() rule for elapsed intervals does not cover.
      */
     public static function isRacy(int $mtime, int $ctime, int $now): bool
     {
-        return $now - $mtime <= self::RACY_WINDOW_SECONDS
-            || $now - $ctime <= self::RACY_WINDOW_SECONDS;
+        return ($now - $mtime <= self::RACY_WINDOW_SECONDS && $now - $mtime >= -self::MAX_FUTURE_SKEW_SECONDS)
+            || ($now - $ctime <= self::RACY_WINDOW_SECONDS && $now - $ctime >= -self::MAX_FUTURE_SKEW_SECONDS);
     }
 
     /**

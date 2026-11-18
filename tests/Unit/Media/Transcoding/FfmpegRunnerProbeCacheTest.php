@@ -289,6 +289,53 @@ SH;
     }
 
     /**
+     * Item 2 (cap): a stamp an hour ahead of the clock is inside MAX_FUTURE_SKEW_SECONDS, so it is racy. The clock
+     * is 60 s ahead of the real touch time, so the ctime is an ordinary old stamp and only the mtime counts. The
+     * probe is neither persisted nor memoized, so the same runner and a second worker both run ffprobe again.
+     */
+    public function testAStampAnHourAheadIsNeitherPersistedNorMemoized(): void
+    {
+        $cacheDir = $this->dir . '/cache';
+        $clock = time() + 60;
+        touch($this->media, $clock + 3_600);
+        clearstatcache();
+
+        $runner = $this->runnerAt($cacheDir, $clock);
+        $runner->probe($this->media);
+        self::assertSame([], glob($cacheDir . '/*.json') ?: [], 'a racy result is not persisted');
+
+        $runner->probe($this->media);
+        self::assertSame(2, $this->probeRuns(), 'a racy result is not memoized, so the same runner probes again');
+
+        $this->runnerAt($cacheDir, $clock)->probe($this->media);
+        self::assertSame(3, $this->probeRuns(), 'a second worker also probes, because nothing was stored');
+    }
+
+    /**
+     * Item 2 (cap): a stamp one day and one second ahead of the clock is past MAX_FUTURE_SKEW_SECONDS, so it is not
+     * racy. Its probe is persisted and memoized like an old file's, so the same runner and a fresh worker both
+     * answer without running ffprobe again. The clock is 60 s ahead of the real touch time, as in the test above.
+     */
+    public function testAStampPastTheCapIsPersistedAndMemoized(): void
+    {
+        $cacheDir = $this->dir . '/cache';
+        $clock = time() + 60;
+        touch($this->media, $clock + ProbeCache::MAX_FUTURE_SKEW_SECONDS + 1);
+        clearstatcache();
+
+        $runner = $this->runnerAt($cacheDir, $clock);
+        $runner->probe($this->media);
+        self::assertSame(1, $this->probeRuns());
+        self::assertCount(1, glob($cacheDir . '/*.json') ?: [], 'a stamp past the cap is persisted');
+
+        $runner->probe($this->media);
+        self::assertSame(1, $this->probeRuns(), 'and memoized, so the same runner does not probe again');
+
+        $this->runnerAt($cacheDir, $clock)->probe($this->media);
+        self::assertSame(1, $this->probeRuns(), 'a fresh worker is served from the disk cache');
+    }
+
+    /**
      * Finding 5: a same-size rewrite within the same second as the probe. The file is probed with the clock
      * pinned to its mtime, so the stamp is racy. It is then rewritten at the same size, and its mtime is put back
      * to the probed value. ctime is not restored: file_put_contents and touch both set it to the wall clock, so it

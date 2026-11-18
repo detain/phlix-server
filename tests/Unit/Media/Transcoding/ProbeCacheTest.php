@@ -362,18 +362,23 @@ final class ProbeCacheTest extends TestCase
     /**
      * Item 2 and finding 2: the racy-stat window. A timestamp at most RACY_WINDOW_SECONDS older than now
      * makes the file racy, through mtime or through ctime. The bound is inclusive. A timestamp ahead of
-     * now is racy however far ahead it is, because a skewed network clock can stamp it.
+     * now by no more than MAX_FUTURE_SKEW_SECONDS is racy, because a skewed network clock can stamp it.
+     * Past that cap the stamp is not racy, and the boundary itself is inclusive.
      */
     public function testARecentMtimeOrCtimeIsRacy(): void
     {
         $now = 1_000;
+        $cap = ProbeCache::MAX_FUTURE_SKEW_SECONDS;
         self::assertTrue(ProbeCache::isRacy($now, 0, $now), 'written this second');
         self::assertTrue(ProbeCache::isRacy($now - 2, 0, $now), 'two seconds old is still inside the window');
         self::assertFalse(ProbeCache::isRacy($now - 3, 0, $now), 'three seconds old is outside the window');
         self::assertTrue(ProbeCache::isRacy(0, $now - 1, $now), 'a recent ctime alone is racy');
         self::assertTrue(ProbeCache::isRacy($now + 2, 0, $now), 'a future mtime counts, for clock skew');
-        self::assertTrue(ProbeCache::isRacy($now + 86_400, 0, $now), 'a future mtime counts however far ahead');
-        self::assertTrue(ProbeCache::isRacy(0, $now + 86_400, $now), 'a future ctime counts however far ahead');
+        self::assertTrue(ProbeCache::isRacy($now + 3_600, 0, $now), 'a future mtime an hour ahead is racy');
+        self::assertTrue(ProbeCache::isRacy(0, $now + 3_600, $now), 'a future ctime an hour ahead is racy');
+        self::assertTrue(ProbeCache::isRacy($now + $cap, 0, $now), 'the cap itself is inclusive');
+        self::assertFalse(ProbeCache::isRacy($now + $cap + 1, 0, $now), 'a day and a second ahead is not racy');
+        self::assertFalse(ProbeCache::isRacy(0, $now + $cap + 1, $now), 'a future ctime past the cap is not racy');
         self::assertFalse(ProbeCache::isRacy(0, 0, $now), 'an old file is not racy');
     }
 }

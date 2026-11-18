@@ -365,9 +365,13 @@ class FfmpegRunner
      * }|null Probe results or null if probing fails
      *
      * A racy stamp (see {@see ProbeCache::isRacy()}) is neither memoized nor persisted, so for that
-     * file each call runs ffprobe again. A far-future mtime keeps a file racy until the clock passes
-     * it. Callers on the segment path, which call this once per segment build, pay one ffprobe launch
-     * per segment for such a file.
+     * file each call runs ffprobe again, with or without the disk cache. A stamp is racy when its mtime
+     * or ctime is at most {@see ProbeCache::RACY_WINDOW_SECONDS} older than now, or is ahead of now by
+     * no more than {@see ProbeCache::MAX_FUTURE_SKEW_SECONDS}. A stamp further ahead than that is not
+     * racy and is memoized and persisted as an old one is. So a racy file costs one ffprobe launch per
+     * call until the clock passes its stamp plus the window, at most one day plus the window. Callers
+     * on the segment path call this one or more times per segment build; see Exception 11 in
+     * docs/dev/BLOCKING_IO_EXCEPTIONS.md for the count on each path.
      *
      * @example
      * ```php
@@ -383,8 +387,9 @@ class FfmpegRunner
         // after a re-encode). A failed probe is memoized as null but is retried.
         $stamp = $this->probeFileStamp($inputPath);
         // Racy-stat guard: a file whose mtime or ctime is at most ProbeCache::RACY_WINDOW_SECONDS older than now,
-        // or is ahead of now, can be rewritten in place without changing its stamp, so this probe's result is neither
-        // persisted nor memoized, and the next call runs ffprobe again.
+        // or is ahead of now by no more than ProbeCache::MAX_FUTURE_SKEW_SECONDS, can be rewritten in place without
+        // changing its stamp, so this probe's result is neither persisted nor memoized, and the next call runs
+        // ffprobe again. A stamp further ahead than the cap is not racy (see ProbeCache::isRacy()).
         $racy = $stamp !== null && ProbeCache::isRacy($stamp['mtime'], $stamp['ctime'], $this->probeClock());
         $cacheKey = $inputPath . ':' . ($stamp === null ? '' : implode(':', [
             $stamp['mtime'],
@@ -2129,8 +2134,12 @@ class FfmpegRunner
                 // the input. probe() is memoised by path+stamp, so this is at most
                 // one ffprobe per file per worker lifetime, except for a racy stamp
                 // (a mtime or ctime within ProbeCache::RACY_WINDOW_SECONDS of now, or
-                // ahead of it), which is not memoised: then every segment build runs
-                // one ffprobe until the clock passes the stamp.
+                // ahead of it by no more than ProbeCache::MAX_FUTURE_SKEW_SECONDS),
+                // which is not memoised: then each probe() call runs one ffprobe until
+                // the clock passes the stamp plus the window. When require_hdr_tone_map
+                // is unset, an HDR source calls probe() twice, once through
+                // needsToneMapping() above and once through getToneMappingProfile() here,
+                // so a racy HDR file costs two launches per segment build.
                 $toneMapFilter = $this->getToneMappingProfile($inputPath, $outFile, $videoCodec);
                 if ($toneMapFilter !== null && $toneMapFilter !== '') {
                     $filters[] = $toneMapFilter;
@@ -2549,8 +2558,13 @@ class FfmpegRunner
             // Legacy fallback: pre-SV-1.1(b) persisted params / un-rescanned items
             // where the filter string was not threaded. Re-derive from the input.
             // probe() is memoised by path+stamp, so this is at most one ffprobe per
-            // file per worker lifetime, except a racy stamp (see ProbeCache::isRacy()):
-            // then each call runs one ffprobe until the clock passes the stamp.
+            // file per worker lifetime, except a racy stamp (see ProbeCache::isRacy(),
+            // which covers a stamp up to ProbeCache::MAX_FUTURE_SKEW_SECONDS ahead of
+            // the clock): then each probe() call runs one ffprobe until the clock passes
+            // the stamp plus the window. When require_hdr_tone_map is unset, an HDR
+            // source on an encoder that is not HDR-capable calls probe() twice
+            // (needsToneMapping() and getToneMappingProfile()), so a racy file costs
+            // two launches per segment build.
             // HDR-capable hardware encoders pass HDR through directly, so they
             // only tone-map when the job-level
             // require_hdr_tone_map flag forces it.

@@ -3060,6 +3060,12 @@ class FfmpegRunner
      */
     public const TEMP_FILE_PREFIX = '.tmp-';
 
+    /**
+     * Name, under {@see self::TEMP_FILE_PREFIX}, of the framemd5 file a trickplay pass
+     * writes so the sprite's slot count can be read back. It is deleted on every path.
+     */
+    private const SLOT_COUNT_FILENAME = 'slots.framemd5';
+
     /** Sprite-sheet columns; rows are derived from the requested thumb count. */
     private const TRICKPLAY_SPRITE_COLUMNS = 6;
 
@@ -3315,6 +3321,19 @@ class FfmpegRunner
                 $padding
             );
         }
+        // The slot counter is the sprite's own sampler, written out as one framemd5 line
+        // per slot. A pass that ends before the last sample leaves fewer slots than
+        // cells, and `tile` then fills the missing cells black with exit 0. The count is
+        // what catches that; the sprite bytes cannot show it.
+        $slotChain = null;
+        if ($wantSprite) {
+            $slotChain = sprintf(
+                'trim=start=%s,setpts=PTS-%s/TB,fps=1/%s:eof_action=pass,scale=16:9[slots]',
+                $spriteTrimArg,
+                $spriteTrimArg,
+                $spriteIntervalArg
+            );
+        }
         $bifChain = null;
         if ($wantBif) {
             $bifChain = sprintf(
@@ -3326,26 +3345,52 @@ class FfmpegRunner
             );
         }
 
-        if ($spriteChain !== null && $bifChain !== null) {
-            $graph = '[0:v]split=2[in_sprite][in_bif];[in_sprite]' . $spriteChain . ';[in_bif]' . $bifChain;
-        } elseif ($spriteChain !== null) {
-            $graph = '[0:v]' . $spriteChain;
+        // One decode, fanned out: the input is split once, and each branch reads its own
+        // labelled copy. A single branch needs no split.
+        $branches = array_filter(
+            ['sprite' => $spriteChain, 'slots' => $slotChain, 'bif' => $bifChain],
+            static fn (?string $chain): bool => $chain !== null
+        );
+        if (count($branches) === 1) {
+            $graph = '[0:v]' . (string) reset($branches);
         } else {
-            $graph = '[0:v]' . (string) $bifChain;
+            $inputs = '';
+            $parts = [];
+            foreach ($branches as $name => $chain) {
+                $inputs .= '[in_' . $name . ']';
+                $parts[] = '[in_' . $name . ']' . $chain;
+            }
+            $graph = '[0:v]split=' . count($branches) . $inputs . ';' . implode(';', $parts);
         }
 
+        $slotsTemp = $spriteTemp === null ? null : $tempPrefix . self::SLOT_COUNT_FILENAME;
         $cmd = $this->buildTrickplayArtefactsCommand(
             $videoPath,
             (string) $seekArg,
             $graph,
             $spriteTemp,
             $bifPattern,
-            $bifCount
+            $bifCount,
+            $slotsTemp
         );
 
         $outputLines = [];
         $exitCode = 0;
-        $this->runTrickplayCommand($cmd, $outputLines, $exitCode);
+        $slotCount = null;
+        try {
+            $this->runTrickplayCommand($cmd, $outputLines, $exitCode);
+            $slotCount = $slotsTemp === null ? null : self::countFramemd5Frames($slotsTemp);
+        } catch (\Throwable $e) {
+            // A launch that throws part way leaves partial temporaries; discard them too.
+            $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount);
+            throw $e;
+        } finally {
+            // The slot file is only a measurement. It is removed on every path, including
+            // a thrown run, so it never outlives the pass.
+            if ($slotsTemp !== null) {
+                self::removeTrickplayFile($slotsTemp);
+            }
+        }
 
         // The pass is all-or-nothing. A non-zero exit, a sprite that is missing, or
         // a BIF with fewer frames than requested fails the whole pass and removes
@@ -3371,6 +3416,19 @@ class FfmpegRunner
         // so any output at all is an error report.
         if (self::reportedFfmpegError($outputLines)) {
             $this->logger->warning('Trickplay pass failed: ffmpeg reported an error', $context);
+            $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount);
+
+            return null;
+        }
+
+        // A sprite whose sampler produced fewer slots than cells is a clip that ended
+        // early: its last cells would be black. Each slot is one sample, so the count
+        // must be exact. A missing count (no file) is treated as a mismatch.
+        if ($spriteTemp !== null && $slotCount !== $spriteCount) {
+            $this->logger->warning('Trickplay sprite has the wrong number of cells; pass discarded', $context + [
+                'slot_count' => $slotCount,
+                'expected_slots' => $spriteCount,
+            ]);
             $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount);
 
             return null;
@@ -3442,6 +3500,7 @@ class FfmpegRunner
      * @param string|null $spritePath Absolute destination sheet path, or null to omit the sprite output.
      * @param string|null $bifPattern printf-style BIF frame pattern (…/bifframe_%05d.jpg), or null.
      * @param int         $bifCount   BIF frame cap for the `[bif]` output.
+     * @param string|null $slotsPath  Absolute framemd5 path for the `[slots]` output, or null to omit it.
      *
      * @return string The fully built, shell-escaped FFmpeg command line.
      *
@@ -3453,7 +3512,8 @@ class FfmpegRunner
         string $filterGraph,
         ?string $spritePath,
         ?string $bifPattern,
-        int $bifCount
+        int $bifCount,
+        ?string $slotsPath = null
     ): string {
         $outputs = '';
         if ($spritePath !== null) {
@@ -3462,6 +3522,9 @@ class FfmpegRunner
                 self::MJPEG_STRICTNESS_ARGS,
                 escapeshellarg($spritePath)
             );
+        }
+        if ($slotsPath !== null) {
+            $outputs .= sprintf(' -map "[slots]" -f framemd5 %s', escapeshellarg($slotsPath));
         }
         if ($bifPattern !== null) {
             $outputs .= sprintf(
@@ -3619,6 +3682,38 @@ class FfmpegRunner
         }
 
         return false;
+    }
+
+    /**
+     * Counts the frames a framemd5 file lists: one line per frame, after `#` headers.
+     *
+     * @return int|null The frame count, or null when the file is missing or unreadable.
+     */
+    private static function countFramemd5Frames(string $path): ?int
+    {
+        $lines = is_file($path) ? @file($path, FILE_IGNORE_NEW_LINES) : false;
+        if ($lines === false) {
+            return null;
+        }
+
+        $frames = 0;
+        foreach ($lines as $line) {
+            if ($line !== '' && $line[0] !== '#') {
+                $frames++;
+            }
+        }
+
+        return $frames;
+    }
+
+    /**
+     * Deletes one file or symlink if it exists. Errors are ignored: this is cleanup.
+     */
+    private static function removeTrickplayFile(string $path): void
+    {
+        if (is_file($path) || is_link($path)) {
+            @unlink($path);
+        }
     }
 
     /**

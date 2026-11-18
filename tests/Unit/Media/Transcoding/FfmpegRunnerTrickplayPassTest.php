@@ -60,8 +60,10 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         $this->assertCount(1, $runner->commands, 'Both outputs must come from ONE ffmpeg process.');
         $cmd = $runner->commands[0];
         $this->assertSame(1, substr_count($cmd, ' -i '), 'There must be exactly one input, so one decode.');
-        $this->assertStringContainsString('split=2', $cmd);
+        // Three branches off one decode: sprite, slot counter and BIF.
+        $this->assertStringContainsString('split=3[in_sprite][in_slots][in_bif]', $cmd);
         $this->assertStringContainsString('-map "[sprite]"', $cmd);
+        $this->assertStringContainsString('-map "[slots]" -f framemd5', $cmd);
         $this->assertStringContainsString('-map "[bif]"', $cmd);
     }
 
@@ -99,10 +101,15 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
             $cmd
         );
         $this->assertStringContainsString('trim=start=0,setpts=PTS-0/TB,fps=1/10:eof_action=pass,scale=320:-2[bif]', $cmd);
+        // The slot counter samples the sprite grid exactly as the sprite branch does.
+        $this->assertStringContainsString(
+            'trim=start=45,setpts=PTS-45/TB,fps=1/100:eof_action=pass,scale=16:9[slots]',
+            $cmd
+        );
         $this->assertStringNotContainsString('STARTPTS', $cmd);
     }
 
-    public function testSpriteOnlyPassHasNoSplitAndNoBifOutput(): void
+    public function testSpriteOnlyPassSplitsOnlyToCountItsSlots(): void
     {
         $runner = $this->scripted();
 
@@ -110,9 +117,52 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
 
         $this->assertNotNull($result);
         $cmd = $runner->commands[0];
-        $this->assertStringNotContainsString('split=2', $cmd);
+        $this->assertStringContainsString('split=2[in_sprite][in_slots]', $cmd);
         $this->assertStringNotContainsString('[bif]', $cmd);
         $this->assertStringContainsString('-map "[sprite]"', $cmd);
+    }
+
+    public function testASpriteThatEndsEarlyIsRejectedAndPublishesNothing(): void
+    {
+        // The reviewed repro: a 120 s container whose video stops at 118 s. ffmpeg exits
+        // 0 with an empty error stream, but its sampler produced 59 slots for 60 cells.
+        // The last cell would be black, so the pass must fail and publish nothing.
+        $runner = $this->scripted(6000.0);
+        $runner->spriteSlotsToWrite = 59;
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+
+        $this->assertNull($result);
+        $this->assertFileDoesNotExist($this->dir . '/out/sprite.jpg');
+        $this->assertFileDoesNotExist($this->dir . '/out/timeline.json');
+        $this->assertFileDoesNotExist($this->dir . '/out/bifframe_00001.jpg');
+        $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
+    }
+
+    public function testASpriteWithNoSlotCountIsRejected(): void
+    {
+        // The slot file is missing (ffmpeg wrote nothing): the count is unknown, so the
+        // sprite cannot be verified and the pass fails.
+        $runner = $this->scripted(6000.0);
+        $runner->spriteSlotsToWrite = -1;
+
+        $this->assertNull($runner->generateTrickplaySprites('/in.mkv', $this->dir . '/out', 60));
+        $this->assertFileDoesNotExist($this->dir . '/out/sprite.jpg');
+        $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
+    }
+
+    public function testTheSlotCountFileIsRemovedWhenTheRunThrows(): void
+    {
+        $runner = $this->scripted(6000.0);
+        $runner->throwOnRun = true;
+
+        try {
+            $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+            $this->fail('The launch exception must propagate.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('launch failed', $e->getMessage());
+        }
+        $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
     }
 
     public function testTimelineMatchesTheSpriteGridAtTheSampledTimes(): void
@@ -403,6 +453,12 @@ final class ScriptedTrickplayRunner extends FfmpegRunner
     /** Text ffmpeg writes to its captured output, or null for none. */
     public ?string $ffmpegMessage = null;
 
+    /** Slots the scripted sampler lists in the framemd5 file; -1 writes no file. */
+    public int $spriteSlotsToWrite = 60;
+
+    /** Whether the launch throws after writing its outputs. */
+    public bool $throwOnRun = false;
+
     public function __construct(string $ffmpeg, string $ffprobe, string $transcodeDir, private float $duration)
     {
         parent::__construct($ffmpeg, $ffprobe, $transcodeDir);
@@ -441,6 +497,19 @@ final class ScriptedTrickplayRunner extends FfmpegRunner
                 }
                 file_put_contents(sprintf($m[1], $i), self::JPEG);
             }
+        }
+
+        // The slot counter: one framemd5 line per sampled slot, after the header lines.
+        if ($this->spriteSlotsToWrite >= 0 && preg_match("#-f framemd5 '([^']*)'#", $cmd, $m) === 1) {
+            $lines = ['#format: frame checksums', '#version: 2'];
+            for ($i = 0; $i < $this->spriteSlotsToWrite; $i++) {
+                $lines[] = $i . ', ' . $i . ', ' . $i . ', 1, 1, 0x00000000';
+            }
+            file_put_contents($m[1], implode("\n", $lines) . "\n");
+        }
+
+        if ($this->throwOnRun) {
+            throw new \RuntimeException('launch failed');
         }
     }
 }

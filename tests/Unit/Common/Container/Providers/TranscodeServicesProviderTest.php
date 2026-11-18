@@ -9,6 +9,7 @@ use Phlix\Common\Container\Providers\TranscodeServicesProvider;
 use Phlix\Config\HwAccelConfig;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\ProbeCache;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Phlix\Media\Transcoding\SegmentProcessRegistry;
 use Phlix\Media\Transcoding\TranscodeManager;
@@ -475,5 +476,97 @@ final class TranscodeServicesProviderTest extends TestCase
             ],
         ]);
         $this->assertNull($this->readLoudnormParams($nonNumericI));
+    }
+
+    /**
+     * @param array<string, mixed> $ffmpeg Extra `ffmpeg` config keys, merged over the base.
+     */
+    private function buildRunnerWithFfmpeg(array $ffmpeg): FfmpegRunner
+    {
+        $this->seedRegistry();
+
+        $builder = new ContainerBuilder();
+        $builder->useAutowiring(true);
+        (new TranscodeServicesProvider())->register($builder, [
+            'ffmpeg' => array_merge([
+                'ffmpeg_path' => '/usr/bin/ffmpeg',
+                'ffprobe_path' => '/usr/bin/ffprobe',
+                'transcode_dir' => '/tmp/phlix_transcodes',
+            ], $ffmpeg),
+            'hls' => [
+                'segment_dir' => '/tmp/phlix_hls',
+                'segment_seconds' => 6,
+            ],
+        ]);
+        $builder->addDefinitions(['logger.media' => new NullLogger()]);
+
+        /** @var FfmpegRunner $runner */
+        $runner = $builder->build()->get(FfmpegRunner::class);
+
+        return $runner;
+    }
+
+    /** The disk cache the runner was wired with, or null when the runner is memo-only. */
+    private function probeCacheOf(FfmpegRunner $runner): ?ProbeCache
+    {
+        $value = (new \ReflectionProperty(FfmpegRunner::class, 'probeCache'))->getValue($runner);
+
+        return $value instanceof ProbeCache ? $value : null;
+    }
+
+    /**
+     * Item 10: the disk cache is opt-in. With PHLIX_PROBE_CACHE_DIR unset, the real default in
+     * config/ffmpeg.php is empty, so the runner is memo-only: no ProbeCache, and the directory the old
+     * default pointed at is not created. The default is read from the file, not from a literal.
+     */
+    public function testProbeCacheIsOffByDefault(): void
+    {
+        $envBefore = getenv('PHLIX_PROBE_CACHE_DIR');
+        putenv('PHLIX_PROBE_CACHE_DIR');
+        try {
+            /** @var array<string, mixed> $file */
+            $file = require dirname(__DIR__, 5) . '/config/ffmpeg.php';
+            $this->assertSame('', $file['probe_cache_dir'] ?? null, 'the default is empty, so the cache is opt-in');
+
+            $oldDefault = sys_get_temp_dir() . '/phlix-ffprobe-cache';
+            $existed = is_dir($oldDefault);
+
+            $runner = $this->buildRunnerWithFfmpeg(['probe_cache_dir' => $file['probe_cache_dir'] ?? '']);
+
+            $this->assertNull($this->probeCacheOf($runner), 'the runner is memo-only');
+            $this->assertSame($existed, is_dir($oldDefault), 'the old default directory is not created');
+        } finally {
+            if ($envBefore === false) {
+                putenv('PHLIX_PROBE_CACHE_DIR');
+            } else {
+                putenv('PHLIX_PROBE_CACHE_DIR=' . $envBefore);
+            }
+        }
+    }
+
+    /** Item 10: a non-empty absolute directory turns the cache on, and the directory is created private. */
+    public function testProbeCacheIsWiredWhenADirectoryIsSet(): void
+    {
+        $dir = sys_get_temp_dir() . '/phlix-provider-probe-' . bin2hex(random_bytes(6));
+        try {
+            $runner = $this->buildRunnerWithFfmpeg(['probe_cache_dir' => $dir]);
+
+            $this->assertInstanceOf(ProbeCache::class, $this->probeCacheOf($runner));
+            $this->assertDirectoryExists($dir);
+            $this->assertSame(0700, fileperms($dir) & 0777);
+        } finally {
+            @rmdir($dir);
+        }
+    }
+
+    /** Item 10: a relative value is opt-in but refused, so the runner stays memo-only and nothing is created. */
+    public function testARelativeProbeCacheDirectoryLeavesTheRunnerMemoOnly(): void
+    {
+        $name = 'phlix-provider-relative-' . bin2hex(random_bytes(6));
+
+        $runner = $this->buildRunnerWithFfmpeg(['probe_cache_dir' => $name]);
+
+        $this->assertNull($this->probeCacheOf($runner));
+        $this->assertDirectoryDoesNotExist(getcwd() . '/' . $name);
     }
 }

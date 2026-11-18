@@ -104,6 +104,14 @@ return [
      * restarts and is shared by all 14 HTTP workers. Without it each worker re-probes
      * every file once and the first request after a restart pays for it.
      *
+     * OPT-IN, OFF BY DEFAULT. The default is empty, so the container runs memo-only: no disk
+     * writes, no directory creation and no prune timer. The cache is enabled only when
+     * PHLIX_PROBE_CACHE_DIR is set to a non-empty absolute path. Why it is not on by default:
+     * ffprobe tags are personal metadata (titles, file paths and similar), so enabling the cache
+     * writes them to disk, even at mode 0600; and a first scan can write up to about 655 MB in the
+     * worst case (10000 entries of 64 KiB each). The memo-only path loses only cold-start speed:
+     * each worker probes each file once after a start, as it did before perf #11.
+     *
      * Entries are written atomically (mode 0600) and bounded: entries over 64 KiB
      * are not stored. A background timer prunes the directory (never on a probe request)
      * only while it holds more than 10000 entries, down to 9000. One worker prunes per
@@ -111,10 +119,11 @@ return [
      * created or written is a cache miss, never a request failure.
      *
      * Trust: the cache is used only when the check passes. The path must be absolute (a
-     * relative path disables the cache). The directory must be a real directory, not a
-     * symlink, owned by the effective uid of the Phlix process, with no group or other write
+     * relative path, or one with a "." or ".." segment, disables the cache). The directory must be
+     * a real directory, not a symlink, owned by the effective uid of the Phlix process, with no group or other write
      * bit. The realpath of the directory, and each ancestor of it up to /, must not be
-     * writable by group or other unless it has the sticky bit, so a symlinked ancestor is
+     * writable by group or other unless it is sticky and owned by root or the effective uid, so a
+     * symlinked ancestor is
      * judged by its target too. The location check runs once per worker at build. Each read
      * and write re-checks the directory and its device and inode. A directory that was
      * removed while the worker ran is recreated, and the whole location check runs again
@@ -125,12 +134,12 @@ return [
      *
      * Residual race: PHP has no openat(2), so a directory swapped in the microseconds
      * between the check and the open or rename is not closed. The device-and-inode check
-     * catches a swap that is still in place at the next operation. Use the system temp
-     * directory only where it passes the check. Point PHLIX_PROBE_CACHE_DIR at a
-     * persistent path owned by the service user (e.g. under /var/phlix) to keep the cache
+     * catches a swap that is still in place at the next operation. The system temp directory
+     * is not the default any more. Point PHLIX_PROBE_CACHE_DIR at a directory owned by the service
+     * user (e.g. under /var/phlix), which the operator creates, to enable the cache and keep it
      * across reboots. A reboot only costs re-probing.
      */
-    'probe_cache_dir' => EnvConfig::text('PHLIX_PROBE_CACHE_DIR', sys_get_temp_dir() . '/phlix-ffprobe-cache'),
+    'probe_cache_dir' => EnvConfig::text('PHLIX_PROBE_CACHE_DIR', ''),
 
     // S8: bounded fan-out cap for MediaScanner::scanFlat()'s concurrent ffprobe
     // pool (only active inside a Swoole coroutine — see MediaScanner). Mirrors

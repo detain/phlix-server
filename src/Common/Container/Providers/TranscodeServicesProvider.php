@@ -131,8 +131,10 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
             ? $ffmpegConfig['segment_decode_threads']
             : null;
 
-        // perf #11: persisted, cross-worker ffprobe cache directory. A non-empty
-        // string enables the disk cache; anything else leaves the runner memo-only.
+        // perf #11: persisted, cross-worker ffprobe cache directory. OPT-IN: the config default is
+        // empty, so the disk cache is off and the runner is memo-only (no disk writes, no directory
+        // creation, no prune timer). A non-empty PHLIX_PROBE_CACHE_DIR enables it. A relative value is
+        // refused by ProbeCache::createIfSecure() with one warning, and the runner stays memo-only.
         $probeCacheDir = is_string($ffmpegConfig['probe_cache_dir'] ?? null)
             && trim((string) $ffmpegConfig['probe_cache_dir']) !== ''
             ? (string) $ffmpegConfig['probe_cache_dir']

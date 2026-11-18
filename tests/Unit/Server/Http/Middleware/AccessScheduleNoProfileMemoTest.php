@@ -46,7 +46,11 @@ final class AccessScheduleNoProfileMemoTest extends TestCase
         return new AccessScheduleService($db);
     }
 
-    /** The memo map on the middleware instance. @return array<string, int|float> */
+    /**
+     * The memo map on the middleware instance.
+     *
+     * @return array<string, int|float>
+     */
     private function memoOf(AccessScheduleMiddleware $middleware): array
     {
         $property = new ReflectionProperty(AccessScheduleMiddleware::class, 'noProfileMemo');

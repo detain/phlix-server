@@ -349,15 +349,50 @@ final class PreRouterFastPathsAccessScheduleTest extends TestCase
         self::assertSame('access.scheduled', $this->decodedBody($response)['code']);
     }
 
-    public function test_a_signed_token_bound_to_a_free_profile_still_streams(): void
+    public function test_a_signed_token_bound_to_a_free_profile_is_admitted_and_takes_a_slot(): void
     {
+        // This token carries no device name. Before the bound-token fix it skipped the stream
+        // cap, and a bare token streamed. Now a bound stream with no device name is COUNTED under
+        // one unidentified-device bucket for its profile. Registering that slot arms a heartbeat
+        // timer, which needs the Workerman loop and throws under PHPUnit only after the slot is
+        // taken. So the test asserts the schedule admitted p2 (a schedule refusal returns before
+        // any slot) and that the INSERT ran, rather than a 200 with a file path.
         $fastPaths = $this->makeFastPaths($this->lockedOutNow(), ['id' => 'p1']);
 
-        $response = $fastPaths->dispatch($this->signedRequest('p2'));
+        $response = $this->dispatchOrNullOnTimer($fastPaths, $this->signedRequest('p2'));
 
-        self::assertNotNull($response);
-        self::assertSame(200, $response->statusCode);
-        self::assertSame($this->mediaPath, $response->filePath);
+        self::assertNull($response, 'the slot is taken, so the request reaches the heartbeat timer');
+        self::assertTrue($this->slotWasTaken(), 'a free profile is admitted by the schedule and takes its slot');
+    }
+
+    /**
+     * Dispatch a request, tolerating ONLY the heartbeat timer error. That error is raised
+     * after a stream slot has been registered, so a null return means the request got past
+     * the schedule and the stream cap into the registration.
+     */
+    private function dispatchOrNullOnTimer(PreRouterFastPaths $fastPaths, Request $request): ?\Phlix\Server\Http\Response
+    {
+        try {
+            return $fastPaths->dispatch($request);
+        } catch (\RuntimeException $e) {
+            if (!str_contains($e->getMessage(), 'Timer can only be used in workerman')) {
+                throw $e;
+            }
+
+            return null;
+        }
+    }
+
+    /** True when the scripted connection was asked to register a stream. */
+    private function slotWasTaken(): bool
+    {
+        foreach ($this->queries as $sql) {
+            if (str_starts_with($sql, 'INSERT INTO active_streams')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function test_a_legacy_signed_token_without_a_profile_is_unchecked_until_it_expires(): void

@@ -121,6 +121,14 @@ final class PreRouterFastPaths
     private const STREAM_PATTERN = '#^/media/(?P<id>[^/]+)/stream$#';
 
     /**
+     * The device bucket a bound (signed) stream with no device name is counted under
+     * (see {@see self::registerDirectPlaySlot()}). A client that sends this exact value as
+     * its X-Device-ID shares the bucket. That only changes which count it lands in, never
+     * whether the cap applies, so no bypass follows from it.
+     */
+    private const UNIDENTIFIED_DEVICE_ID = 'unidentified-device';
+
+    /**
      * @param ArtworkStorage      $artworkStorage Poster/variant store on local disk.
      * @param AvatarStorage       $avatarStorage  User avatar store on local disk.
      * @param ContainerInterface|null $container  Container for the stream path's
@@ -634,7 +642,7 @@ final class PreRouterFastPaths
             return $scheduleResponse;
         }
 
-        return $this->registerDirectPlaySlot($request, $profileId);
+        return $this->registerDirectPlaySlot($request, $profileId, false);
     }
 
     /**
@@ -657,28 +665,39 @@ final class PreRouterFastPaths
             return $scheduleResponse;
         }
 
-        return $this->registerDirectPlaySlot($request, $profileId);
+        return $this->registerDirectPlaySlot($request, $profileId, true);
     }
 
     /**
      * Take (or refresh) this stream's concurrent-stream slot for a profile, and arm its
      * heartbeat. Shared by the session and the signed-URL paths so both count against
-     * one per-profile cap. Returns null without a slot when the request names no device.
+     * one per-profile cap.
      *
-     * @param Request $request   The request being served.
-     * @param string  $profileId The profile the stream runs as (non-empty).
+     * A request with no device name at all (no X-Device-ID and no User-Agent) differs by
+     * path. A session request keeps the documented pass-through of StreamLimitMiddleware:
+     * no slot. A bound (signed) request is COUNTED under one shared unidentified-device
+     * bucket for its profile. No documented client sends neither header, so the
+     * pass-through was not needed by one, and the bound token is the only proof of access
+     * here, so it must not skip the cap. All device-less bound streams of a profile then
+     * occupy one slot, which bounds them rather than letting them bypass the cap.
+     *
+     * @param Request $request        The request being served.
+     * @param string  $profileId      The profile the stream runs as (non-empty).
+     * @param bool    $countDeviceless True for a bound (signed) request: count a request with
+     *                                no device name under the unidentified-device bucket.
      *
      * @return Response|null 429 when the profile is at its cap, else null.
      */
-    private function registerDirectPlaySlot(Request $request, string $profileId): ?Response
+    private function registerDirectPlaySlot(Request $request, string $profileId, bool $countDeviceless): ?Response
     {
         $deviceId = $this->getStreamDeviceId($request);
         if ($deviceId === null) {
-            // With no device name at all (no X-Device-ID header AND no
-            // User-Agent) there is nothing stable to key even a synthetic
-            // bucket on — the SAME documented pass-through as
-            // StreamLimitMiddleware. Real traffic always carries a UA.
-            return null;
+            if (!$countDeviceless) {
+                // Session path: the SAME documented pass-through as StreamLimitMiddleware.
+                // Real traffic always carries a UA.
+                return null;
+            }
+            $deviceId = self::UNIDENTIFIED_DEVICE_ID;
         }
 
         // M-3 twin (pre-fix this line skipped enforcement on a missing

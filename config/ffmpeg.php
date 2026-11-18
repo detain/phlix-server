@@ -44,11 +44,14 @@ return [
     // end-of-input flush. Measured: 4.7 s at 720p veryslow on one thread. On the dev host (load
     // about 15), a 4K 1-thread veryslow flush is 30.6 s, and a 4K 1-thread encode takes 98.9 s
     // wall. So an encode with no progress for 90 s is killed.
-    // That covers the 4K flush with about 3× margin, and about 1.5× under 2× contention (a
-    // linear projection of about 61 s). A kill frees the cap slot and the .part temp. The 300 s
-    // wall cap is about 3× the measured 4K wall time. Both bounds are far below
-    // transcode_timeout, which remains the last backstop. Non-positive values fall back to
-    // the registry defaults.
+    // That covers the measured 4K flush with about 3× margin. Under 2× contention the flush is
+    // a linear projection of about 61 s, not a measurement, and 90 s covers that with about 1.5×
+    // margin. A kill does not free the cap slot or the .part temp itself. The SIGKILL pass does,
+    // 0.5 to 5.5 s after TERM (the grace, plus up to one 5 s watchdog tick). If /proc was
+    // unreadable at TERM, the temp and its slot are held until the process is dead or
+    // transcode_timeout passes. The 300 s wall cap is about 3× the measured 4K wall time.
+    // Both bounds are far below transcode_timeout, which remains the last backstop.
+    // Non-positive values fall back to the registry defaults.
     'segment_stall_seconds' => 90,
     'segment_max_wall_seconds' => 300,
 

@@ -278,7 +278,7 @@ class TranscodeManager
      */
     private ?SegmentProcessRegistry $segmentRegistry = null;
 
-    /** Workerman timer id of this worker's encode watchdog; null until armed, 0 if no event loop. */
+    /** Workerman timer id of this worker's encode watchdog; null until armed (retried while unarmed). */
     private ?int $watchdogTimerId = null;
 
     /** Monotonic ms of the last request-driven watchdog sweep (throttled). */
@@ -2799,9 +2799,9 @@ class TranscodeManager
     /**
      * Arm this worker's Workerman timer that sweeps the segment registry every
      * {@see self::ENCODE_WATCHDOG_TICK_SECONDS}, so a stalled encode is reaped even
-     * when no request arrives. Armed at most once per worker. Outside a Workerman
-     * runtime (CLI, unit tests) Timer::add() throws, and the request-driven sweep
-     * alone carries the watchdog.
+     * when no request arrives. Armed once per worker; a failed attempt is retried on the
+     * next watchdogTick(). Outside a Workerman runtime (CLI, unit tests) Timer::add()
+     * throws on every attempt, and the request-driven sweep alone carries the watchdog.
      */
     private function armEncodeWatchdog(): void
     {
@@ -2824,7 +2824,9 @@ class TranscodeManager
                 },
             );
         } catch (\Throwable) {
-            $this->watchdogTimerId = 0;
+            // Leave the id null, so the next watchdogTick() (every launch decision) tries again.
+            // A 0 sentinel would latch the failure for the life of the worker, and escalation
+            // would then depend only on the request-driven sweep.
         }
     }
 

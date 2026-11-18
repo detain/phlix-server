@@ -234,6 +234,35 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
         self::assertSame([self::SIGKILL], $this->signalsFor(6003), 'the unchanged member gets its KILL');
     }
 
+    /**
+     * Finding 1. The leader (7001) was registered while `/proc` was unreadable, so no start
+     * time is recorded and its identity is 'unchecked'. Its PID has since been reused as a
+     * group leader by an unrelated process, and that group now holds member 7002. An
+     * unchecked leader is still signalled with TERM, but it gets no membership snapshot, so
+     * the SIGKILL step must never reach a process in its group.
+     */
+    public function testAnUncheckedLeaderGetsNoSnapshotSoItsGroupIsNeverKilled(): void
+    {
+        $key = '/segs/job/seg-00016.ts';
+        // The leader has no `/proc` entry at registration, so its start time is null.
+        $this->alive[7001] = true;
+        $this->proc[7002] = self::statLine(7002, 'S', 9);
+        $this->members = [7002 => 9];
+        $registry = $this->registry();
+        $registry->setProcMountedProbe(static fn (): bool => true);
+        $registry->register($key, 7001, null, null);
+
+        $registry->kill($key);
+        $registry->sweep((int) hrtime(true) + self::SEC); // past the 0.5 s grace
+
+        self::assertSame(
+            [self::SIGTERM],
+            $this->signalsFor(7001),
+            'the unchecked leader gets TERM and no KILL, since its identity is never verified',
+        );
+        self::assertSame([], $this->signalsFor(7002), 'an unchecked group is never snapshotted, so never KILLed');
+    }
+
     public function testWithoutAProcViewTheBehaviourIsTheUncheckedProbe(): void
     {
         // No `/proc` (non-Linux): nothing is recorded, so the signal is the old one.
@@ -249,12 +278,13 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
     }
 
     /**
-     * Finding 5. `/proc` was readable at registration, so the start time is recorded. It
-     * is unreadable at signal time, so the identity is unknown. Nothing may be signalled.
-     * The record is held through the grace window, then dropped, and the warning is logged
-     * once for the registry, not once per refusal.
+     * Findings 2 and 5. `/proc` was readable at registration, so the start time is recorded. It
+     * is unreadable at signal time, so the identity is unknown. Nothing may be signalled. The
+     * record is held through the grace window. Its PID is still alive, so the record keeps
+     * its temp and its cap slot past the grace, until the hold bound passes. The warning is
+     * logged once for the registry, not once per refusal.
      */
-    public function testAnUnreadableProcViewIsNeverSignalledAndTheRecordIsDroppedAfterTheGrace(): void
+    public function testAnUnreadableProcViewKeepsALiveRecordUntilTheHoldBound(): void
     {
         $key = '/segs/job/seg-00015.ts';
         $this->proc[5006] = self::statLine(5006, 'S', 777);
@@ -273,6 +303,7 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
         $registry = $this->registry($logger);
         $registry->register($key, 5006, null, '/segs/job/seg-00015.ts.part-dddd4444');
         $registry->configureWatchdog(30.0, 1.0);
+        $registry->configureUnverifiedHold(10.0);
 
         // `/proc` becomes unreadable: no stat line, and no `/proc` view at all.
         unset($this->proc[5006]);
@@ -286,9 +317,14 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
         $registry->sweep($start + 2 * self::SEC + intdiv(self::SEC, 10)); // inside the grace
         self::assertSame(1, $registry->orphanCount(), 'still held inside the grace');
 
-        $registry->sweep($start + 3 * self::SEC); // past the 0.5 s grace: KILL refused, dropped
+        $registry->sweep($start + 3 * self::SEC); // past the 0.5 s grace: KILL refused, PID still alive
         self::assertSame([], $this->signals, 'nothing is signalled while the identity is unknown');
-        self::assertSame(0, $registry->orphanCount(), 'the record is dropped after the grace');
+        self::assertSame(1, $registry->orphanCount(), 'a live record keeps its cap slot past the grace');
+        self::assertSame([], $this->cleaned, 'its temp is kept while the process may still run');
+
+        $registry->sweep($start + 13 * self::SEC); // 11 s after the TERM at 2 s, past the 10 s hold
+        self::assertSame([], $this->signals, 'the hold never signals');
+        self::assertSame(0, $registry->orphanCount(), 'the record is dropped once the hold bound passes');
         self::assertSame(['/segs/job/seg-00015.ts.part-dddd4444'], $this->cleaned);
         // The sweep also logs its own "reaping" warning, so count only the identity warning.
         $identityWarnings = array_filter(
@@ -296,6 +332,33 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
             static fn (string $message): bool => str_contains($message, '/proc unreadable'),
         );
         self::assertCount(1, $identityWarnings, 'the identity warning is logged once per registry');
+    }
+
+    /**
+     * Finding 2, the other half. A record with an unknown membership snapshot is only held while
+     * its PID is still alive. Once the PID is gone, it is dropped at the grace, as before.
+     */
+    public function testAnUnknownRecordWhosePidDiedIsDroppedAfterTheGrace(): void
+    {
+        $key = '/segs/job/seg-00017.ts';
+        $this->proc[5008] = self::statLine(5008, 'S', 888);
+        $this->alive[5008] = true;
+        $registry = $this->registry();
+        $registry->register($key, 5008, null, '/segs/job/seg-00017.ts.part-eeee5555');
+        $registry->configureWatchdog(30.0, 1.0);
+        unset($this->proc[5008]);
+        $registry->setProcMountedProbe(static fn (): bool => false);
+
+        $start = hrtime(true);
+        $registry->sweep($start + 2 * self::SEC); // wall cap: TERM refused, identity unknown
+        self::assertSame(1, $registry->orphanCount(), 'the TERM-refused record is an orphan');
+
+        $this->alive[5008] = false; // the process exits on its own
+        $registry->sweep($start + 3 * self::SEC); // past the 0.5 s grace
+
+        self::assertSame([], $this->signals, 'nothing is signalled while the identity is unknown');
+        self::assertSame(0, $registry->orphanCount(), 'a dead record is dropped at the grace');
+        self::assertSame(['/segs/job/seg-00017.ts.part-eeee5555'], $this->cleaned);
     }
 
     /**

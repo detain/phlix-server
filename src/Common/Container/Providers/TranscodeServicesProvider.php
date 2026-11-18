@@ -154,6 +154,12 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                         is_numeric($stallSeconds) ? (float) $stallSeconds : 0.0,
                         is_numeric($maxWallSeconds) ? (float) $maxWallSeconds : 0.0,
                     );
+                    // Bound on holding an unverifiable encode's temp and cap slot after TERM
+                    // (see SegmentProcessRegistry::sweep()). The wrapper timeout is the bound.
+                    $transcodeTimeout = $ffmpegCfg['transcode_timeout'] ?? null;
+                    $registry->configureUnverifiedHold(
+                        is_numeric($transcodeTimeout) ? (float) $transcodeTimeout : 0.0,
+                    );
 
                     return $registry;
                 }

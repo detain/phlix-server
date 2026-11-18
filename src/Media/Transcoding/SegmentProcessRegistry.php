@@ -162,6 +162,11 @@ final class SegmentProcessRegistry
     public const DEFAULT_MAX_WALL_SECONDS = 300.0;
 
     /**
+     * The shipped `ffmpeg.transcode_timeout` in seconds (see {@see $unverifiedHoldSeconds}).
+     */
+    public const DEFAULT_UNVERIFIED_HOLD_SECONDS = 7200.0;
+
+    /**
      * Cancel key (segment path) => list of tracked OS process-group-leader PIDs.
      *
      * @var array<string, array<int, int>>
@@ -275,8 +280,8 @@ final class SegmentProcessRegistry
      * dedup RESERVATION for the reaped segment. Without this, a requester arriving
      * just after a disconnect-kill would dedup onto the killed-never-to-publish
      * encode and 404 until the reservation self-heals (up to ~5s). It is fired
-     * BEFORE the coroutine-yielding SIGTERM→SIGKILL wait so a requester that
-     * re-launches during the grace period re-reserves a FRESH slot rather than
+     * BEFORE the SIGTERM, so a requester that re-launches during the grace period
+     * re-reserves a FRESH slot rather than
      * having its reservation cleared out from under it. NOT fired on the deferred
      * branch (the encode is still wanted by a piggybacker and keeps publishing).
      *
@@ -315,7 +320,9 @@ final class SegmentProcessRegistry
      * are cleaned. Bounded by the watchdog's own wall-clock and stall rules.
      *
      * `members` is the group membership snapshot taken before TERM (PID => start time), or
-     * null when `/proc` was unreadable then. Only the members in it can be KILLed at grace.
+     * null when `/proc` was unreadable then. Only the members in it can be KILLed at grace. A
+     * null record keeps its temps and its cap count while a PID is still alive, up to
+     * {@see $unverifiedHoldSeconds} after TERM.
      *
      * @var list<array{key: string, pids: array<int, int>, starts: array<int, int|null>,
      *     tmps: array<int, string>, startedNs: int, lastToken: int, lastGrowNs: int,
@@ -330,9 +337,10 @@ final class SegmentProcessRegistry
      *    `veryslow`, 1 thread).
      *  - The end-of-input flush: ffmpeg writes no progress block at all while the
      *    encoder drains its lookahead. Measured at 720p `veryslow`, 1 thread, out_time
-     *    froze for 4.7 s (3.44 s to 5.88 s) and the progress file gained no block for
-     *    that span. Measured at 4K (3840x2160, 6 s, `veryslow`, 1 thread, nice 19): the
-     *    last mid-encode out_time was 3.44 s, and the encode exited 30.6 s later, when
+     *    froze for 4.7 s, and the progress file gained no block for that span (the same
+     *    4.7 s figure as config/ffmpeg.php and the real-ffmpeg test). Measured at 4K
+     *    (3840x2160, 6 s, `veryslow`, 1 thread, nice 19): the last mid-encode out_time
+     *    was 3.44 s, and the encode exited 30.6 s later, when
      *    the lookahead drained. That is the 4K flush for this host, at its load of about
      *    15. If contention doubles, the flush is about 61 s (a linear projection, not
      *    measured). 90 s covers that with about 1.5× margin. The 30 s window this replaces
@@ -402,6 +410,13 @@ final class SegmentProcessRegistry
     private bool $warnedUnknownIdentity = false;
 
     /**
+     * Seconds after its TERM that an orphan with an unknown membership snapshot is held while
+     * its process is still alive (see {@see sweep()}). The container sets it from
+     * `ffmpeg.transcode_timeout`. The default is the shipped value, so the hold is always finite.
+     */
+    private float $unverifiedHoldSeconds = self::DEFAULT_UNVERIFIED_HOLD_SECONDS;
+
+    /**
      * @param callable(int, int): void|null $signalSender
      * @param callable(int): bool|null      $isAlive
      * @param callable(string): void|null   $tempCleaner
@@ -440,6 +455,21 @@ final class SegmentProcessRegistry
         }
         if ($maxWallSeconds > 0.0) {
             $this->maxWallSeconds = $maxWallSeconds;
+        }
+    }
+
+    /**
+     * Set how long an orphan whose TERM-time membership snapshot is unknown is held after its TERM,
+     * while its process is still alive (see {@see sweep()}). The container passes
+     * `ffmpeg.transcode_timeout`. A non-positive value keeps the shipped default, so the hold is
+     * always finite.
+     *
+     * @param float $seconds Hold bound in seconds.
+     */
+    public function configureUnverifiedHold(float $seconds): void
+    {
+        if ($seconds > 0.0) {
+            $this->unverifiedHoldSeconds = $seconds;
         }
     }
 
@@ -713,6 +743,17 @@ final class SegmentProcessRegistry
                     continue;
                 }
                 $this->sigkillMembers($orphan['pids'], $orphan['starts'], $orphan['members']);
+                if (
+                    $orphan['members'] === null
+                    && $this->anyAlive($orphan['pids'], $orphan['starts'])
+                    && $now - $orphan['termNs'] < $this->unverifiedHoldNanoseconds()
+                ) {
+                    // No membership snapshot, so nothing can be KILLed. The encode is still
+                    // running, so keep the record: its temp (and the cap slot it counts) stays
+                    // until the process is verified dead or the hold bound passes.
+                    $keep[] = $orphan;
+                    continue;
+                }
                 $this->cleanTemps($orphan['tmps']);
                 continue; // escalated and dropped
             }
@@ -847,9 +888,11 @@ final class SegmentProcessRegistry
     /**
      * Send TERM to each tracked group and take the membership snapshot the SIGKILL step will
      * check. The snapshot is taken BEFORE the TERM, and only for a group whose leader is verified
-     * (unchecked, same, or gone). A reused leader is never snapshotted, because its group id may
-     * now belong to a new encode. Returns null when the membership is unknown, which happens
-     * when a leader's identity is unknown or `/proc` is unreadable. Null means no KILL later.
+     * (same, or gone). An unchecked leader (no start time was recorded) is still signalled with
+     * TERM, but it gets no snapshot: its PID may since have been reused as a group leader by an
+     * unrelated process, so nothing in its group can be KILLed later. A reused leader is never
+     * snapshotted either. Returns null when the membership is unknown, which happens when a
+     * leader's identity is unknown or `/proc` is unreadable. Null means no KILL later.
      *
      * @param array<int, int>      $pids
      * @param array<int, int|null> $starts
@@ -864,7 +907,7 @@ final class SegmentProcessRegistry
             $identity = $this->identityOf($pid, $starts[$pid] ?? null);
             if ($identity === 'unknown') {
                 $unknown = true;
-            } elseif (in_array($identity, ['unchecked', 'same', 'gone'], true)) {
+            } elseif (in_array($identity, ['same', 'gone'], true)) {
                 $verified[] = $pid;
             }
         }
@@ -1128,6 +1171,12 @@ final class SegmentProcessRegistry
         return (int) ($this->gracePeriodSeconds * 1_000_000_000);
     }
 
+    /** The unverified-membership hold bound in nanoseconds (the monotonic clock's unit). */
+    private function unverifiedHoldNanoseconds(): int
+    {
+        return (int) ($this->unverifiedHoldSeconds * 1_000_000_000);
+    }
+
     /**
      * The default progress token for the temp family of one launch: the CMAF progress
      * signal for each temp that has a progress file, otherwise the byte total of that
@@ -1268,10 +1317,10 @@ final class SegmentProcessRegistry
 
         // SV-4.2-disconnect F1: this is a genuine reap (past the waiter-guard defer
         // and there are PIDs to signal). Invalidate the owner's dedup reservation
-        // for $key BEFORE the coroutine-yielding SIGTERM→SIGKILL wait below, so a
+        // for $key BEFORE the SIGTERM below, so a
         // requester that arrives for the same segment re-launches a FRESH encode
         // instead of deduping onto the corpse we are about to signal (which would
-        // 404 it until the ~5s stale-reconcile). Running before any yield means it
+        // 404 it until the ~5s stale-reconcile). Running before the TERM means it
         // can only clear the reservation of the launcher being reaped here — a
         // fresher re-launch's reservation is created afterwards and its own
         // generation-guarded finally protects it from this reaped launcher.

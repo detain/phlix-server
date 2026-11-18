@@ -163,8 +163,9 @@ final class PasswordChangeRequiredHttpBoundaryTest extends TestCase
             ->with('ACDFGH', 's')
             ->willReturn([QuickConnectStateStore::RESULT_APPROVED, $pair]);
 
+        // The approval names a profile, so the redemption mints through the owned-profile seam.
         $authManager = $this->createMock(AuthManager::class);
-        $authManager->method('buildAuthResponse')
+        $authManager->method('buildAuthResponseForOwnedProfile')
             ->willThrowException(new PasswordChangeRequiredException());
 
         $controller = new QuickConnectController($authManager, $store);
@@ -195,8 +196,9 @@ final class PasswordChangeRequiredHttpBoundaryTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
         $userRepo->method('findAdminById')->willReturn(null);
 
+        // The switch mints through the owned-profile seam (item I); the hold refuses that mint.
         $authManager = $this->createMock(AuthManager::class);
-        $authManager->method('buildAuthResponse')
+        $authManager->method('buildAuthResponseForOwnedProfile')
             ->willThrowException(new PasswordChangeRequiredException());
 
         $controller = new ProfilesController(

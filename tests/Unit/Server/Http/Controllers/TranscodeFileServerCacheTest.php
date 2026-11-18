@@ -168,4 +168,36 @@ final class TranscodeFileServerCacheTest extends TestCase
         self::assertSame(206, $resp->statusCode);
         self::assertSame('private, max-age=31536000', $resp->headers['Cache-Control']);
     }
+
+    public function test_a_finished_playlist_is_not_revalidated_by_if_modified_since(): void
+    {
+        // Last-Modified has one-second resolution. A client holding the in-progress
+        // playlist sends IMS with the second ENDLIST was appended in; that must reach
+        // the 200 + ETag path, not a 304 that keeps the unfinished copy.
+        $vod = $this->serve('vod.m3u8');
+        self::assertSame(200, $vod->statusCode);
+
+        $mtime = filemtime($this->jobDir . '/vod.m3u8');
+        self::assertIsInt($mtime);
+        $sameSecond = gmdate('D, d M Y H:i:s', $mtime) . ' GMT';
+
+        $resp = $this->serve('vod.m3u8', ['If-Modified-Since' => $sameSecond]);
+
+        self::assertSame(200, $resp->statusCode, 'a playlist is validated by its ETag, never by the date');
+        self::assertSame($vod->headers['ETag'], $resp->headers['ETag']);
+        self::assertNotNull($resp->filePath);
+    }
+
+    public function test_a_segment_still_answers_304_to_a_matching_if_modified_since(): void
+    {
+        // The date check is kept for immutable segments: only playlists were carved out.
+        $mtime = filemtime($this->jobDir . '/seg-1.m4s');
+        self::assertIsInt($mtime);
+
+        $resp = $this->serve('seg-1.m4s', ['If-Modified-Since' => gmdate('D, d M Y H:i:s', $mtime) . ' GMT']);
+
+        self::assertSame(304, $resp->statusCode);
+        self::assertNull($resp->filePath);
+    }
+
 }

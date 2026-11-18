@@ -136,8 +136,15 @@ trait TranscodeFileServer
         // the encode) and are never short-circuited to 304. RFC 7232 §3.3: when an
         // If-None-Match is present it decides alone, so the date check applies only
         // when it is absent.
+        //
+        // Playlists (`.m3u8`) are excluded from the date check even when finished:
+        // Last-Modified has one-second resolution, so a client revalidating an
+        // in-progress playlist could receive a 304 for the same second in which
+        // ENDLIST was appended and keep the unfinished copy. A finished playlist
+        // is validated by its ETag alone, which covers size and inode as well.
         $ifNoneMatchPresent = $request->getHeader('If-None-Match') !== null;
-        if ($cacheControl !== 'no-cache' && $lastModified !== null && !$ifNoneMatchPresent) {
+        $isPlaylist = strtolower(pathinfo($file, PATHINFO_EXTENSION)) === 'm3u8';
+        if ($cacheControl !== 'no-cache' && !$isPlaylist && $lastModified !== null && !$ifNoneMatchPresent) {
             $ims = $request->getHeader('If-Modified-Since');
             if (is_string($ims) && trim($ims) === $lastModified) {
                 return self::withValidator(

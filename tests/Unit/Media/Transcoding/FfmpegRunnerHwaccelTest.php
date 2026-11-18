@@ -770,6 +770,9 @@ final class FfmpegRunnerHwaccelTest extends TestCase
     public function test_software_capability_runtime_selection_honours_the_zero_knob(): void
     {
         $runner = $this->runtimeSelectionRunner(['software' => $this->softwareCapability()], 0);
+        // The input-side decode cap (perf #5) is a separate knob; zero it too so this
+        // test keeps its meaning: no `-threads` flag of EITHER side.
+        $runner->setSegmentDecodeThreads(0);
 
         $cmd = $runner->resolveSegmentEncodeCommand(
             '/input.mkv',

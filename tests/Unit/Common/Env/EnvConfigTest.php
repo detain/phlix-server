@@ -70,6 +70,42 @@ final class EnvConfigTest extends TestCase
         self::assertSame(12, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
     }
 
+    /**
+     * Pins the integer parser to the `(int)` cast for inputs an operator might set. Changing
+     * one of these changes what the knob does on upgrade (for example `auto` and `off` read as
+     * 0, which a cap treats as off, and `8G` reads as 8). Values were checked against master.
+     *
+     * @dataProvider castedIntegerProvider
+     */
+    public function testIntegerReadsTheValueTheIntCastReads(string $raw, int $expected): void
+    {
+        putenv('PHLIX_WMIN34_INT=' . $raw);
+
+        self::assertSame($expected, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
+    }
+
+    /** @return iterable<string, array{string, int}> */
+    public static function castedIntegerProvider(): iterable
+    {
+        yield 'auto is 0' => ['auto', 0];
+        yield 'off is 0' => ['off', 0];
+        yield 'size suffix reads the number' => ['8G', 8];
+        yield 'exponent' => ['1e3', 1000];
+        yield 'fraction' => ['1.5', 1];
+        yield 'hex is 0' => ['0x1A', 0];
+        yield 'doubled sign is 0' => ['+-5', 0];
+        yield 'space after sign is 0' => ['+ 5', 0];
+        yield 'leading dot is 0' => ['.5', 0];
+        yield 'true is 0' => ['true', 0];
+        yield 'two numbers' => ['5 6', 5];
+        yield 'underscore separator' => ['1_000', 1];
+        yield 'trailing non-breaking space' => ["5\u{00A0}", 5];
+        yield 'leading zero is decimal' => ['010', 10];
+        yield 'zero then comment' => ['0 # off', 0];
+        yield 'three then comment' => ['3 # three', 3];
+        yield 'overflow saturates' => ['99999999999999999999', PHP_INT_MAX];
+    }
+
     // ---- text() ----------------------------------------------------------
 
     public function test_text_falls_back_when_unset(): void

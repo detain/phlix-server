@@ -4231,6 +4231,8 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame(((int) round(2800000 * 1.07)) * 2, $t['bufsize']);
         $this->assertSame('aac', $t['audio_codec']);
         $this->assertSame('128k', $t['audio_bitrate']);
+        // This checks the parameter array only. audio_sample_rate is informational: no code path
+        // emits it as an -ar flag, so this assertion does not show that the output is resampled.
         $this->assertSame(48000, $t['audio_sample_rate']);
     }
 

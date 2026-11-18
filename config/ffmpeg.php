@@ -96,6 +96,80 @@ return [
         max(2, intdiv(EnvConfig::availableCpuCount(), 3))
     ),
 
+    /**
+     * perf #5: thread cap for the SOFTWARE decoder of a software segment encode.
+     *
+     * Emitted as an INPUT option, `-threads N` before `-i`, so it sizes the
+     * decoder's frame-thread pool. `segment_encode_threads` above caps only the
+     * output side (the x264 pool); without this the decoder auto-sizes to the whole
+     * machine on every concurrent encode. Applies to the software builder's
+     * non-copy video path only: a stream copy decodes nothing, and the hardware
+     * decode paths are not touched.
+     *
+     * MEASURED (hub.phlix, 12-core EPYC, 30 s of 1080p H.264 at -ss 1800, output
+     * `-threads 4` held fixed, two passes): decoder auto 10.3 s, 1 thread 10.4-10.6 s,
+     * 2 threads 10.3-10.7 s, 4 threads 10.1-10.6 s wall. Every setting is within
+     * run-to-run noise, so this cap showed no benefit on that clip.
+     *
+     * Default 0: the flag is off and the decoder auto-sizes, which is identical to the
+     * behaviour before this knob existed. Enabling it is an opt-in for hosts that run
+     * many concurrent software encodes of 4K-class sources, where the decoder's
+     * auto-sized pool is expected to contend. Measure on your own host before enabling
+     * it. A positive value bounds the decoder's frame-thread pool; 0 or a negative
+     * value disables the flag. A value above 64 is clamped to 64 where it is read
+     * (FfmpegRunner::MAX_SEGMENT_DECODE_THREADS), so an absurd value cannot reach ffmpeg as
+     * `-threads` with a huge count. The encode cap above is not clamped by this. The env value
+     * is read by EnvConfig::integer like every
+     * other integer knob, so a non-numeric value reads as its (int) cast (`abc` is 0,
+     * which is off; `4x` is 4). Env override: PHLIX_SEGMENT_DECODE_THREADS.
+     */
+    'segment_decode_threads' => EnvConfig::integer('PHLIX_SEGMENT_DECODE_THREADS', 0),
+
+    /**
+     * perf #11: directory for the persisted, cross-worker ffprobe cache
+     * ({@see \Phlix\Media\Transcoding\ProbeCache}). One small JSON file per media
+     * path, keyed by realpath and validated by size + mtime, so it survives worker
+     * restarts and is shared by all 14 HTTP workers. Without it each worker re-probes
+     * every file once and the first request after a restart pays for it.
+     *
+     * OPT-IN, OFF BY DEFAULT. The default is empty, so the container runs memo-only: no disk
+     * writes, no directory creation and no prune timer. The cache is enabled only when
+     * PHLIX_PROBE_CACHE_DIR is set to a non-empty absolute path. Why it is not on by default:
+     * ffprobe tags are personal metadata (titles, file paths and similar), so enabling the cache
+     * writes them to disk, even at mode 0600; and a first scan can write up to about 655 MB in the
+     * worst case (10000 entries of 64 KiB each). The memo-only path loses only cold-start speed:
+     * each worker probes each file once after a start, as it did before perf #11.
+     *
+     * Entries are written atomically (mode 0600) and bounded: entries over 64 KiB
+     * are not stored. A background timer prunes the directory (never on a probe request)
+     * only while it holds more than 10000 entries, down to 9000. One worker prunes per
+     * interval, because all workers share the directory. A directory that cannot be
+     * created or written is a cache miss, never a request failure.
+     *
+     * Trust: the cache is used only when the check passes. The path must be absolute (a
+     * relative path, or one with a "." or ".." segment, disables the cache). The directory must be
+     * a real directory, not a symlink, owned by the effective uid of the Phlix process, with no group or other write
+     * bit. The realpath of the directory, and each ancestor of it up to /, must not be
+     * writable by group or other unless it is sticky and owned by root or the effective uid, so a
+     * symlinked ancestor is
+     * judged by its target too. The location check runs once per worker at build. Each read
+     * and write re-checks the directory and its device and inode. A directory that was
+     * removed while the worker ran is recreated, and the whole location check runs again
+     * before it is used. A replaced directory is adopted only if it passes the same checks; one that
+     * fails them disables the cache for the process. Another local user could otherwise plant probe
+     * results that drive copy/transcode decisions. A
+     * failed check disables the disk cache (one warning per worker), and the server probes as
+     * before.
+     *
+     * Residual race: PHP has no openat(2), so a directory swapped in the microseconds
+     * between the check and the open or rename is not closed. The device-and-inode check
+     * catches a swap that is still in place at the next operation. The system temp directory
+     * is not the default any more. Point PHLIX_PROBE_CACHE_DIR at a directory owned by the service
+     * user (e.g. under /var/phlix), which the operator creates, to enable the cache and keep it
+     * across reboots. A reboot only costs re-probing.
+     */
+    'probe_cache_dir' => EnvConfig::text('PHLIX_PROBE_CACHE_DIR', ''),
+
     // S8: bounded fan-out cap for MediaScanner::scanFlat()'s concurrent ffprobe
     // pool (only active inside a Swoole coroutine — see MediaScanner). Mirrors
     // the max_concurrent_transcodes knob's style/placement.

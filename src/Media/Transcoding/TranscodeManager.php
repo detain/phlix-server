@@ -2319,6 +2319,8 @@ class TranscodeManager
             'bufsize' => $bufsize,
             'audio_codec' => 'aac',
             'audio_bitrate' => $this->encodeSettings->audioBitrate(),
+            // Informational only: FfmpegRunner emits no `-ar`, so the output sample
+            // rate follows the source and is NOT pinned to 48 kHz by this key.
             'audio_sample_rate' => 48000,
             // Force stereo on the re-encode: a 5.1(side) AC-3 source otherwise
             // produces channel_configuration=0 AAC that hls.js cannot parse (the
@@ -4849,6 +4851,8 @@ class TranscodeManager
         } else {
             $params['audio_codec'] = 'aac';
             $params['audio_bitrate'] = $this->encodeSettings->audioBitrate();
+            // Informational only: FfmpegRunner emits no `-ar`, so the output sample
+            // rate follows the source and is NOT pinned to 48 kHz by this key.
             $params['audio_sample_rate'] = 48000;
             // Force stereo on the re-encode (covers the audio-only group path):
             // a 5.1(side) AC-3 source otherwise yields channel_configuration=0

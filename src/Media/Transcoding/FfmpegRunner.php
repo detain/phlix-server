@@ -127,14 +127,46 @@ class FfmpegRunner
     private array $config = [];
 
     /**
-     * Per-worker probe memoization cache: keyed by "path:mtime", value is the
+     * Per-worker probe memoization cache: keyed by "path:mtime:size:ctime:inode", value is the
      * cached probe result. Caps ffprobe invocations to at most one per file per
      * worker lifetime — critical for the tone-map decision path where multiple
-     * segment encodes can ask about the same file in quick succession.
+     * segment encodes can ask about the same file in quick succession. Bounded at
+     * {@see self::PROBE_MEMO_LIMIT} ENTRIES, a count and not a byte size. The memo keeps
+     * each probe result in full, with no byte bound per entry: the 64 KiB bound in
+     * {@see ProbeCache::MAX_ENTRY_BYTES} applies to disk entries only. The persisted
+     * {@see ProbeCache} sits beneath it and survives restarts (perf #11).
      *
      * @var array<string, array{streams: array<int, array<string, mixed>>, format: array<string, mixed>}|null>
      */
     private array $probeMemo = [];
+
+    /**
+     * Maximum in-process probe memo ENTRIES per worker (a count, not bytes; the oldest
+     * entry is evicted first). A probe result has no byte bound in the memo, so the memory
+     * held is the count times the size of the largest result seen, not 512 times a fixed size.
+     */
+    private const PROBE_MEMO_LIMIT = 512;
+
+    /**
+     * Largest value the software-decode cap (`segment_decode_threads` / PHLIX_SEGMENT_DECODE_THREADS)
+     * reaches ffmpeg with. A larger value is clamped to this where it is read, so an absurd knob cannot
+     * become `-threads PHP_INT_MAX`. The encode cap has no such bound and is not changed by this.
+     */
+    public const MAX_SEGMENT_DECODE_THREADS = 64;
+
+    /**
+     * Optional persisted probe cache shared across workers (perf #11), or null for
+     * the memo-only behaviour. Wired by the container; see {@see setProbeCache()}.
+     */
+    private ?ProbeCache $probeCache = null;
+
+    /**
+     * Wall clock, in whole seconds, that the racy-stat guard compares file timestamps against.
+     * Null uses time(). Set only by tests (see {@see setWallClock()}).
+     *
+     * @var (\Closure(): int)|null
+     */
+    private ?\Closure $wallClock = null;
 
     /** @var bool|null Whether FFmpeg has libplacebo filter support (null = not yet checked) */
     private ?bool $hasLibplacebo = null;
@@ -168,6 +200,14 @@ class FfmpegRunner
      * identically under the same env.
      */
     private ?int $segmentEncodeThreads = null;
+
+    /**
+     * Thread cap for the software DECODER of a software segment encode (perf #5),
+     * or null to resolve it at build time from `PHLIX_SEGMENT_DECODE_THREADS` / the
+     * default — see {@see resolveSegmentDecodeThreads()}. Wired by
+     * {@see setSegmentDecodeThreads()} from `config/ffmpeg.php`.
+     */
+    private ?int $segmentDecodeThreads = null;
 
     /**
      * Creates a new FFmpegRunner instance.
@@ -227,6 +267,19 @@ class FfmpegRunner
     }
 
     /**
+     * Wire the software-decode thread cap (perf #5). Same contract as
+     * {@see setSegmentEncodeThreads()}: null re-enables the build-time chain
+     * (`PHLIX_SEGMENT_DECODE_THREADS` env → default 0, i.e. off); a value <= 0 drops the
+     * input-side `-threads` flag so the decoder auto-sizes.
+     *
+     * @since perf #5
+     */
+    public function setSegmentDecodeThreads(?int $threads): void
+    {
+        $this->segmentDecodeThreads = $threads;
+    }
+
+    /**
      * Resolve the libx264 `-threads` value: wired config value first, else the
      * same env → default chain `config/ffmpeg.php` applies, so a hand-built
      * runner (tests, scripts) gets production semantics for free.
@@ -237,6 +290,20 @@ class FfmpegRunner
             'PHLIX_SEGMENT_ENCODE_THREADS',
             self::defaultSegmentEncodeThreads(EnvConfig::availableCpuCount())
         );
+    }
+
+    /**
+     * Resolve the input-side software-decode `-threads` value (perf #5): the wired
+     * config value first, else `PHLIX_SEGMENT_DECODE_THREADS`, else 0 (off). Mirrors
+     * {@see resolveSegmentEncodeThreads()} so a hand-built runner behaves like production.
+     */
+    private function resolveSegmentDecodeThreads(): int
+    {
+        $threads = $this->segmentDecodeThreads ?? EnvConfig::integer('PHLIX_SEGMENT_DECODE_THREADS', 0);
+
+        // Clamped where it is read, so neither the wired value nor the env value can exceed the documented
+        // maximum. A value of 0 or below is untouched and still drops the flag.
+        return min($threads, self::MAX_SEGMENT_DECODE_THREADS);
     }
 
     /**
@@ -311,6 +378,16 @@ class FfmpegRunner
      *     format: array<string, mixed>
      * }|null Probe results or null if probing fails
      *
+     * A racy stamp (see {@see ProbeCache::isRacy()}) is neither memoized nor persisted, so for that
+     * file each call runs ffprobe again, with or without the disk cache. A stamp is racy when its mtime
+     * or ctime is at most {@see ProbeCache::RACY_WINDOW_SECONDS} older than now, or is ahead of now by
+     * no more than {@see ProbeCache::MAX_FUTURE_SKEW_SECONDS}. A stamp further ahead than that is not
+     * racy when it is probed, and is memoized and persisted as an old one is. So a racy file costs one
+     * ffprobe launch per call until the clock passes its stamp plus the window. For a stamp that was
+     * beyond the cap when probed, the racy span starts at stamp minus one day, so it is not bounded from
+     * the probe time (see Exception 13). Callers on the segment path call this one or more times per
+     * segment build; see Exception 13 in docs/dev/BLOCKING_IO_EXCEPTIONS.md for the count on each path.
+     *
      * @example
      * ```php
      * $info = $runner->probe('/path/to/video.mkv');
@@ -319,13 +396,45 @@ class FfmpegRunner
      */
     public function probe(string $inputPath): ?array
     {
-        // Memoize by path + mtime so at most one probe per file per worker
-        // lifetime. The mtime guard handles the case where the file changes
-        // on disk (e.g. after a re-encode).
-        $mtime = is_file($inputPath) ? (string) @filemtime($inputPath) : '';
-        $cacheKey = $inputPath . ':' . $mtime;
-        if (isset($this->probeMemo[$cacheKey])) {
+        // Memoize by path + size + mtime so at most one probe per file per worker
+        // lifetime, except a racy stamp (below), which is re-probed on every call.
+        // The size/mtime guard handles a file that changes on disk (e.g.
+        // after a re-encode). A failed probe is memoized as null but is retried.
+        $stamp = $this->probeFileStamp($inputPath);
+        // Racy-stat guard: a file whose mtime or ctime is at most ProbeCache::RACY_WINDOW_SECONDS older than now,
+        // or is ahead of now by no more than ProbeCache::MAX_FUTURE_SKEW_SECONDS, can be rewritten in place without
+        // changing its stamp, so this probe's result is neither persisted nor memoized, and the next call runs
+        // ffprobe again. A stamp further ahead than the cap is not racy when it is probed (see ProbeCache::isRacy()).
+        // The racy decision is made once, before either lookup, and reused for the store below. A racy stamp
+        // is answered by neither cache, not even one written while the stamp was non-racy, so every probe of a
+        // racy file runs ffprobe (the policy in the docblock above and in Exception 13).
+        $racy = $stamp !== null && ProbeCache::isRacy($stamp['mtime'], $stamp['ctime'], $this->probeClock());
+        $cacheKey = $inputPath . ':' . ($stamp === null ? '' : implode(':', [
+            $stamp['mtime'],
+            $stamp['size'],
+            $stamp['ctime'],
+            $stamp['inode'],
+        ]));
+        // A non-racy stamp keeps its memo entry (it is not cleared here), so a later non-racy probe still hits it.
+        if (!$racy && isset($this->probeMemo[$cacheKey])) {
             return $this->probeMemo[$cacheKey];
+        }
+
+        // perf #11: a persisted result for this exact file (realpath, size, mtime, ctime
+        // and inode) skips the ffprobe run, and it is shared with every other worker.
+        // Only a non-racy stamp reads the disk cache; a racy one always runs ffprobe.
+        if (!$racy && $stamp !== null && $this->probeCache !== null) {
+            $persisted = $this->probeCache->read(
+                $stamp['realpath'],
+                $stamp['size'],
+                $stamp['mtime'],
+                $stamp['ctime'],
+                $stamp['inode']
+            );
+            if ($persisted !== null) {
+                $this->rememberProbe($cacheKey, $persisted);
+                return $persisted;
+            }
         }
 
         $cmd = sprintf(
@@ -334,22 +443,127 @@ class FfmpegRunner
             escapeshellarg($inputPath)
         );
 
-        $output = $this->runProbeCommand($cmd);
+        $result = $this->parseProbeOutput($this->runProbeCommand($cmd));
+        if (!$racy) {
+            $this->rememberProbe($cacheKey, $result);
+        }
+
+        // Only a successful, non-racy probe is persisted; a failure may be transient and is retried.
+        if ($result !== null && !$racy && $stamp !== null && $this->probeCache !== null) {
+            $this->probeCache->write(
+                $stamp['realpath'],
+                $stamp['size'],
+                $stamp['mtime'],
+                $stamp['ctime'],
+                $stamp['inode'],
+                $result
+            );
+        }
+
+        return $result;
+    }
+
+    /**
+     * Wire the persisted, cross-worker ffprobe cache (perf #11). Null (the default,
+     * and what CLI scripts and unit tests get) keeps the in-process memo only.
+     *
+     * @since perf #11
+     */
+    public function setProbeCache(?ProbeCache $cache): void
+    {
+        $this->probeCache = $cache;
+    }
+
+    /**
+     * Replace the wall clock the racy-stat guard uses, in whole seconds. Null restores time().
+     * This is a test seam: production never calls it, and the guard only compares file
+     * timestamps against it.
+     *
+     * @param (\Closure(): int)|null $clock
+     */
+    public function setWallClock(?\Closure $clock): void
+    {
+        $this->wallClock = $clock;
+    }
+
+    /**
+     * The wall clock, in whole seconds, for the racy-stat guard. time() is correct here: the value is
+     * compared with file mtime and ctime, which are wall-clock timestamps, not an elapsed interval.
+     */
+    private function probeClock(): int
+    {
+        return $this->wallClock !== null ? ($this->wallClock)() : time();
+    }
+
+    /**
+     * The realpath, size, mtime, ctime and inode a probe result is keyed on, or null
+     * when the path is not a readable regular file. ctime and inode are included
+     * because mtime is whole seconds: a same-size rewrite in the same second, or a
+     * replace-by-rename, must not be a stale hit.
+     *
+     * @return array{realpath: string, size: int, mtime: int, ctime: int, inode: int}|null
+     */
+    private function probeFileStamp(string $inputPath): ?array
+    {
+        // Drop PHP's cached stat for this path first: a long-lived worker must key the
+        // probe on the file as it is now, not on the last stat() it happened to make.
+        clearstatcache(true, $inputPath);
+        if (!is_file($inputPath)) {
+            return null;
+        }
+        $realPath = realpath($inputPath);
+        if ($realPath === false) {
+            return null;
+        }
+        clearstatcache(true, $realPath);
+        $st = @stat($realPath);
+        if ($st === false) {
+            return null;
+        }
+
+        return [
+            'realpath' => $realPath,
+            'size' => $st['size'],
+            'mtime' => $st['mtime'],
+            'ctime' => $st['ctime'],
+            'inode' => $st['ino'],
+        ];
+    }
+
+    /**
+     * Store a probe result in the in-process memo, evicting the oldest entry once the
+     * per-worker cap is reached so a long-lived worker's memo cannot grow without bound.
+     *
+     * @param array{streams: array<int, array<string, mixed>>, format: array<string, mixed>}|null $result
+     */
+    private function rememberProbe(string $cacheKey, ?array $result): void
+    {
+        $this->probeMemo[$cacheKey] = $result;
+        if (count($this->probeMemo) > self::PROBE_MEMO_LIMIT) {
+            array_shift($this->probeMemo);
+        }
+    }
+
+    /**
+     * Normalize ffprobe's JSON stdout into the probe shape, or null when it is empty
+     * or malformed.
+     *
+     * @return array{streams: array<int, array<string, mixed>>, format: array<string, mixed>}|null
+     */
+    private function parseProbeOutput(?string $output): ?array
+    {
         if ($output === null || $output === '') {
-            $this->probeMemo[$cacheKey] = null;
             return null;
         }
 
         $data = json_decode($output, true);
         if (!is_array($data)) {
-            $this->probeMemo[$cacheKey] = null;
             return null;
         }
 
         $rawStreams = $data['streams'] ?? [];
         $rawFormat = $data['format'] ?? [];
         if (!is_array($rawStreams) || !is_array($rawFormat)) {
-            $this->probeMemo[$cacheKey] = null;
             return null;
         }
 
@@ -374,12 +588,10 @@ class FfmpegRunner
             }
         }
 
-        $result = [
+        return [
             'streams' => $streams,
             'format' => $format,
         ];
-        $this->probeMemo[$cacheKey] = $result;
-        return $result;
     }
 
     /**
@@ -410,6 +622,26 @@ class FfmpegRunner
      * @return string|null Captured stdout, or null when execution failed.
      */
     private function runProbeCommand(string $cmd): ?string
+    {
+        return $this->runShellCapture($cmd);
+    }
+
+    /**
+     * Runs a shell command line and returns its captured stdout, coroutine-aware.
+     *
+     * Shared by the ffprobe path ({@see runProbeCommand()}) and the detached
+     * segment launch ({@see launchDetachedSegment()}). Inside a Swoole coroutine it
+     * uses {@see \Swoole\Coroutine\System::exec()}, which yields to the event loop
+     * until the command exits; outside one (CLI scanners, unit tests) it falls back
+     * to a blocking `shell_exec()`, which is correct where there is no event loop
+     * to stall. Both paths run the line via `/bin/sh -c`. It is protected only so a test double can
+     * stand in for the launch; no production code overrides it.
+     *
+     * @param string $cmd Fully built, shell-escaped command line.
+     *
+     * @return string|null Captured stdout, or null when execution failed.
+     */
+    protected function runShellCapture(string $cmd): ?string
     {
         if (
             extension_loaded('swoole')
@@ -905,6 +1137,12 @@ class FfmpegRunner
      * extract group could mask a FAILED primary command and still touch
      * `.complete`.)
      *
+     * Launch path (perf #10): the shell line goes through {@see runShellCapture()}, which
+     * is coroutine-aware inside a Swoole coroutine and a blocking shell_exec() outside
+     * one. This method is reached from the HTTP request path (TranscodeController →
+     * ensureHlsJob(), when subtitle extraction is queued), so keep it inside a coroutine
+     * there. Never replace the launch with a plain blocking call on that path.
+     *
      * @param string             $command      The full primary FFmpeg command to run.
      * @param string             $outDir       Directory for the log and completion markers.
      * @param array<int, string> $trailingCmds Commands to run after a SUCCESSFUL primary
@@ -926,8 +1164,14 @@ class FfmpegRunner
             'timeout_secs' => $timeoutSecs,
         ]);
 
-        $pid = shell_exec($full);
-        if (!is_string($pid)) {
+        // perf #10: the same coroutine-aware launch as the segment encode (see
+        // launchDetachedSegment()). The line only forks and every output stream is
+        // redirected, so this returns at the fork inside a coroutine, and it is no
+        // longer a blocking shell_exec() on the HTTP request path.
+        // An empty or whitespace-only result is a failed launch, the same as launchDetachedSegment():
+        // the line always echoes the pid of the fork, so no output means the launch did not happen.
+        $pid = $this->runShellCapture($full);
+        if (!is_string($pid) || trim($pid) === '') {
             $this->logger->error('Failed to launch detached transcode');
             return 0;
         }
@@ -1821,6 +2065,16 @@ class FfmpegRunner
         // Accurate input seek BEFORE -i so the decode starts at the segment boundary.
         $cmd = sprintf('%s -nostdin -y -hide_banner -loglevel error', escapeshellarg($this->ffmpegPath));
         $cmd .= ' -ss ' . $startArg;
+        // perf #5: an INPUT-side `-threads` caps the software decoder's frame-thread
+        // pool (the output-side cap below only sizes the encoder). A stream copy
+        // decodes nothing, so it takes no flag. The hardware builders are separate
+        // methods and never reach this line.
+        if ($this->argvParam($params, 'video_codec') !== 'copy') {
+            $decodeThreads = $this->resolveSegmentDecodeThreads();
+            if ($decodeThreads > 0) {
+                $cmd .= ' -threads ' . $decodeThreads;
+            }
+        }
         $cmd .= ' -i ' . escapeshellarg($inputPath);
         $cmd .= ' -t ' . $durArg;
 
@@ -1897,8 +2151,15 @@ class FfmpegRunner
             } elseif ($require_hdr_tone_map || $this->needsToneMapping($inputPath)) {
                 // Legacy fallback: pre-SV-1.1(b) persisted params / un-rescanned
                 // items where the filter string was not threaded. Re-derive from
-                // the input; probe() is memoised by path+mtime, so this is at most
-                // one ffprobe per file per worker lifetime.
+                // the input. probe() is memoised by path+stamp, so this is at most
+                // one ffprobe per file per worker lifetime, except for a racy stamp
+                // (a mtime or ctime within ProbeCache::RACY_WINDOW_SECONDS of now, or
+                // ahead of it by no more than ProbeCache::MAX_FUTURE_SKEW_SECONDS),
+                // which is not memoised: then each probe() call runs one ffprobe until
+                // the clock passes the stamp plus the window. When require_hdr_tone_map
+                // is unset, an HDR source calls probe() twice, once through
+                // needsToneMapping() above and once through getToneMappingProfile() here,
+                // so a racy HDR file costs two launches per segment build.
                 $toneMapFilter = $this->getToneMappingProfile($inputPath, $outFile, $videoCodec);
                 if ($toneMapFilter !== null && $toneMapFilter !== '') {
                     $filters[] = $toneMapFilter;
@@ -2315,10 +2576,17 @@ class FfmpegRunner
             $filters[] = $threadedToneMapFilter;
         } else {
             // Legacy fallback: pre-SV-1.1(b) persisted params / un-rescanned items
-            // where the filter string was not threaded. Re-derive from the input;
-            // probe() is memoised by path+mtime, so this is at most one ffprobe per
-            // file per worker lifetime. HDR-capable hardware encoders pass HDR
-            // through directly, so they only tone-map when the job-level
+            // where the filter string was not threaded. Re-derive from the input.
+            // probe() is memoised by path+stamp, so this is at most one ffprobe per
+            // file per worker lifetime, except a racy stamp (see ProbeCache::isRacy(),
+            // which covers a stamp up to ProbeCache::MAX_FUTURE_SKEW_SECONDS ahead of
+            // the clock): then each probe() call runs one ffprobe until the clock passes
+            // the stamp plus the window. When require_hdr_tone_map is unset, an HDR
+            // source on an encoder that is not HDR-capable calls probe() twice
+            // (needsToneMapping() and getToneMappingProfile()), so a racy file costs
+            // two launches per segment build.
+            // HDR-capable hardware encoders pass HDR through directly, so they
+            // only tone-map when the job-level
             // require_hdr_tone_map flag forces it.
             $needsToneMap = $require_hdr_tone_map || (
                 $this->needsToneMapping($inputPath)
@@ -2694,6 +2962,14 @@ class FfmpegRunner
      * poll loop / a cancel hook can kill it early. Without a wired registry the
      * `timeout` wrapper alone still bounds the encode.
      *
+     * Launch path (perf #10): the shell line goes through {@see runShellCapture()}, the
+     * coroutine-aware helper {@see startDetached()} also uses. Inside a coroutine the
+     * fork yields to the event loop. Outside one it is a blocking shell_exec(), which is
+     * acceptable only for CLI and tests. The line is `nohup setsid … >> log 2>&1 & echo $!`,
+     * so stdout and stderr go to the segment log: the background encode does not hold the
+     * captured pipe, and the call returns at the fork. Keep the on-demand path in a
+     * coroutine; {@see startDetached()} must stay off the request path as well.
+     *
      * @param string      $encode      The complete FFmpeg command writing to `$tmp`.
      * @param string      $tmp         The `.part-*` temp path the command writes.
      * @param string      $outFile     The final segment path published on success.
@@ -2724,7 +3000,12 @@ class FfmpegRunner
             $start
         );
 
-        $pid = shell_exec($full);
+        // perf #10: the launch line only forks the encode (`nohup setsid … & echo $!`)
+        // and the shell exits at once, but a blocking shell_exec() still stalls the
+        // worker for that fork + shell start. Inside a coroutine this goes through
+        // Swoole's async exec, so other connections keep being served; the encode
+        // itself is detached either way and outlives the request.
+        $pid = $this->runShellCapture($full);
         if (!is_string($pid) || trim($pid) === '') {
             $this->logger->error('Failed to launch on-demand segment encode', ['segment' => $outFile]);
             return 0;

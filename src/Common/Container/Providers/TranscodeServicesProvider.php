@@ -19,6 +19,7 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\EncodeSettings;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlix\Media\Transcoding\ProbeCache;
 use Phlix\Media\Transcoding\SegmentProcessRegistry;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Psr\Container\ContainerInterface;
@@ -124,6 +125,21 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
             ? $ffmpegConfig['segment_encode_threads']
             : null;
 
+        // perf #5: the software decoder's input-side thread cap, same rule as the
+        // encode cap above (is_int, so 0 — "auto" — is a real value).
+        $segmentDecodeThreads = is_int($ffmpegConfig['segment_decode_threads'] ?? null)
+            ? $ffmpegConfig['segment_decode_threads']
+            : null;
+
+        // perf #11: persisted, cross-worker ffprobe cache directory. OPT-IN: the config default is
+        // empty, so the disk cache is off and the runner is memo-only (no disk writes, no directory
+        // creation, no prune timer). A non-empty PHLIX_PROBE_CACHE_DIR enables it. A relative value is
+        // refused by ProbeCache::createIfSecure() with one warning, and the runner stays memo-only.
+        $probeCacheDir = is_string($ffmpegConfig['probe_cache_dir'] ?? null)
+            && trim((string) $ffmpegConfig['probe_cache_dir']) !== ''
+            ? (string) $ffmpegConfig['probe_cache_dir']
+            : null;
+
         $loudnormParams = null;
         $loudnessConfig = is_array($ffmpegConfig['loudness'] ?? null) ? $ffmpegConfig['loudness'] : [];
         if (($loudnessConfig['enabled'] ?? false) === true && is_numeric($loudnessConfig['I'] ?? null)) {
@@ -170,7 +186,9 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     $ffmpegPath,
                     $ffprobePath,
                     $transcodeDir,
-                    $segmentEncodeThreads
+                    $segmentEncodeThreads,
+                    $segmentDecodeThreads,
+                    $probeCacheDir
                 ): FfmpegRunner {
                     // Static cache: only instantiate once per worker process.
                     static $runner = null;
@@ -193,6 +211,16 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     // playback-lag wave C: software-encode thread cap (setter per
                     // this constructor's documented "signature unchanged" law).
                     $runner->setSegmentEncodeThreads($segmentEncodeThreads);
+                    $runner->setSegmentDecodeThreads($segmentDecodeThreads);
+                    // The directory trust check (owner, no symlink, no group/other write)
+                    // runs once here, at build, not per probe. A refused directory yields
+                    // null, which leaves the runner memo-only, and logs one warning.
+                    $probeCache = $probeCacheDir !== null
+                        ? ProbeCache::createIfSecure($probeCacheDir, ProbeCache::MAX_ENTRIES, $logger)
+                        : null;
+                    // Pruning runs on a Workerman timer, never on a probe request.
+                    $probeCache?->startPruneTimer();
+                    $runner->setProbeCache($probeCache);
 
                     // SV-4.2: wire the segment-process registry so on-demand encode
                     // PIDs are tracked for cancellation / wait-timeout kill.

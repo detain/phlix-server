@@ -180,10 +180,12 @@ final class ProbeCacheTrustTest extends TestCase
     }
 
     /**
-     * Item 2(b): a directory replaced by a new one at the same path, with the same mode and
-     * owner, is caught by the device and inode check. The cache stays off and warns once.
+     * Item 2(b): a directory replaced by a new one at the same path is caught by the device and
+     * inode check. A replacement that fails the checks (here group-writable) is not adopted: the
+     * cache stays off and warns once. A replacement that passes them is adopted, see
+     * testAReplacedDirectoryThatPassesTheChecksIsAdopted.
      */
-    public function testAReplacedDirectoryIsRefusedAndWarnedOnce(): void
+    public function testAReplacedDirectoryThatFailsTheChecksLatchesAndWarnsOnce(): void
     {
         $dir = $this->root . '/swapped';
         mkdir($dir, 0700);
@@ -203,9 +205,11 @@ final class ProbeCacheTrustTest extends TestCase
         $cache->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
         self::assertNotNull($cache->read('/media/a.mkv', 1, 1, 7, 9), 'trusted before the swap');
 
-        // Move the trusted directory away and put a new one, same name, mode and owner, in its place.
+        // Move the trusted directory away and put a new one, same name, in its place. It is
+        // group-writable, so it fails the checks and is not adopted.
         rename($dir, $this->root . '/swapped-away');
         mkdir($dir, 0700);
+        chmod($dir, 0770);
 
         self::assertNull($cache->read('/media/a.mkv', 1, 1, 7, 9), 'a replaced directory is never read');
         $cache->write('/media/b.mkv', 1, 1, 7, 9, $this->sampleProbe());
@@ -416,5 +420,205 @@ final class ProbeCacheTrustTest extends TestCase
         self::assertNull($cache->read('/media/a.mkv', 1, 1, 7, 9));
         self::assertCount(1, $logger->warnings, 'the refusal is logged once');
         self::assertStringContainsString('sticky bit', $logger->warnings[0] ?? '');
+    }
+
+    /**
+     * Item 1: two instances over one directory. The first removes the directory and recreates it,
+     * so it has a new inode. The second still holds the old identity, so its next check must adopt
+     * the new inode, log that once at info, and keep working, instead of latching until restart.
+     */
+    public function testASecondInstanceAdoptsADirectoryRecreatedByTheFirst(): void
+    {
+        $dir = $this->root . '/shared';
+        mkdir($dir, 0700);
+        $loggerA = new ProbeCacheRecordingLogger();
+        $loggerB = new ProbeCacheRecordingLogger();
+        $first = ProbeCache::createIfSecure($dir, ProbeCache::MAX_ENTRIES, $loggerA);
+        $second = ProbeCache::createIfSecure($dir, ProbeCache::MAX_ENTRIES, $loggerB);
+        self::assertInstanceOf(ProbeCache::class, $first);
+        self::assertInstanceOf(ProbeCache::class, $second);
+        $second->write('/media/before.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        self::assertNotNull($second->read('/media/before.mkv', 1, 1, 7, 9), 'trusted before the removal');
+
+        // The old directory is renamed aside, not just removed: a freed inode number can be reused
+        // at once, which would make the new directory look identical. Renaming keeps the inode alive
+        // until the new directory exists, so the new inode is certainly different.
+        rename($dir, $this->root . '/shared-away');
+        $first->write('/media/after.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        self::assertDirectoryExists($dir);
+        $this->removeTree($this->root . '/shared-away');
+
+        // The second instance sees a new inode on its next check and adopts it.
+        $second->write('/media/second.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        self::assertNotNull($second->read('/media/after.mkv', 1, 1, 7, 9), 'the second reads the first\'s entry');
+        self::assertNotNull($second->read('/media/second.mkv', 1, 1, 7, 9), 'the second writes into the new directory');
+        self::assertNotNull($first->read('/media/second.mkv', 1, 1, 7, 9), 'and the first reads it back');
+        self::assertSame([], $loggerB->messages('warning'), 'adoption is not a warning');
+        self::assertCount(1, $loggerB->messages('info'), 'adoption is logged once at info');
+    }
+
+    /**
+     * Item 1: the same recreate, but the new directory is group-writable. The second instance
+     * runs the checks on the new inode, so it latches, reads nothing, writes nothing and warns once.
+     */
+    public function testARecreatedGroupWritableDirectoryLatchesTheSecondInstance(): void
+    {
+        $dir = $this->root . '/shared-bad';
+        mkdir($dir, 0700);
+        $logger = new ProbeCacheRecordingLogger();
+        $second = ProbeCache::createIfSecure($dir, ProbeCache::MAX_ENTRIES, $logger);
+        self::assertInstanceOf(ProbeCache::class, $second);
+
+        // Renamed aside first, so the new directory has a new inode (see the test above).
+        rename($dir, $this->root . '/shared-bad-away');
+        mkdir($dir, 0700);
+        chmod($dir, 0770);
+
+        self::assertNull($second->read('/media/a.mkv', 1, 1, 7, 9));
+        $second->write('/media/b.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        self::assertSame([], glob($dir . '/*') ?: [], 'nothing is written into the group-writable directory');
+        $warnings = $logger->messages('warning');
+        self::assertCount(1, $warnings, 'the refusal is warned once');
+        self::assertStringContainsString('replaced after the trust check', $warnings[0]);
+        self::assertStringContainsString('writable by group or other', $warnings[0]);
+    }
+
+    /**
+     * Item 1: a replacement that passes the same checks a fresh build runs is adopted by the
+     * cache that already holds the old identity: it is read, written, and logged at info.
+     */
+    public function testAReplacedDirectoryThatPassesTheChecksIsAdopted(): void
+    {
+        $dir = $this->root . '/adopt';
+        mkdir($dir, 0700);
+        $logger = new ProbeCacheRecordingLogger();
+        $cache = ProbeCache::createIfSecure($dir, ProbeCache::MAX_ENTRIES, $logger);
+        self::assertInstanceOf(ProbeCache::class, $cache);
+        $cache->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
+
+        rename($dir, $this->root . '/adopt-away');
+        mkdir($dir, 0700);
+
+        self::assertNull($cache->read('/media/a.mkv', 1, 1, 7, 9), 'the empty replacement holds no entry');
+        $cache->write('/media/b.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        self::assertNotNull($cache->read('/media/b.mkv', 1, 1, 7, 9), 'the adopted replacement is used');
+        self::assertSame([], $logger->messages('warning'));
+        self::assertCount(1, $logger->messages('info'));
+    }
+
+    /**
+     * Item 3: a sticky ancestor is accepted only when root or the expected uid owns it, because the
+     * owner of a sticky directory can rename or unlink the entries in it. The expected uid is injected,
+     * since the test user cannot create a root-owned directory. (A root-owned sticky /tmp is accepted by
+     * the other tests, which run under it.)
+     */
+    public function testAStickyAncestorOwnedByAnotherUidIsRefused(): void
+    {
+        $parent = $this->root . '/sticky-other';
+        mkdir($parent, 0700);
+        chmod($parent, 01777);
+        $logger = new ProbeCacheRecordingLogger();
+
+        self::assertNull(
+            ProbeCache::createIfSecure($parent . '/cache', ProbeCache::MAX_ENTRIES, $logger, $this->uid() + 1)
+        );
+        self::assertDirectoryDoesNotExist($parent . '/cache', 'nothing is created under the refused ancestor');
+        $warnings = $logger->messages('warning');
+        self::assertCount(1, $warnings);
+        self::assertStringContainsString('sticky bit', $warnings[0]);
+        self::assertStringContainsString('sticky-other', $warnings[0], 'the refusal names the ancestor');
+    }
+
+    /**
+     * Item 4: a "." or ".." segment is refused, not normalised. lstat follows a link through "."
+     * (for example /x/link/.), so the symlink refusal would otherwise be skipped.
+     */
+    public function testADotSegmentInTheConfiguredPathIsRefused(): void
+    {
+        $target = $this->root . '/dot-target';
+        mkdir($target, 0700);
+        $link = $this->root . '/dot-link';
+        symlink($target, $link);
+        $logger = new ProbeCacheRecordingLogger();
+
+        self::assertNull(ProbeCache::createIfSecure($link . '/.', ProbeCache::MAX_ENTRIES, $logger));
+        self::assertNull(
+            ProbeCache::createIfSecure($target . '/../cache', ProbeCache::MAX_ENTRIES, $logger)
+        );
+        self::assertDirectoryDoesNotExist($target . '/cache', 'nothing is created through the dot segment');
+        self::assertDirectoryDoesNotExist($this->root . '/cache', 'nothing is created at the resolved location');
+        $warnings = $logger->messages('warning');
+        self::assertCount(2, $warnings, 'each refusal is warned once');
+        self::assertStringContainsString('segment', $warnings[0]);
+
+        // A constructed instance refuses on every call, so nothing reaches the target through the link.
+        $cache = new ProbeCache($link . '/.');
+        $cache->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        self::assertSame([], glob($target . '/*') ?: [], 'nothing is written through the dot segment');
+        self::assertNull($cache->read('/media/a.mkv', 1, 1, 7, 9));
+    }
+
+    /**
+     * Item 6: a read on a removed directory is a miss, and it is logged at debug on that read. It
+     * is not silent until the next write.
+     */
+    public function testAReadOnARemovedDirectoryIsLoggedAtDebug(): void
+    {
+        $dir = $this->root . '/silent';
+        mkdir($dir, 0700);
+        $logger = new ProbeCacheRecordingLogger();
+        $cache = ProbeCache::createIfSecure($dir, ProbeCache::MAX_ENTRIES, $logger);
+        self::assertInstanceOf(ProbeCache::class, $cache);
+
+        $this->removeTree($dir);
+        self::assertNull($cache->read('/media/a.mkv', 1, 1, 7, 9));
+
+        $debug = $logger->messages('debug');
+        self::assertCount(1, $debug, 'the removal read is logged at debug');
+        self::assertStringContainsString('missing', $debug[0]);
+        self::assertSame([], $logger->messages('warning'), 'a read is not a warning');
+    }
+
+    /**
+     * Item 9: a recreate whose mkdir fails (here the parent is not writable) is not retried on every
+     * probe miss. It is held back for RECREATE_BACKOFF_SECONDS and warns once per attempt. The window
+     * is expired through its monotonic-clock field, so the next write retries and recreates the directory.
+     */
+    public function testAFailedRecreateBacksOffAndWarnsOncePerWindow(): void
+    {
+        $parent = $this->root . '/backoff';
+        mkdir($parent, 0700);
+        $dir = $parent . '/cache';
+        mkdir($dir, 0700);
+        $logger = new ProbeCacheRecordingLogger();
+        $cache = ProbeCache::createIfSecure($dir, ProbeCache::MAX_ENTRIES, $logger);
+        self::assertInstanceOf(ProbeCache::class, $cache);
+
+        $this->removeTree($dir);
+        chmod($parent, 0500);
+        try {
+            $cache->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
+            $cache->write('/media/b.mkv', 1, 1, 7, 9, $this->sampleProbe());
+            self::assertCount(
+                1,
+                $logger->messages('warning'),
+                'one warning for the failed recreate, none inside the window'
+            );
+
+            // The parent is writable again, but the window is still open: no recreate is attempted.
+            chmod($parent, 0700);
+            $cache->write('/media/c.mkv', 1, 1, 7, 9, $this->sampleProbe());
+            self::assertDirectoryDoesNotExist($dir, 'still backing off, so the recreate is not attempted');
+
+            // Expire the window: the next write retries, and the writable parent lets it succeed.
+            $until = new \ReflectionProperty(ProbeCache::class, 'recreateBackoffUntil');
+            $until->setValue($cache, 0);
+            $cache->write('/media/d.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        } finally {
+            chmod($parent, 0700);
+        }
+
+        self::assertDirectoryExists($dir);
+        self::assertNotNull($cache->read('/media/d.mkv', 1, 1, 7, 9));
     }
 }

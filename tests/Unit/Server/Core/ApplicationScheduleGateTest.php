@@ -189,6 +189,69 @@ final class ApplicationScheduleGateTest extends TestCase
         self::assertSame(403, $response->statusCode);
     }
 
+    public function test_a_profile_less_session_can_create_a_profile(): void
+    {
+        // No profile anywhere on the account: creating one is the only remedy the 403
+        // names, so POST /api/v1/profiles passes the gate for exactly this case.
+        $schedule = $this->schedule([], null);
+
+        self::assertNull(Application::scheduleGateFor(
+            $this->request('POST', '/api/v1/profiles', 'u1', null),
+            $schedule,
+        ));
+    }
+
+    public function test_a_profile_less_session_stays_refused_on_every_other_route(): void
+    {
+        $schedule = $this->schedule([], null);
+
+        // Same method, neighbouring paths, and the exact path under another method: none
+        // of these is the profile-create exemption, so each keeps the no-profile 403.
+        foreach (
+            [
+                ['GET', '/api/v1/media/m1'],
+                ['GET', '/api/v1/profiles'],
+                ['POST', '/api/v1/profiles/'],
+                ['POST', '/api/v1/profiles/p1/switch'],
+                ['POST', '/api/v1/media/m1'],
+                ['PUT', '/api/v1/profiles'],
+                ['DELETE', '/api/v1/profiles'],
+            ] as [$method, $path]
+        ) {
+            $response = Application::scheduleGateFor($this->request($method, $path, 'u1', null), $schedule);
+
+            self::assertNotNull($response, $method . ' ' . $path . ' must stay refused');
+            self::assertSame(403, $response->statusCode, $method . ' ' . $path);
+            self::assertSame('access.scheduled', $this->decodedBody($response)['code'], $method . ' ' . $path);
+        }
+    }
+
+    public function test_a_profile_bound_locked_session_is_refused_on_profile_create(): void
+    {
+        // The exemption is for the no-profile case only. A session bound to a locked profile
+        // is gated on POST /api/v1/profiles like any other route.
+        $schedule = $this->schedule($this->lockedOutP1(), null);
+
+        $response = Application::scheduleGateFor($this->request('POST', '/api/v1/profiles', 'u1', 'p1'), $schedule);
+
+        self::assertNotNull($response);
+        self::assertSame(403, $response->statusCode);
+        self::assertSame('access.scheduled', $this->decodedBody($response)['code']);
+    }
+
+    public function test_a_profile_less_token_on_an_account_with_a_locked_profile_is_refused_on_profile_create(): void
+    {
+        // A legacy token with no pid on an account whose active profile is locked: the
+        // session does have a resolvable profile, so the create exemption does not apply.
+        $schedule = $this->schedule($this->lockedOutP1(), ['id' => 'p1']);
+
+        $response = Application::scheduleGateFor($this->request('POST', '/api/v1/profiles', 'u1', null), $schedule);
+
+        self::assertNotNull($response);
+        self::assertSame(403, $response->statusCode);
+        self::assertSame('access.scheduled', $this->decodedBody($response)['code']);
+    }
+
     public function test_an_unauthenticated_request_passes_through_untouched(): void
     {
         // No identity: the gate neither refuses nor reads the schedule, even though a

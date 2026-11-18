@@ -64,6 +64,16 @@ final class AccessScheduleMiddleware
     private const WINDOW_MESSAGE = "This profile can't be used right now. Allowed hours are set by your account.";
 
     /**
+     * The one request a session with NO resolvable profile may make. Creating a profile
+     * does not use one, and the "set one up" remedy is unreachable without it. Matched
+     * exactly on method and path. It is honoured only on the no-profile branch, so a
+     * session that is bound to a profile, or whose account has one, is still gated.
+     */
+    public const NO_PROFILE_CREATE_METHOD = 'POST';
+
+    public const NO_PROFILE_CREATE_PATH = '/api/v1/profiles';
+
+    /**
      * Staleness bound, in nanoseconds, for a memoised no-profile verdict. Equal to the
      * schedule memo's TTL in {@see AccessScheduleService}. Relayed traffic with no
      * profile id otherwise costs one account-profile read per request, all to reach the
@@ -136,7 +146,7 @@ final class AccessScheduleMiddleware
             // which is exactly the pre-S80 behaviour.
             $readAt = hrtime(true);
             if ($this->noProfileMemoHit($userId, $readAt)) {
-                return $this->noProfileRefusal();
+                return $this->noProfileVerdict($request);
             }
 
             $profile = $this->profileManager->getActiveProfile($userId);
@@ -147,7 +157,7 @@ final class AccessScheduleMiddleware
                 // memoised for the TTL, so repeat requests do not re-read the profile.
                 $this->rememberNoProfile($userId, $readAt);
 
-                return $this->noProfileRefusal();
+                return $this->noProfileVerdict($request);
             }
 
             // P5: Profile IDs are CHAR(36) UUID strings. If we cannot resolve
@@ -155,7 +165,7 @@ final class AccessScheduleMiddleware
             // unauthenticated or unprofiled users through the schedule check.
             $profileId = $this->resolveProfileId($profile);
             if ($profileId === null) {
-                return $this->noProfileRefusal();
+                return $this->noProfileVerdict($request);
             }
         }
 
@@ -223,6 +233,31 @@ final class AccessScheduleMiddleware
         }
 
         return $this->denyForProfile($profileId);
+    }
+
+    /**
+     * Whether a request may proceed with no resolvable profile: exactly the profile-create
+     * route ({@see self::NO_PROFILE_CREATE_METHOD} and {@see self::NO_PROFILE_CREATE_PATH}).
+     * Exposed so the gate and its tests share one definition.
+     */
+    public static function allowsWithoutProfile(Request $request): bool
+    {
+        return $request->method === self::NO_PROFILE_CREATE_METHOD
+            && $request->path === self::NO_PROFILE_CREATE_PATH;
+    }
+
+    /**
+     * The verdict for a request whose account has no resolvable profile: null (continue)
+     * for the profile-create route, otherwise the refusal. Every no-profile branch routes
+     * through here, so the memoised and the fresh paths cannot disagree.
+     */
+    private function noProfileVerdict(Request $request): ?Response
+    {
+        if (self::allowsWithoutProfile($request)) {
+            return null;
+        }
+
+        return $this->noProfileRefusal();
     }
 
     /**

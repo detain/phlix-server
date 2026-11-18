@@ -2747,7 +2747,7 @@ class TranscodeManagerTest extends TestCase
         touch($old, time() - 10); // idle 10s
 
         // cacheMaxAge = 1s → the idle dir is past TTL, the fresh one is not.
-        $reaped = $this->segManager($db, $ff, null, null, 1)->sweepSegmentCache();
+        $reaped = $this->segManager($db, $ff, null, null, 1)->sweepSegmentCacheNow();
 
         $this->assertSame(1, $reaped);
         $this->assertDirectoryDoesNotExist($old);
@@ -2769,7 +2769,7 @@ class TranscodeManagerTest extends TestCase
 
         // Budget tiny (over it), TTL huge (nothing TTL-evicted) → LRU size eviction,
         // but the live session is never pulled out from under the viewer.
-        $reaped = $this->segManager($db, $ff, null, 1024, 86400)->sweepSegmentCache();
+        $reaped = $this->segManager($db, $ff, null, 1024, 86400)->sweepSegmentCacheNow();
 
         $this->assertSame(1, $reaped);
         $this->assertDirectoryDoesNotExist($old);
@@ -4136,6 +4136,12 @@ class TranscodeManagerTest extends TestCase
         $path = $this->manager($db, $ff)->ensureSegment('seg-job', 'original', 0);
 
         $this->assertSame("{$dir}/seg-voriginal-00000.ts", $path);
+        // Copy launches carry the per-launch thread budget like every other launch. The value
+        // depends on the CPU count, so only its presence and type are asserted here; the exact
+        // value is pinned by TranscodeManagerRound2Test.
+        $this->assertArrayHasKey('encode_threads', (array) $captParams, 'copy launch must carry encode_threads');
+        $this->assertIsInt($captParams['encode_threads'] ?? null);
+        unset($captParams['encode_threads']);
         $this->assertSame(['video_codec' => 'copy', 'audio_codec' => 'copy'], $captParams);
     }
 
@@ -5092,7 +5098,7 @@ class TranscodeManagerTest extends TestCase
         file_put_contents("{$old}/seg-v1080p-00000.ts", str_repeat('y', 2048));
         touch($old, time() - 10);
 
-        $reaped = $this->segManager($db, $ff, null, null, 1)->sweepSegmentCache();
+        $reaped = $this->segManager($db, $ff, null, null, 1)->sweepSegmentCacheNow();
 
         $this->assertSame(1, $reaped);
         $this->assertDirectoryDoesNotExist($old);
@@ -5602,6 +5608,9 @@ class TranscodeManagerTest extends TestCase
         $this->assertIsInt($interval);
         $now = (int) (hrtime(true) / 1_000_000);
         $this->setPrivate($manager, 'lastInFlightReconcileMs', $now - $interval - 1000);
+        // The reconcile's re-glob shares the in-flight scan snapshot (at most one scan per
+        // SEGMENT_INFLIGHT_SCAN_INTERVAL_NS), so the window that must elapse includes it too.
+        $this->setPrivate($manager, 'inFlightScanNs', (int) hrtime(true) - 2_000_000_000);
 
         // A sibling worker's encode appears on the shared tree...
         $final = "{$jobDir}/seg-v720p-00007.ts";

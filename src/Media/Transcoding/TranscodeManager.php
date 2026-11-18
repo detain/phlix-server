@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Transcoding;
 
+use Phlix\Common\Env\EnvConfig;
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
 use Phlix\Media\Library\ItemRepository;
@@ -184,9 +185,9 @@ class TranscodeManager
      * ({@see segmentEncodeInFlight()}) so a client retry of a slow segment (the
      * common hls.js first-byte-timeout re-request — by far the more frequent of the
      * two hot-path checks) no longer globs `{final}.part-*` per request. **The
-     * GLOBAL CAP is intentionally NOT derived from this set** — see
-     * {@see countInFlightSegmentEncodes()} for why that check stays a real-time,
-     * whole-tree glob. An entry is added the instant an encode is launched and
+     * GLOBAL CAP is NOT derived from this set** — it reads the shared scan snapshot
+     * (see {@see countInFlightSegmentEncodes()} for the bound that gives). An entry is added
+     * the instant an encode is launched and
      * removed when its launcher observes completion or failure
      * ({@see produceSegment()}'s `finally`, which now wraps the launch itself so the
      * removal is guaranteed on every exit path); any drift (e.g. a hard coroutine
@@ -244,15 +245,12 @@ class TranscodeManager
      * absolute final segment path, refreshed by {@see reconcileInFlightSegments()}
      * at most once per {@see SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS}.
      *
-     * Feeds ONLY the memory-based per-segment dedup ({@see segmentEncodeInFlight()})
-     * — a sibling worker's in-flight encode is deduplicated eventually-consistently
-     * (bounded by this interval), which is an acceptable staleness because dedup
-     * merely avoids a redundant duplicate encode of the exact same segment; it does
-     * not gate the GLOBAL CAP (that stays a real-time glob — see
-     * {@see countInFlightSegmentEncodes()} for why the cap cannot tolerate this same
-     * staleness after the S2 review found that a ≤1s × 14-worker-process product
-     * meaningfully widens the seek-cascade protection's overshoot window versus the
-     * pre-S2 ~100ms `.part-*`-visibility latency).
+     * Feeds the per-segment dedup ({@see segmentEncodeInFlight()}) and, through the shared
+     * scan snapshot, the global cap ({@see countInFlightSegmentEncodes()}). A sibling
+     * worker's in-flight encode is seen with up to one scan window (1 s) of staleness.
+     * The cap therefore bounds launches per worker plus a stale view of the others, not
+     * a live total. Worst-case overshoot is W x the cap within one window, where W is the
+     * number of HTTP workers (14 by default).
      *
      * @var array<string, true>
      */
@@ -299,6 +297,111 @@ class TranscodeManager
     private const ENCODE_WATCHDOG_REQUEST_SWEEP_MS = 1000;
 
     /**
+     * Monotonic-nanosecond clock seam. Null means `hrtime(true)`. Tests inject a fake clock
+     * through {@see setMonotonicNsSource()}. Used by the shared in-flight scan snapshot, the
+     * early-exit grace and the segment-cache sweep throttle.
+     *
+     * @var (callable(): int)|null
+     */
+    private $monotonicNsSource = null;
+
+    /**
+     * The shared, time-bounded snapshot of the in-flight temps in the segment tree, read by
+     * the global cap, the prewarm budget and the dedup reconcile. Shape: `base` = untagged
+     * on-demand temp paths, `prewarm` = `.part-p` temp paths, both post-purge. Null until
+     * the first scan.
+     *
+     * @var array{base: list<string>, prewarm: list<string>, finals: array<string, true>}|null
+     */
+    private ?array $inFlightScan = null;
+
+    /** Monotonic ns at which {@see $inFlightScan} was taken, or null. */
+    private ?int $inFlightScanNs = null;
+
+    /**
+     * Encodes this worker launched that the shared scan may not show yet, keyed by final path.
+     * A just-launched encode's temp may not be on disk yet, so a scan can miss it; these are
+     * counted on top of the scan so a burst of launches inside one scan window cannot slip past
+     * the cap. An entry is kept until its final segment is published, or until
+     * {@see self::SEGMENT_UNSEEN_LAUNCH_MAX_NS} has elapsed on the monotonic clock, whichever is
+     * first. A scan refresh does NOT clear it. An entry whose temp the scan already shows is not
+     * counted twice (see {@see liveUnseenLaunches()}).
+     *
+     * @var array<string, array{prewarm: bool, startedNs: int}> final path => family and launch time
+     */
+    private array $unseenLaunches = [];
+
+    /** Minimum spacing (ns) between shared in-flight scans. */
+    private const SEGMENT_INFLIGHT_SCAN_INTERVAL_NS = 1_000_000_000;
+
+    /** Longest (ns) a local launch stays counted while its final segment is unpublished. */
+    private const SEGMENT_UNSEEN_LAUNCH_MAX_NS = 10_000_000_000;
+
+    /**
+     * Grace (ns) from launch before the wait loop may stop polling for a segment whose encode
+     * is no longer alive. Keeps a just-spawned encode (no temp or tracked pid yet) from being
+     * abandoned early.
+     */
+    private const SEGMENT_ABANDON_GRACE_NS = 2_000_000_000;
+
+    /**
+     * Test seam for the per-launch wait loop's liveness check: (final path) => bool. Null
+     * means the registry's read-only {@see SegmentProcessRegistry::keyAlive()} for a key this
+     * worker launched, or "alive" for any other key and when no registry is wired.
+     *
+     * @var (callable(string): bool)|null
+     */
+    private $encodeLivenessProbe = null;
+
+    /** Test seam for the per-launch thread budget: the configured ceiling, or null = config. */
+    private ?int $encodeThreadCeilingOverride = null;
+
+    /**
+     * Test seam for the CPU count the thread budget divides. Null means
+     * {@see EnvConfig::availableCpuCount()}.
+     *
+     * @var (callable(): int)|null
+     */
+    private $cpuCountProbe = null;
+
+    /** Minimum spacing (ns) between detached segment-cache sweeps, per worker. */
+    private const SEGMENT_CACHE_SWEEP_INTERVAL_NS = 10_000_000_000;
+
+    /** Monotonic ns of the last detached segment-cache sweep launch, or null. */
+    private ?int $lastCacheSweepNs = null;
+
+    /**
+     * Test seam for the detached sweep launch: receives the argv list (script path first) and
+     * returns true when the process was started. Null means the real `nice`/`exec` launch.
+     *
+     * @var (callable(list<string>): bool)|null
+     */
+    private $sweepLauncher = null;
+
+    /**
+     * Absolute path of `nice` for the detached sweep, resolved once per worker on first use
+     * (a PATH walk with is_executable, no fork). Null when no candidate is executable.
+     */
+    private ?string $niceBinary = null;
+
+    /** True once {@see $niceBinary} has been resolved (or set by a test seam). */
+    private bool $niceResolved = false;
+
+    /** Test seam: the sweep script path. Null means the shipped scripts/sweep-segment-cache.php. */
+    private ?string $sweepScript = null;
+
+    /**
+     * Test seam: replaces the shell exec of the detached launch. Receives the full command line
+     * and returns [exit status, output lines]. Null means the real exec().
+     *
+     * @var (callable(string): array{0: int, 1: list<string>})|null
+     */
+    private $execSeam = null;
+
+    /** Name of the per-cache-dir lock file the detached sweep flocks (non-blocking). */
+    public const SEGMENT_SWEEP_LOCK_FILE = '.sweep.lock';
+
+    /**
      * Seconds added to the wall-clock cap when deciding whether a temp is still a live
      * encode to join ({@see joinWindowSeconds()}). It covers the sweep cadence (a 5 s
      * timer and a 1 s request throttle), the SIGTERM→SIGKILL grace and the wrapper's
@@ -323,8 +426,8 @@ class TranscodeManager
 
     /**
      * Glob (relative to a job directory) matching exactly the atomic-write temps
-     * of in-flight segment encodes. Feeds BOTH the real-time global cap
-     * ({@see countInFlightSegmentEncodes()}) and the cross-worker dedup snapshot
+     * of in-flight segment encodes. Feeds BOTH the global cap, via the shared scan
+     * ({@see countInFlightSegmentEncodes()}), and the cross-worker dedup snapshot
      * ({@see reconcileInFlightSegments()}).
      *
      * ⚠ S56 replaced the previous `seg-*.ts.part-*` with this. Two reasons, and
@@ -1527,12 +1630,11 @@ class TranscodeManager
             @mkdir($dir, 0775, true);
         }
 
-        // Refresh the DEDUP-only cross-worker snapshot from the shared segment tree
-        // at most once per reconcile window (see reconcileInFlightSegments()). This
-        // does NOT feed the global cap (that stays a real-time glob below) — it only
-        // lets segmentEncodeInFlight() catch a sibling worker's in-flight encode
-        // without a per-request glob, since that dedup check is the more frequent of
-        // the two hot-path checks (every retry of a slow segment hits it).
+        // Refresh the cross-worker snapshot from the shared segment tree at most once
+        // per reconcile window (see reconcileInFlightSegments()). It feeds the dedup
+        // check and is also the source of the global cap's count, which reads the same
+        // shared scan (see countInFlightSegmentEncodes()). Both views can be up to 1 s
+        // stale for sibling workers.
         $this->reconcileInFlightSegments();
 
         // SV-4.1: Reserve the slot BEFORE the yieldable glob to close the double-encode
@@ -1561,15 +1663,12 @@ class TranscodeManager
 
             // Global ceiling: bound total concurrent encodes so a burst of cold seeks
             // (many viewers, or one frantic scrub) can't saturate the CPU. Over the
-            // ceiling we fast-fail (503 + Retry-After) rather than pile on — the
-            // client backs off briefly and the in-flight encodes finish fast. This
-            // check reads the shared tree LIVE (not the throttled snapshot): a
-            // memory-only cap sums to a ≤1s-stale view PER WORKER across all 14 HTTP
-            // worker processes, which the S2 review found could let the fleet
-            // collectively overshoot the ceiling by up to ~14x during exactly the
-            // seek-storm scenario this cap exists to prevent. Real-time accuracy is
-            // preserved because this glob only runs on an actual launch decision
-            // (after the dedup check found no in-flight encode for this segment).
+            // ceiling we fast-fail (503 + Retry-After) rather than pile on. The count
+            // comes from the shared scan snapshot, refreshed at most once per second,
+            // plus this worker's own launches that the scan may not show yet. The
+            // bound is per-worker launches plus a 1 s stale view of the other workers.
+            // Across the 14 HTTP workers, one window can overshoot the cap by up to
+            // W x cap (decision for the owner; the cap is server.hls.max_concurrent_segments).
             $this->watchdogTick();
             $inFlight = $this->countInFlightSegmentEncodes();
             if ($inFlight >= $this->maxConcurrentSegments) {
@@ -1648,7 +1747,8 @@ class TranscodeManager
             try {
                 $this->touchJobDir($dir);
                 $this->ensureDiskSpace();
-                $this->ffmpeg->startSegmentEncode(
+                $segParams = $this->withEncodeThreads($segParams, $inFlight + 1);
+                $pid = $this->ffmpeg->startSegmentEncode(
                     $inputPath,
                     $final,
                     $start,
@@ -1658,6 +1758,9 @@ class TranscodeManager
                     null,
                     prewarm: true,
                 );
+                if ($pid > 0) {
+                    $this->noteLaunch($final, true); // a failed launch (0) is not in flight
+                }
             } catch (\Throwable $e) {
                 // The reservation must not leak when the launch itself fails —
                 // mirrors the inline finally's compare-and-clear.
@@ -1668,6 +1771,7 @@ class TranscodeManager
         }
 
         $launched = false;
+        $waitStartNs = $this->nowNs();
         try {
             // SV-4.2-disconnect (SS-1): count this client as an active waiter on
             // $final for BOTH the launcher and the piggyback branch, BEFORE any
@@ -1698,11 +1802,12 @@ class TranscodeManager
                 // Throws SegmentCacheFullException if below threshold; the HLS
                 // controller catches it, sweeps the cache, and returns 503.
                 $this->ensureDiskSpace();
+                $segParams = $this->withEncodeThreads($segParams, $inFlight + 1);
                 // SV-4.2: pass $final as the cancel key so the spawned ffmpeg PID
                 // is tracked, and the relay cancel group (the hub channel/request
                 // id, when this dispatch is servicing a relayed request) so an
                 // HTTP_CANCEL can kill the encode by channel id (X1).
-                $this->ffmpeg->startSegmentEncode(
+                $pid = $this->ffmpeg->startSegmentEncode(
                     $inputPath,
                     $final,
                     $start,
@@ -1711,12 +1816,18 @@ class TranscodeManager
                     $final,
                     RequestContext::getRelayCancelGroup(),
                 );
+                if ($pid > 0) {
+                    $this->noteLaunch($final, false); // a failed launch (0) is not in flight
+                }
             }
 
             // Poll using non-blocking sleep when in Swoole coroutine context.
             // Falls back to usleep when not in coroutine (e.g., Swoole hooks disabled).
             $waited = 0;
             while (!is_file($final) && $waited < $this->segmentMaxWaitMs) {
+                if ($this->encodeAbandoned($final, $waitStartNs)) {
+                    break; // the encode died without output: stop polling, take the timeout path
+                }
                 if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
                     \Swoole\Coroutine::sleep(self::SEGMENT_POLL_INTERVAL_MS / 1000.0);
                 } else {
@@ -1740,9 +1851,10 @@ class TranscodeManager
             // check (SegmentBusyException) or anything before it leaves $launched
             // false and this is a correct no-op — nothing was ever recorded to
             // release. A still-running or slow encode does NOT stop counting against
-            // the global cap: its `.part-*` temp lives on disk until it renames, so
-            // the LIVE glob in countInFlightSegmentEncodes() keeps counting it until
-            // it genuinely finishes. The reconcile self-heal remains only a safety
+            // the global cap: its `.part-*` temp lives on disk until it renames, and
+            // the launch stays in $unseenLaunches until its final is published (or
+            // SEGMENT_UNSEEN_LAUNCH_MAX_NS elapses), so countInFlightSegmentEncodes()
+            // keeps counting it across scan refreshes. The reconcile self-heal remains only a safety
             // net for the dedup-only snapshot (the rare case this finally never runs,
             // e.g. a hard coroutine kill).
             if ($launched) {
@@ -2031,6 +2143,7 @@ class TranscodeManager
         $reserved = false;
         $overCap = false;
         $myGen = 0;
+        $inFlight = 0;
         if (!$this->segmentEncodeInFlight($final)) {
             // SV-4.2-disconnect F1: generation-stamped reservation (see produceSegment).
             $myGen = ++$this->reservationSeq;
@@ -2038,7 +2151,8 @@ class TranscodeManager
             $reserved = true;
 
             $this->watchdogTick();
-            if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
+            $inFlight = $this->countInFlightSegmentEncodes();
+            if ($inFlight >= $this->maxConcurrentSegments) {
                 // (8a) As in produceSegment(): join a live sibling encode of this exact
                 // segment instead of refusing it. Only an unclaimed segment is refused.
                 $overCap = !$this->liveEncodeExistsFor($final);
@@ -2053,6 +2167,7 @@ class TranscodeManager
         }
 
         $launched = false;
+        $waitStartNs = $this->nowNs();
         try {
             // SV-4.2-disconnect (SS-1): count this client as an active waiter on
             // $final (launcher AND piggyback), BEFORE any launch/yield, so a
@@ -2068,10 +2183,11 @@ class TranscodeManager
                 // Throws SegmentCacheFullException if below threshold; the HLS
                 // controller catches it, sweeps the cache, and returns 503.
                 $this->ensureDiskSpace();
+                $segParams = $this->withEncodeThreads($segParams, $inFlight + 1);
                 // SV-4.2: track the spawned PID under $final, plus the relay cancel
                 // group (hub channel/request id) so an HTTP_CANCEL kills by channel
                 // id (X1).
-                $this->ffmpeg->startSegmentEncode(
+                $pid = $this->ffmpeg->startSegmentEncode(
                     $inputPath,
                     $final,
                     $start,
@@ -2080,10 +2196,16 @@ class TranscodeManager
                     $final,
                     RequestContext::getRelayCancelGroup(),
                 );
+                if ($pid > 0) {
+                    $this->noteLaunch($final, false); // a failed launch (0) is not in flight
+                }
             }
 
             $waited = 0;
             while (!is_file($final) && $waited < $this->segmentMaxWaitMs) {
+                if ($this->encodeAbandoned($final, $waitStartNs)) {
+                    break; // the encode died without output: stop polling, take the timeout path
+                }
                 if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
                     \Swoole\Coroutine::sleep(self::SEGMENT_POLL_INTERVAL_MS / 1000.0);
                 } else {
@@ -2448,28 +2570,23 @@ class TranscodeManager
     }
 
     /**
-     * Count on-demand segment encodes in flight across ALL jobs and ALL workers, by
-     * scanning the shared segment tree for the `*.part-*` atomic-write temp files
-     * ({@see scanInFlightTemps()}, which reads only the job directories that can
-     * hold a live temp). Bounds the global concurrency ceiling in {@see produceSegment()}.
+     * Count on-demand segment encodes in flight, for the global concurrency ceiling in
+     * {@see produceSegment()}. The count is NOT live. It is the shared scan snapshot
+     * ({@see inFlightSnapshot()}, one scan of the shared segment tree per 1 s window)
+     * plus this worker's own launches that the scan may not show yet
+     * ({@see liveUnseenLaunches()}).
      *
-     * INTENTIONALLY a real-time, whole-tree glob — NOT derived from the throttled
-     * in-worker snapshot. A prior version of this step summed the exact local set
-     * with the ≤1s-stale {@see $globalInFlightSnapshot} for the cap too; review
-     * found that because the ceiling is enforced independently by each of the 14 HTTP
-     * worker processes, a shared ≤1s staleness window lets the fleet collectively
-     * overshoot the advertised ceiling by up to ~14x before every worker's snapshot
-     * converges — precisely during the seek-storm scenario this cap exists to
-     * prevent (see `[[project_hls_seek_cascade_fix]]`), and a materially larger
-     * overshoot window than the pre-existing ~100ms `.part-*`-visibility latency the
-     * original (pre-S2) glob-based cap tolerated. This call site is reached ONLY on
-     * an actual launch decision — i.e. only after {@see segmentEncodeInFlight()}
-     * (the memory-based, much-higher-frequency check) already found no in-flight
-     * encode for this exact segment — so the cap glob does not run on every
-     * cache-miss/dedup hit, preserving most of the hot-path relief while keeping the
-     * enforcement point itself real-time-accurate.
+     * The bound this gives:
+     *   - this worker never admits more than the cap counting its own launches, since they
+     *     are added on top of the scan;
+     *   - sibling workers' launches are seen with up to 1 s of staleness;
+     *   - so across W HTTP workers, one window can have up to W x cap segment encodes in
+     *     flight. That is the cap plus an overshoot of (W-1) x cap. With W = 14 and the
+     *     default cap of 8, that is up to 112 in flight, 104 over the cap. Choosing a live
+     *     glob instead costs one whole-tree scan per cache miss. That trade-off is a
+     *     decision for the owner, and the code keeps the throttled snapshot.
      *
-     * @return int Number of segment encodes currently in flight.
+     * @return int Number of segment encodes counted as in flight.
      */
     private function countInFlightSegmentEncodes(): int
     {
@@ -2480,21 +2597,104 @@ class TranscodeManager
         // the prewarm BUDGET ({@see countInFlightPrewarmEncodes()}) treats the
         // families differently.
         //
-        // Fix A′′′: what the scan returns first passes through
-        // {@see purgeDeadInFlightTemps()} — provably-dead orphaned temps are
-        // unlinked and stop counting. The count is still read from the shared
-        // tree live, never from memory; see {@see scanInFlightTemps()} for why the
-        // live read is now bounded to the job directories that can hold a live temp.
-        $families = $this->scanInFlightTemps();
+        // Fix A′′′: the scan passes through {@see purgeDeadInFlightTemps()} inside
+        // {@see inFlightSnapshot()} — provably-dead orphaned temps are unlinked and
+        // stop counting. The count is the shared snapshot plus this worker's own
+        // unpublished launches (see {@see liveUnseenLaunches()}).
+        $families = $this->inFlightSnapshot();
 
-        return count($this->purgeDeadInFlightTemps($families['base']))
-            + count($this->purgeDeadInFlightTemps($families['prewarm']));
+        return count($families['base'])
+            + count($families['prewarm'])
+            + count($this->liveUnseenLaunches($families['finals']));
+    }
+
+    /**
+     * The launches this worker recorded whose final segment is not yet published, as a list of
+     * their prewarm flags. An entry is dropped when its final exists or when it is older than
+     * {@see self::SEGMENT_UNSEEN_LAUNCH_MAX_NS} on the monotonic clock. An entry whose temp the
+     * latest scan already shows is skipped, because the scan counts that encode, so one
+     * encode is never counted twice.
+     *
+     * @param array<string, true> $scannedFinals Finals that have a live temp in the latest scan.
+     *
+     * @return list<bool>
+     */
+    private function liveUnseenLaunches(array $scannedFinals): array
+    {
+        $now = $this->nowNs();
+        $live = [];
+        foreach ($this->unseenLaunches as $final => $entry) {
+            if (is_file((string) $final) || ($now - $entry['startedNs']) >= self::SEGMENT_UNSEEN_LAUNCH_MAX_NS) {
+                unset($this->unseenLaunches[$final]);
+                continue;
+            }
+            if (isset($scannedFinals[$final])) {
+                continue;
+            }
+            $live[] = $entry['prewarm'];
+        }
+
+        return $live;
+    }
+
+    /**
+     * The shared in-flight snapshot: one segment-tree scan serves the global cap, the
+     * prewarm budget and the dedup reconcile, refreshed at most once per
+     * {@see self::SEGMENT_INFLIGHT_SCAN_INTERVAL_NS} on the monotonic clock. A single launch
+     * therefore performs at most one scan, however many of those reads it makes.
+     *
+     * A refresh does not touch {@see $unseenLaunches}. Those entries expire on their own when
+     * their final is published or after {@see self::SEGMENT_UNSEEN_LAUNCH_MAX_NS}.
+     *
+     * @return array{base: list<string>, prewarm: list<string>, finals: array<string, true>}
+     *         Post-purge temp paths per family, plus the set of final paths they belong to.
+     */
+    private function inFlightSnapshot(): array
+    {
+        $now = $this->nowNs();
+        if (
+            $this->inFlightScan !== null
+            && $this->inFlightScanNs !== null
+            && ($now - $this->inFlightScanNs) < self::SEGMENT_INFLIGHT_SCAN_INTERVAL_NS
+        ) {
+            return $this->inFlightScan;
+        }
+
+        $this->inFlightScanNs = $now;
+        $families = $this->scanInFlightTemps();
+        $base = $this->purgeDeadInFlightTemps($families['base']);
+        $prewarm = $this->purgeDeadInFlightTemps($families['prewarm']);
+
+        $finals = [];
+        foreach (array_merge($base, $prewarm) as $part) {
+            $final = preg_replace('/\.part-p?[0-9a-f]+$/', '', $part);
+            if (is_string($final) && $final !== $part) {
+                $finals[$final] = true;
+            }
+        }
+        $this->inFlightScan = ['base' => $base, 'prewarm' => $prewarm, 'finals' => $finals];
+
+        return $this->inFlightScan;
+    }
+
+    /**
+     * Records an encode this worker has just spawned, so the next counts include it even
+     * before its temp is visible in the shared snapshot. Call this only when
+     * startSegmentEncode() actually started the encode (it returned a positive PID).
+     *
+     * @param string $final    Final segment path (the cancel key).
+     * @param bool   $prewarm  True for a C6 head-start launch (counts toward the prewarm budget).
+     */
+    private function noteLaunch(string $final, bool $prewarm): void
+    {
+        $this->unseenLaunches[$final] = ['prewarm' => $prewarm, 'startedNs' => $this->nowNs()];
     }
 
     /**
      * Every in-flight atomic-write temp in the shared segment tree, split into the
      * two families (`base` = untagged on-demand, `prewarm` = `.part-p{8 hex}`),
-     * read live from disk.
+     * read from disk by one scan per {@see self::SEGMENT_INFLIGHT_SCAN_INTERVAL_NS} window
+     * (the result is cached by {@see inFlightSnapshot()}, so it is up to 1 s old).
      *
      * Replaces the former whole-tree globs (`{segmentDir}/*\/seg-*.part-…`, one per
      * family, on every launch decision, plus the reconcile pass). A glob over
@@ -2525,27 +2725,36 @@ class TranscodeManager
     private function scanInFlightTemps(): array
     {
         $families = ['base' => [], 'prewarm' => []];
-        $dirs = glob("{$this->segmentDir}/*", GLOB_ONLYDIR);
+        $dirs = glob(self::globEscape($this->segmentDir) . '/*', GLOB_ONLYDIR);
         if (!is_array($dirs) || $dirs === []) {
             return $families;
         }
 
         $deathSeconds = $this->inflightTempDeathSeconds();
         $cutoff = $deathSeconds > 0 ? time() - $deathSeconds : null;
-        $pattern = '{' . self::INFLIGHT_TEMP_GLOB . ',' . self::INFLIGHT_PREWARM_TEMP_GLOB . '}';
-
         foreach ($dirs as $dir) {
+            // GLOB_ONLYDIR matches a symlink to a directory. Following it would list temps outside the
+            // cache root, and the purge would then unlink them, so a link is skipped before any glob or stat.
+            if (is_link($dir)) {
+                continue;
+            }
             if ($cutoff !== null) {
                 $mtime = @filemtime($dir);
                 if ($mtime === false || $mtime < $cutoff) {
                     continue; // no temp in here can be younger than the death bound
                 }
             }
-            $parts = glob($dir . '/' . $pattern, GLOB_BRACE);
-            if (!is_array($parts)) {
-                continue;
-            }
+            // Two plain globs, not one GLOB_BRACE pattern: brace expansion would split a job
+            // directory whose name contains a brace group, and globEscape() does not escape braces.
+            // The result order is the same as the brace form (base first, then prewarm).
+            $parts = array_merge(
+                glob(self::globEscape($dir) . '/' . self::INFLIGHT_TEMP_GLOB) ?: [],
+                glob(self::globEscape($dir) . '/' . self::INFLIGHT_PREWARM_TEMP_GLOB) ?: [],
+            );
             foreach ($parts as $part) {
+                if (is_link($part)) {
+                    continue; // a linked file is not an atomic-write temp of this cache
+                }
                 $suffix = substr($part, (int) strrpos($part, '.part-') + 6);
                 if (strlen($suffix) === 9) {
                     $families['prewarm'][] = $part;
@@ -2559,19 +2768,17 @@ class TranscodeManager
     }
 
     /**
-     * Count in-flight encodes that were launched by the C6 prewarm head start,
-     * across ALL jobs and ALL workers, by globbing the shared segment tree for
-     * the `.part-p{8 hex}`-tagged temps (wave A′). Same real-time-glob doctrine
-     * as {@see countInFlightSegmentEncodes()} on purpose: a memory-only per-worker
-     * view would let N workers each create a job and each stack its own head
-     * start to the FULL ceiling — the exact single-viewer rubber-band starvation
-     * this budget exists to end, just scaled by worker count. One extra glob per
-     * prewarm launch decision only (never on the reader hot path), matching the
-     * frequency argument that keeps the total-cap glob affordable.
+     * Count in-flight encodes that were launched by the C6 prewarm head start, across ALL jobs
+     * and ALL workers, from the shared scan snapshot's `.part-p{8 hex}`-tagged temps (wave A′),
+     * plus this worker's own unpublished prewarm launches. The same snapshot bound as
+     * {@see countInFlightSegmentEncodes()} applies: sibling workers are seen up to 1 s late.
+     * Reading the snapshot keeps this budget off the whole-tree glob on every prewarm decision.
      */
     private function countInFlightPrewarmEncodes(): int
     {
-        return count($this->purgeDeadInFlightTemps($this->scanInFlightTemps()['prewarm']));
+        $families = $this->inFlightSnapshot();
+
+        return count($families['prewarm']) + count(array_filter($this->liveUnseenLaunches($families['finals'])));
     }
 
     /**
@@ -2596,6 +2803,11 @@ class TranscodeManager
      * byte-for-byte today's — stale-lock tax and all (disclosed in the
      * CHANGELOG entry; the shipped config default is a finite timeout).
      *
+     * Residual race: the {@see isInsideSegmentRoot()} check and the unlink() are separate calls, so a
+     * path swapped between them (a directory component replaced by a symlink, for instance) can
+     * redirect the unlink. Exploiting that requires write access to the cache root, which already
+     * permits deleting cache contents.
+     *
      * @param list<string> $parts Globbed absolute temp paths (either family).
      *
      * @return list<string> The subset still plausibly owned by a live encode.
@@ -2618,13 +2830,47 @@ class TranscodeManager
             // Dead (past the wrapper bound, or vanished between glob and stat —
             // the unlink is then a no-op and counting it would only re-charge
             // the tax to a different segment's launch).
+            if (!$this->isInsideSegmentRoot($part)) {
+                $this->logger->warning('Segment cache purge skipped a temp outside the cache root', [
+                    'segment_dir' => $this->segmentDir,
+                    'temp' => $part,
+                ]);
+                continue;
+            }
             @unlink($part);
-            foreach (glob(addcslashes($part, '*?[]\\') . '.*') ?: [] as $sidecar) {
+            foreach (glob(self::globEscape($part) . '.*') ?: [] as $sidecar) {
+                if (!$this->isInsideSegmentRoot($sidecar)) {
+                    continue;
+                }
                 @unlink($sidecar);
             }
         }
 
         return $live;
+    }
+
+    /**
+     * True when the real directory holding $path sits under the real segment cache root, using the
+     * same prefix rule as {@see removeJobDirUnder()}. A path whose directory cannot be resolved
+     * counts as outside. Called before every purge unlink.
+     *
+     * Only the candidate's DIRECTORY is resolved; the candidate itself is never realpath()ed. A
+     * dangling file link, or a file link whose target lies outside the cache, therefore passes this
+     * check and is unlinked as a link: unlink() removes the link and never follows the final
+     * component, so the target is untouched. A directory component that resolves outside the root
+     * (a symlinked parent) fails the check and is skipped.
+     *
+     * @param string $path Absolute path of a temp or sidecar.
+     */
+    private function isInsideSegmentRoot(string $path): bool
+    {
+        $root = realpath($this->segmentDir);
+        $dir = realpath(dirname($path));
+        if ($root === false || $dir === false) {
+            return false;
+        }
+
+        return str_starts_with($dir, $root . DIRECTORY_SEPARATOR);
     }
 
     /**
@@ -2673,8 +2919,8 @@ class TranscodeManager
     /**
      * Reconcile the in-worker DEDUP bookkeeping against the shared segment tree —
      * throttled to at most one glob per {@see SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS}.
-     * Does NOT feed the global cap (that is always a live glob — see
-     * {@see countInFlightSegmentEncodes()}); this only keeps
+     * Its output ({@see $globalInFlightSnapshot}) does not feed the global cap, which reads the
+     * shared scan snapshot (see {@see countInFlightSegmentEncodes()}); this only keeps
      * {@see segmentEncodeInFlight()}'s cross-worker dedup view fresh and self-heals
      * {@see $segmentEncodesInFlight}.
      *
@@ -2714,11 +2960,10 @@ class TranscodeManager
         // reconcile tick after its wrapper timeout provably expired — the
         // fresh requester then RESERVES and re-encodes instead of riding a
         // ≤30 s piggyback poll into a 404 forever.
-        $families = $this->scanInFlightTemps();
-        $allParts = array_merge(
-            $this->purgeDeadInFlightTemps($families['base']),
-            $this->purgeDeadInFlightTemps($families['prewarm'])
-        );
+        // Nit (finding 6): this reads the shared scan snapshot, which is up to 1 s old, and
+        // this tick runs on a 1 s cadence, so the dedup view can lag a live sibling by about 2 s.
+        $families = $this->inFlightSnapshot();
+        $allParts = array_merge($families['base'], $families['prewarm']);
         foreach ($allParts as $part) {
             $final = preg_replace('/\.part-p?[0-9a-f]+$/', '', $part);
             if (is_string($final) && $final !== $part) {
@@ -2772,6 +3017,176 @@ class TranscodeManager
     private function monotonicMs(): int
     {
         return (int) (hrtime(true) / 1_000_000);
+    }
+
+    /**
+     * Monotonic nanosecond clock for the shared scan snapshot, the early-exit grace and the
+     * sweep throttle. Uses the injected seam when set (tests), else `hrtime(true)`.
+     */
+    private function nowNs(): int
+    {
+        return $this->monotonicNsSource !== null
+            ? (int) ($this->monotonicNsSource)()
+            : (int) hrtime(true);
+    }
+
+    /**
+     * Test seam: replace the monotonic-nanosecond clock. Null restores `hrtime(true)`.
+     *
+     * @param (callable(): int)|null $source Returns the current monotonic time in nanoseconds.
+     */
+    public function setMonotonicNsSource(?callable $source): void
+    {
+        $this->monotonicNsSource = $source;
+    }
+
+    /**
+     * Test seam: inject the thread-budget inputs. `$ceiling` overrides the configured
+     * `segment_encode_threads` (0 disables the key, as the config does); `$cpuCount` replaces
+     * {@see EnvConfig::availableCpuCount()}. Pass null for either to keep the production source.
+     *
+     * @param int|null               $ceiling  Configured per-encode thread ceiling, or null for config.
+     * @param (callable(): int)|null $cpuCount Usable CPU count provider, or null for the real one.
+     */
+    public function setEncodeThreadBudget(?int $ceiling, ?callable $cpuCount): void
+    {
+        $this->encodeThreadCeilingOverride = $ceiling;
+        $this->cpuCountProbe = $cpuCount;
+    }
+
+    /**
+     * Returns `$segParams` with `encode_threads` set for this launch, unless the budget
+     * is disabled (ceiling <= 0), in which case the key is left unset and the runner's own
+     * default applies.
+     *
+     * @param array<string, mixed> $segParams  Encode params for this launch.
+     * @param int                  $concurrent Segment encodes in flight, including this one.
+     *
+     * @return array<string, mixed>
+     */
+    private function withEncodeThreads(array $segParams, int $concurrent): array
+    {
+        $threads = $this->segmentEncodeThreadsFor($concurrent);
+        if ($threads !== null) {
+            $segParams['encode_threads'] = $threads;
+        }
+
+        return $segParams;
+    }
+
+    /**
+     * The per-launch libx264 thread budget: the CPU count split across the in-flight encodes,
+     * clamped to [2, ceiling]. The floor of 2 keeps a crowded box from running one thread per
+     * encode, and the ceiling is the configured `segment_encode_threads`. Null when the ceiling
+     * is <= 0 (the runner default applies).
+     *
+     * @param int $concurrent Segment encodes in flight, including this one (N >= 1).
+     */
+    private function segmentEncodeThreadsFor(int $concurrent): ?int
+    {
+        $ceiling = $this->encodeThreadCeiling();
+        if ($ceiling <= 0) {
+            return null;
+        }
+
+        $cpus = $this->cpuCountProbe !== null
+            ? (int) ($this->cpuCountProbe)()
+            : EnvConfig::availableCpuCount();
+        $share = intdiv($cpus, max(1, $concurrent));
+
+        return min($ceiling, max(2, $share));
+    }
+
+    /**
+     * The configured `segment_encode_threads` ceiling (the same key TranscodeServicesProvider
+     * reads). A missing or non-integer value is 0, which disables the per-launch key.
+     */
+    private function encodeThreadCeiling(): int
+    {
+        if ($this->encodeThreadCeilingOverride !== null) {
+            return $this->encodeThreadCeilingOverride;
+        }
+
+        $configured = \Phlix\Config\EffectiveConfig::file('ffmpeg')['segment_encode_threads'] ?? null;
+
+        return is_int($configured) ? $configured : 0;
+    }
+
+    /**
+     * Test seam: replace the per-launch liveness check the wait loop consults. Receives the
+     * final segment path (the cancel key) and returns whether its encode is still alive.
+     * Null restores the registry's read-only liveness, or "alive" when no registry is wired.
+     *
+     * @param (callable(string): bool)|null $probe Liveness check, or null for production.
+     */
+    public function setEncodeLivenessProbe(?callable $probe): void
+    {
+        $this->encodeLivenessProbe = $probe;
+    }
+
+    /**
+     * Whether the wait loop for `$final` should stop polling early. True only when all of:
+     * the grace since the wait began has elapsed, `$final` is still absent, the encode for
+     * this cancel key is no longer alive, and no `.part-` marker for this segment remains.
+     * Otherwise false, so polling continues exactly as before while the encode is alive.
+     *
+     * @param string $final       Final segment path.
+     * @param int    $waitStartNs Monotonic ns at which this wait began.
+     */
+    private function encodeAbandoned(string $final, int $waitStartNs): bool
+    {
+        if ($this->nowNs() - $waitStartNs < self::SEGMENT_ABANDON_GRACE_NS) {
+            return false;
+        }
+        if (is_file($final)) {
+            return false;
+        }
+        if ($this->encodeAlive($final)) {
+            return false;
+        }
+
+        return !$this->partMarkerExists($final);
+    }
+
+    /**
+     * Liveness of the encode keyed by `$final`, as far as this worker can tell. The verdict is
+     * "dead" only for an encode this worker launched (the registry tracks its key) and whose
+     * process is gone. For any other key, including a piggyback on a sibling worker's launch,
+     * the answer is "alive": this worker has no PID to check, and the `.part-` marker only
+     * appears once ffmpeg opens its output, so an early exit there would be a premature 404.
+     * Such a waiter keeps polling until the normal timeout. With no registry wired the answer is
+     * "alive", which keeps the pre-existing wait behaviour.
+     */
+    private function encodeAlive(string $final): bool
+    {
+        if ($this->encodeLivenessProbe !== null) {
+            return (bool) ($this->encodeLivenessProbe)($final);
+        }
+        if ($this->segmentRegistry === null || !$this->segmentRegistry->tracksKey($final)) {
+            return true;
+        }
+
+        return $this->segmentRegistry->keyAlive($final);
+    }
+
+    /**
+     * Whether an encode's `.part-<hex>` (or `.part-p<hex>`) marker exists beside `$final`.
+     * Sidecars (`.i`, `.s0`, `.m3u8`, `.prog`) do not count: a reaped encode can leave them
+     * behind, and they must not keep a dead wait alive.
+     */
+    private function partMarkerExists(string $final): bool
+    {
+        $hits = glob(self::globEscape($final) . '.part-*');
+        if (!is_array($hits)) {
+            return false;
+        }
+        foreach ($hits as $hit) {
+            if (preg_match('/\.part-p?[0-9a-f]{8}$/', $hit) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -2875,8 +3290,8 @@ class TranscodeManager
      */
     private function liveEncodeExistsFor(string $final): bool
     {
-        $pattern = addcslashes(dirname($final), '*?[]\\')
-            . '/' . addcslashes(basename($final), '*?[]\\') . '.part-*';
+        $pattern = self::globEscape(dirname($final))
+            . '/' . self::globEscape(basename($final)) . '.part-*';
         $hits = glob($pattern);
         if (!is_array($hits) || $hits === []) {
             return false;
@@ -2962,13 +3377,93 @@ class TranscodeManager
      */
     public function sweepSegmentCache(): int
     {
-        $dirs = glob("{$this->segmentDir}/*", GLOB_ONLYDIR);
+        // Per-worker throttle: the 503 path (HlsController / DashController) and the
+        // reaper timer both land here, so a 503 storm cannot re-walk the cache on every
+        // request. At most one launch per SEGMENT_CACHE_SWEEP_INTERVAL_NS.
+        $now = $this->nowNs();
+        if (
+            $this->lastCacheSweepNs !== null
+            && ($now - $this->lastCacheSweepNs) < self::SEGMENT_CACHE_SWEEP_INTERVAL_NS
+        ) {
+            return 0;
+        }
+        $this->lastCacheSweepNs = $now;
+
+        $sweepArgs = $this->sweepArgv();
+        if ($this->launchSegmentCacheSweep($sweepArgs)) {
+            return 0; // the walk runs in a detached, niced CLI process; the count is logged there
+        }
+
+        // Detached launch impossible here (exec unavailable): fall back to the in-process walk
+        // so the cache is still bounded. This is the only path that walks on the event loop.
+        $this->logger->warning('Detached segment-cache sweep could not start; sweeping in-process', [
+            'segment_dir' => $this->segmentDir,
+        ]);
+
+        return $this->sweepSegmentCacheNow();
+    }
+
+    /**
+     * Synchronous, in-process cache sweep. Walks and stats the whole segment cache on the
+     * calling thread. Production goes through {@see sweepSegmentCache()}, which runs the same
+     * walk detached. Kept public for the CLI, the fallback path and tests.
+     *
+     * @return int Number of directories reclaimed.
+     */
+    public function sweepSegmentCacheNow(): int
+    {
+        return self::sweepCacheTree(
+            $this->segmentDir,
+            $this->cacheMaxBytes,
+            $this->cacheMaxAgeSeconds,
+            $this->logger,
+        );
+    }
+
+    /**
+     * The effective cache budgets for configured values. A positive value is used as given. Any
+     * other value falls back to the default, the same rule the constructor applies. The detached
+     * CLI uses this too, so both paths read a bad budget the same way.
+     *
+     * @return array{0: int, 1: int} [max bytes, max age seconds]
+     */
+    public static function effectiveCacheBudgets(int $maxBytes, int $maxAgeSeconds): array
+    {
+        return [
+            $maxBytes > 0 ? $maxBytes : self::SEGMENT_CACHE_MAX_BYTES,
+            $maxAgeSeconds > 0 ? $maxAgeSeconds : self::SEGMENT_CACHE_MAX_AGE,
+        ];
+    }
+
+    /**
+     * The cache-sweep walk, free of instance state, so the detached CLI
+     * (`scripts/sweep-segment-cache.php`) runs the identical logic. It needs only the
+     * directory and the two budgets. It has no DB, container or registry dependency.
+     *
+     * Reclaims job directories: first any idle past `$cacheMaxAgeSeconds`, then the least
+     * recently used (skipping those touched within the active window) until the total is
+     * back under `$cacheMaxBytes`.
+     *
+     * @param string          $segmentDir       Segment cache root.
+     * @param int             $cacheMaxBytes    Size budget.
+     * @param int             $cacheMaxAgeSeconds Hard TTL for an idle job directory.
+     * @param LoggerInterface $logger           Receives the one info line when anything is reclaimed.
+     *
+     * @return int Number of directories reclaimed.
+     */
+    public static function sweepCacheTree(
+        string $segmentDir,
+        int $cacheMaxBytes,
+        int $cacheMaxAgeSeconds,
+        LoggerInterface $logger,
+    ): int {
+        $dirs = glob(self::globEscape($segmentDir) . '/*', GLOB_ONLYDIR);
         if (!is_array($dirs) || $dirs === []) {
             return 0;
         }
 
         $now = time();
-        $ageCutoff = $now - $this->cacheMaxAgeSeconds;
+        $ageCutoff = $now - $cacheMaxAgeSeconds;
         $activeCutoff = $now - self::SEGMENT_CACHE_ACTIVE_WINDOW;
 
         /** @var list<array{path: string, mtime: int, size: int}> $entries */
@@ -2977,32 +3472,42 @@ class TranscodeManager
         $reaped = 0;
 
         foreach ($dirs as $dir) {
+            // A symlink in the cache root is never followed. filemtime(), dirSize() and the reclaim
+            // would all resolve to its target, which may be another live job. The link is unlinked
+            // as a link; its target is not touched.
+            if (is_link($dir)) {
+                $logger->warning('Segment cache sweep removed a symlink in the cache root', [
+                    'entry' => $dir,
+                ]);
+                @unlink($dir);
+                continue;
+            }
             $mtime = @filemtime($dir);
             if ($mtime === false) {
                 continue;
             }
             // 1) Hard TTL: an idle session past the age cutoff is abandoned.
             if ($mtime < $ageCutoff) {
-                $reaped += $this->removeJobDir($dir) ? 1 : 0;
+                $reaped += self::removeJobDirUnder($segmentDir, $dir, $logger) ? 1 : 0;
                 continue;
             }
-            $size = $this->dirSize($dir);
+            $size = self::dirSize($dir);
             $totalBytes += $size;
             $entries[] = ['path' => $dir, 'mtime' => $mtime, 'size' => $size];
         }
 
         // 2) Size budget: evict least-recently-used until under the ceiling,
         // never touching an actively-watched (recently-touched) session.
-        if ($totalBytes > $this->cacheMaxBytes) {
+        if ($totalBytes > $cacheMaxBytes) {
             usort($entries, static fn(array $a, array $b): int => $a['mtime'] <=> $b['mtime']);
             foreach ($entries as $entry) {
-                if ($totalBytes <= $this->cacheMaxBytes) {
+                if ($totalBytes <= $cacheMaxBytes) {
                     break;
                 }
                 if ($entry['mtime'] >= $activeCutoff) {
                     continue; // live session — leave it alone
                 }
-                if ($this->removeJobDir($entry['path'])) {
+                if (self::removeJobDirUnder($segmentDir, $entry['path'], $logger)) {
                     $totalBytes -= $entry['size'];
                     $reaped++;
                 }
@@ -3010,7 +3515,7 @@ class TranscodeManager
         }
 
         if ($reaped > 0) {
-            $this->logger->info('Swept on-demand segment cache', [
+            $logger->info('Swept on-demand segment cache', [
                 'reclaimed_dirs' => $reaped,
                 'remaining_bytes' => $totalBytes,
             ]);
@@ -3020,18 +3525,180 @@ class TranscodeManager
     }
 
     /**
-     * Total byte size of the files directly inside a job directory.
+     * The argv for the detached sweep: the script, then the segment dir and both budgets.
+     *
+     * @return list<string>
+     */
+    private function sweepArgv(): array
+    {
+        return [
+            $this->sweepScript ?? dirname(__DIR__, 3) . '/scripts/sweep-segment-cache.php',
+            $this->segmentDir,
+            (string) $this->cacheMaxBytes,
+            (string) $this->cacheMaxAgeSeconds,
+        ];
+    }
+
+    /**
+     * Starts the sweep CLI detached: `nice -n 19`, output to /dev/null, backgrounded, and not
+     * waited on. The CLI takes a non-blocking flock on the segment dir's lock file, so
+     * concurrent launches from several workers coalesce into one walk.
+     *
+     * @param list<string> $argv Script path followed by its arguments.
+     *
+     * @return bool True when the launch was accepted (the walk runs on its own).
+     */
+    private function launchSegmentCacheSweep(array $argv): bool
+    {
+        if ($this->sweepLauncher !== null) {
+            return (bool) ($this->sweepLauncher)($argv);
+        }
+        if (!function_exists('exec')) {
+            return false;
+        }
+
+        // exec()'s status is the status of the backgrounded shell, which is 0 even when the
+        // binary is missing. So every file the detached process needs is checked up front, and
+        // the launch is accepted only when the shell prints the background PID. The script
+        // and the autoloader it requires (dirname(script, 2) . '/vendor/autoload.php', the same
+        // path scripts/sweep-segment-cache.php requires) are both checked: a missing one makes
+        // php exit 1 after the PID is already printed.
+        $script = (string) ($argv[0] ?? '');
+        if ($script === '' || !is_file($script) || !is_file(dirname($script, 2) . '/vendor/autoload.php')) {
+            return false;
+        }
+        $nice = $this->resolveNiceBinary();
+        if ($nice === null || !is_executable($nice)) {
+            return false;
+        }
+        if (!is_file($this->phpBinary) || !is_executable($this->phpBinary)) {
+            return false;
+        }
+
+        $parts = array_map('escapeshellarg', array_merge([$nice, '-n', '19', $this->phpBinary], $argv));
+        // `& echo $!` prints the PID of the detached job. It is not waited on.
+        $command = implode(' ', $parts) . ' >/dev/null 2>&1 & echo $!';
+        if ($this->execSeam !== null) {
+            [$status, $lines] = ($this->execSeam)($command);
+        } else {
+            $lines = [];
+            $status = 1;
+            exec($command, $lines, $status);
+        }
+        $pid = trim((string) ($lines[0] ?? ''));
+
+        return $status === 0 && ctype_digit($pid) && (int) $pid > 0;
+    }
+
+    /**
+     * The absolute path of `nice`, resolved once per worker: the PATH entries first, then the
+     * usual system locations. Null when no candidate is an executable file.
+     */
+    private function resolveNiceBinary(): ?string
+    {
+        if (!$this->niceResolved) {
+            $this->niceBinary = self::findExecutable('nice');
+            $this->niceResolved = true;
+        }
+
+        return $this->niceBinary;
+    }
+
+    /**
+     * The first executable file named `$name` on PATH, then in /usr/bin and /bin. A pure
+     * is_executable walk, so it never forks.
+     */
+    private static function findExecutable(string $name): ?string
+    {
+        $path = getenv('PATH');
+        $dirs = is_string($path) && $path !== '' ? explode(PATH_SEPARATOR, $path) : [];
+        array_push($dirs, '/usr/bin', '/bin');
+        foreach ($dirs as $dir) {
+            if ($dir === '') {
+                continue;
+            }
+            $candidate = rtrim($dir, '/') . '/' . $name;
+            if (is_file($candidate) && is_executable($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Test seam: set the `nice` binary the detached launch uses. A path that does not exist makes
+     * the launch fail, which exercises the in-process fallback. Null restores the PATH lookup.
+     *
+     * @param string|null $path Absolute path to `nice`, or null for production.
+     */
+    public function setNiceBinary(?string $path): void
+    {
+        $this->niceBinary = $path;
+        $this->niceResolved = $path !== null;
+    }
+
+    /**
+     * Test seam: replace the detached sweep launch. Receives the argv (script path first) and
+     * returns whether the launch was accepted. Null restores the real `nice`/`exec` launch.
+     *
+     * @param (callable(list<string>): bool)|null $launcher Launch hook, or null for production.
+     */
+    public function setSweepLauncher(?callable $launcher): void
+    {
+        $this->sweepLauncher = $launcher;
+    }
+
+    /**
+     * Test seam: the sweep script the detached launch runs (its autoloader is derived from it).
+     * A path that does not exist makes the launch refuse before any exec, which exercises the
+     * in-process fallback. Null restores the shipped script.
+     *
+     * @param string|null $path Absolute path to the sweep script, or null for production.
+     */
+    public function setSweepScriptPath(?string $path): void
+    {
+        $this->sweepScript = $path;
+    }
+
+    /**
+     * Test seam: replaces the shell exec of the detached launch. Receives the full command line
+     * and returns [exit status, output lines], so a test can assert the argv shape without
+     * spawning. Null restores the real exec().
+     *
+     * @param (callable(string): array{0: int, 1: list<string>})|null $exec Exec hook, or null.
+     */
+    public function setExecSeam(?callable $exec): void
+    {
+        $this->execSeam = $exec;
+    }
+
+    /**
+     * Escapes a path for use as the literal part of a glob() pattern, so a `[`, `*`, `?`, `]` or
+     * `\` in a directory name matches itself instead of a character class or wildcard.
+     */
+    private static function globEscape(string $path): string
+    {
+        return addcslashes($path, '*?[]\\');
+    }
+
+    /**
+     * Total byte size of the files directly inside a job directory. A symlink counts as 0 bytes
+     * and its target is never measured, so a link cannot inflate or deflate the size budget.
      *
      * @param string $dir Job directory.
      */
-    private function dirSize(string $dir): int
+    private static function dirSize(string $dir): int
     {
-        $files = glob("{$dir}/*");
+        $files = glob(self::globEscape($dir) . '/*');
         if (!is_array($files)) {
             return 0;
         }
         $bytes = 0;
         foreach ($files as $file) {
+            if (is_link($file)) {
+                continue; // a link counts as 0 bytes: its target is not part of this job
+            }
             $size = @filesize($file);
             if ($size !== false) {
                 $bytes += $size;
@@ -3077,26 +3744,82 @@ class TranscodeManager
     }
 
     /**
-     * Deletes a job directory and its contents. Guarded to stay within
-     * {@see $segmentDir} and tolerant of concurrent deletion by another worker.
+     * Deletes a job directory and its contents. Tolerant of concurrent deletion by another worker.
      *
-     * @param string $dir Absolute job directory path.
+     * The leading is_link() guard is a defensive guard: it unlinks a symlinked job directory as a
+     * link and never descends into it, so the target is untouched. Current callers never reach it,
+     * because {@see sweepCacheTree()} unlinks a symlink in the cache root before calling here. It is
+     * kept so that a future caller is safe by default. Containment is checked on REAL paths. A real
+     * directory that resolves outside the cache root is skipped and logged, and nothing under it is
+     * touched. Inside a job directory, every symbolic link is unlinked as a link and never followed,
+     * whether it dangles, resolves outside the root, or resolves inside it; only the link is removed,
+     * so its target survives and the directory can still be reclaimed. Any other entry whose real path
+     * is not inside the root is skipped and logged, and the directory then stays.
+     *
+     * Residual race: each check and the unlink()/rmdir() that acts on it are separate calls, so a path
+     * swapped in between (a directory component replaced by a symlink, for instance) can redirect the
+     * act. Exploiting that requires write access to the cache root, which already permits deleting
+     * cache contents.
+     *
+     * @param string          $segmentDir Segment cache root.
+     * @param string          $dir        Job directory to remove.
+     * @param LoggerInterface $logger     Receives a warning for each entry that is skipped.
      *
      * @return bool True if the directory was removed.
      */
-    private function removeJobDir(string $dir): bool
+    private static function removeJobDirUnder(string $segmentDir, string $dir, LoggerInterface $logger): bool
     {
-        $base = rtrim($this->segmentDir, '/') . '/';
-        if (!str_starts_with($dir, $base) || $dir === $this->segmentDir) {
-            return false; // never escape the segment dir
+        if (is_link($dir)) {
+            // A symlinked job directory is unlinked as a link and never descended into, so the
+            // directory it points at (possibly another live job) is not emptied or removed.
+            $logger->warning('Segment cache sweep removed a symlinked job entry', [
+                'entry' => $dir,
+            ]);
+            @unlink($dir);
+
+            return false;
         }
-        $files = glob("{$dir}/*");
+
+        $root = realpath($segmentDir);
+        $real = realpath($dir);
+        $prefix = $root === false ? null : $root . DIRECTORY_SEPARATOR;
+        if ($prefix === null || $real === false || !str_starts_with($real, $prefix)) {
+            $logger->warning('Segment cache sweep skipped a directory outside the cache root', [
+                'segment_dir' => $segmentDir,
+                'dir' => $dir,
+            ]);
+
+            return false;
+        }
+
+        $files = glob(self::globEscape($real) . '/*');
         if (is_array($files)) {
             foreach ($files as $file) {
+                if (is_link($file)) {
+                    // A link is removed as a link only: unlink() never follows it, so its target is
+                    // never touched, whether the target is outside the root, missing, or inside.
+                    // Removing it here is what lets a dangling link stop blocking the directory.
+                    $target = realpath($file);
+                    if ($target === false || !str_starts_with($target, $prefix)) {
+                        $logger->warning('Segment cache sweep removed a dangling or outside-root link', [
+                            'entry' => $file,
+                        ]);
+                    }
+                    @unlink($file);
+                    continue;
+                }
+                $target = realpath($file);
+                if ($target === false || !str_starts_with($target, $prefix)) {
+                    $logger->warning('Segment cache sweep skipped an entry that resolves outside the cache root', [
+                        'entry' => $file,
+                    ]);
+                    continue; // leave it alone; the directory then stays because it is not empty
+                }
                 @unlink($file);
             }
         }
-        return @rmdir($dir);
+
+        return @rmdir($real);
     }
 
     /**
@@ -5151,9 +5874,9 @@ class TranscodeManager
         // segments are not counted. `init-*.m4s` is deliberately excluded — it is
         // one shared header per rendition, not a media segment, and counting it
         // would overstate progress by the number of renditions.
-        $cmaf = glob("{$dir}/chunk-*.m4s");
-        $ts = glob("{$dir}/seg-*.ts");
-        $fmp4 = glob("{$dir}/seg-*.m4s");
+        $cmaf = glob(self::globEscape($dir) . '/chunk-*.m4s');
+        $ts = glob(self::globEscape($dir) . '/seg-*.ts');
+        $fmp4 = glob(self::globEscape($dir) . '/seg-*.m4s');
         return (is_array($cmaf) ? count($cmaf) : 0)
             + (is_array($ts) ? count($ts) : 0)
             + (is_array($fmp4) ? count($fmp4) : 0);
@@ -5668,8 +6391,8 @@ class TranscodeManager
             $noSegmentWithinTimeout = false;
             if (!$dirGone && $startedAt !== false && $startedAt < $segmentTimeoutCutoff) {
                 $segmentFiles = array_merge(
-                    glob("{$dir}/chunk-*.m4s") ?: [],
-                    glob("{$dir}/seg-*.ts") ?: [],
+                    glob(self::globEscape($dir) . '/chunk-*.m4s') ?: [],
+                    glob(self::globEscape($dir) . '/seg-*.ts') ?: [],
                 );
                 $noSegmentWithinTimeout = count($segmentFiles) === 0;
             }

@@ -1567,6 +1567,38 @@ final class SegmentProcessRegistry
     }
 
     /**
+     * Read-only liveness verdict for a cancel key: true when any PID tracked under it is
+     * still a live, non-zombie process with its recorded identity. It signals nothing and
+     * changes no bookkeeping. A key with no tracked PID (never launched here, or already
+     * released) is not alive. Used by TranscodeManager's wait loop to stop polling for a
+     * segment whose encode has died without output.
+     *
+     * @param string $key Cancel key (the segment's final path for on-demand encodes).
+     */
+    public function keyAlive(string $key): bool
+    {
+        $pids = $this->pids[$key] ?? [];
+        if ($pids === []) {
+            return false;
+        }
+
+        return $this->anyAlive($pids, $this->startsFor($key));
+    }
+
+    /**
+     * Read-only ownership check: true when this worker's registry holds a PID for the cancel
+     * key, which means this worker launched the encode. A key this worker did not launch (for
+     * example a piggyback on a sibling worker's encode) is not tracked, so its liveness cannot
+     * be judged here. Signals nothing and changes no bookkeeping.
+     *
+     * @param string $key Cancel key (the segment's final path for on-demand encodes).
+     */
+    public function tracksKey(string $key): bool
+    {
+        return ($this->pids[$key] ?? []) !== [];
+    }
+
+    /**
      * Remove a key's PID entry, its identity records and its group links (no signalling).
      *
      * @param string $key Cancel key to drop.

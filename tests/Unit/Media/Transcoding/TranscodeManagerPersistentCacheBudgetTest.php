@@ -140,7 +140,7 @@ final class TranscodeManagerPersistentCacheBudgetTest extends TestCase
         file_put_contents("{$fresh}/seg-00000.ts", 'x');
         touch($old, time() - 10);
 
-        $reaped = $this->manager($db, $ff, null, 1)->sweepSegmentCache();
+        $reaped = $this->manager($db, $ff, null, 1)->sweepSegmentCacheNow();
 
         $this->assertSame(1, $reaped);
         $this->assertDirectoryDoesNotExist($old);
@@ -160,7 +160,7 @@ final class TranscodeManagerPersistentCacheBudgetTest extends TestCase
         touch($old, time() - 2400);
         touch($active, time());
 
-        $reaped = $this->manager($db, $ff, 1024, 86400)->sweepSegmentCache();
+        $reaped = $this->manager($db, $ff, 1024, 86400)->sweepSegmentCacheNow();
 
         $this->assertSame(1, $reaped);
         $this->assertDirectoryDoesNotExist($old);

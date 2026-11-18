@@ -434,9 +434,9 @@ changes.
 
 | | |
 |---|---|
-| Site | `src/Media/Transcoding/TranscodeManager.php::scanInFlightTemps()` — one `glob()` of `{segmentDir}/*` for the job directories, one `filemtime()` per job directory, and one `glob()` of each job directory that is recent enough to hold a live temp. The per-temp `filemtime()`/`unlink()` in `purgeDeadInFlightTemps()` and the one-directory `glob()` in `liveEncodeExistsFor()` are the same class of call. |
+| Site | `src/Media/Transcoding/TranscodeManager.php::scanInFlightTemps()` — one `glob()` of `{segmentDir}/*` for the job directories, one `filemtime()` per job directory, and, for each job directory that is recent enough to hold a live temp, two plain `glob()` calls (the base and the prewarm pattern, no `GLOB_BRACE`). Symlinked entries are skipped before any glob or stat. The per-temp `filemtime()`/`unlink()` in `purgeDeadInFlightTemps()` and the one-directory `glob()` in `liveEncodeExistsFor()` are the same class of call. Every dead temp considered by `purgeDeadInFlightTemps()` pays two `realpath()` calls in `isInsideSegmentRoot()` (the cache root and the temp's directory, re-resolved on every call) before the decision; a temp outside the root also costs one logger warning and is skipped. The unlinks happen only for temps inside the root: each such temp is unlinked, then gets one sidecar `glob()` of `<temp>.*`, and each sidecar found costs two more `realpath()` calls and is unlinked only when it is inside the root. |
 | Reached from | The on-demand HLS segment path, on every **launch decision** (`countInFlightSegmentEncodes()` in `produceSegment()` / `produceAudioSegment()`, `countInFlightPrewarmEncodes()` in the prewarm budget), and `reconcileInFlightSegments()` at most once per 1 s. Runs on an HTTP worker, one of the 14. |
-| Why it is sync | The scan reads local segment-cache metadata only. It has no network I/O. PHP has no non-blocking directory-listing or `stat` primitive, so the scan cannot be made async without a worker pool. The live count is deliberately real-time, not cached, because the global ceiling is enforced per worker and a cached count lets the fleet overshoot it (see the `countInFlightSegmentEncodes()` docblock). |
+| Why it is sync | The scan reads local segment-cache metadata only. It has no network I/O. PHP has no non-blocking directory-listing or `stat` primitive, so the scan cannot be made async without a worker pool. The count is not live: it is a shared scan snapshot refreshed at most once per 1 s window (`inFlightSnapshot()`), plus this worker's own launches that the snapshot may not show yet. The bound this gives: across W = 14 HTTP workers, one window can have up to W x cap segment encodes in flight, which is the cap plus an overshoot of (W-1) x cap (with the default cap of 8, up to 112 in flight, 104 over the cap). |
 | Bound | There is no timeout, because local metadata has none. The work is bounded instead. (1) One `filemtime()` per job directory. (2) A job directory older than the temp death bound (`ffmpeg.transcode_timeout` + 300 s) is **skipped** without a glob, because no temp inside it can be younger than that bound. (3) The purge stands down entirely when the wrapper timeout is 0, so the scan does no more work than a full-tree glob would. |
 | Cost | Scales with the number of job directories (one stat each) plus the files of the **recent** directories only. The shipped default cache holds 8 GiB, so the job count is the operator's to bound. Measured below. |
 
@@ -451,12 +451,14 @@ tree holds 400 job directories with 40 segment files each. Median of 25 calls:
 400 job dirs, all recent (live temp each), 16 000 files       median 36.7 ms p90 37.0 ms
 ```
 
-A launch decision costs one scan, and reconcile adds at most one per second. So at
+Without a cache, a launch decision would cost one scan, and reconcile would add at most one per second. At
 about 400 job directories that were all active inside the death bound (the second row,
-a rare shape), each launch decision costs about 37 ms of one worker. Extrapolated linearly (not measured), 1 000
-recent job directories would cost about 90 ms per launch decision. That is the point
-at which the scan should be cached for a short window per worker. That would make the cap bound
-approximate across workers by at most that window.
+a rare shape), each uncached scan costs about 37 ms of one worker. Extrapolated linearly (not measured), 1 000
+recent job directories would cost about 90 ms per scan. The scan is therefore cached per
+worker for a 1 s window (`inFlightSnapshot()`), so a launch decision reads the snapshot and
+does not rescan inside that window. Across workers the bound is the one given above: up to W x cap
+segment encodes in flight within one 1 s window. This worker's own launches are counted exactly
+(`noteLaunch()`, until their final is published; an unpublished local launch stops counting after 10 s, `SEGMENT_UNSEEN_LAUNCH_MAX_NS` in `TranscodeManager.php`); other workers are seen with up to 1 s of lag.
 
 ---
 
@@ -578,6 +580,20 @@ block the worker for as long as the kernel waits. The bound above assumes a
 local disk. This entry records the calls. It does not claim the register's rule
 (an enforced timeout) is met; the owner decides whether to keep the local-disk
 assumption or move these calls off the event loop.
+
+---
+
+## Exception 15 — detached segment-cache sweep launch (`TranscodeManager::launchSegmentCacheSweep()`, registered 2026-11-18)
+
+| | |
+|---|---|
+| Site | `src/Media/Transcoding/TranscodeManager.php::launchSegmentCacheSweep()` — one `exec()` of a backgrounded shell command: `nice -n 19 <php> scripts/sweep-segment-cache.php <segment-dir> <max-bytes> <max-age>` followed by `>/dev/null 2>&1 & echo $!`. The walk itself runs in that child process, which is not waited on. Reached through `sweepSegmentCache()`. |
+| Reached from | (a) The transcode stale-job reaper tick on the background-timers fork (`count = 1`, Exception 9). (b) The 503 path in `HlsController` and `DashController` on the HTTP workers (14 by default). Both pass the per-worker throttle, so the launch runs at most once per 10 s (`SEGMENT_CACHE_SWEEP_INTERVAL_NS`) per worker. |
+| Why it is sync | `exec()` is a synchronous PHP call, and the resident worker has no non-blocking process-spawn primitive. The call returns when `/bin/sh` has forked the background job and printed its PID, so it stays on the event loop for that duration. The walk that used to run here is now in the child process, which removes the full-tree stall from the event loop. |
+| Bound | Structural, not timed. The shell does not wait for the job. The command redirects stdout and stderr only (`>/dev/null 2>&1`), so `exec()` is not held open by the walk. Stdin is not redirected by the command; it is `/dev/null` only because a non-interactive background job gets it from the shell. The call can block only on the shell's start-up and one `fork()`. No timeout wraps the call, because nothing in it waits. **Status: this is not a timed bound under the rule at the top of this file.** It is accepted only on the structural argument above, and the owner must confirm it. |
+| Measurement | **Not measured.** The return time of `exec()` for this command was not timed, so no figure is claimed. The expectation is a shell start plus one fork, which is low milliseconds on an idle host. Under host load, the fork can take longer, and nothing bounds it. |
+| Cost and blast radius | Per launch: one `/bin/sh` start and one `fork()` on the calling worker. On the background-timers fork (`count = 1`), a stall delays every other timer on that fork for its duration. On an HTTP worker, a stall costs about 1/14 of HTTP capacity for its duration. Throttle: the reaper timer launches at most once per 45 s (`REAPER_INTERVAL`), and the 503 path launches at most once per 10 s per HTTP worker (`SEGMENT_CACHE_SWEEP_INTERVAL_NS`). **Not covered by this entry:** the in-process fallback. If the launch is refused (no `exec`, a missing `nice`, `php`, sweep script or `vendor/autoload.php`, or no PID printed), `sweepSegmentCache()` runs `sweepSegmentCacheNow()` in the calling process, with no timeout. Two paths reach it: the HTTP 503 path (`HlsController` and `DashController` on a segment-cache-full error) runs it on the HTTP worker's event loop; the reaper path (`startReaperTimer()`, every 45 s) runs it on the background-timers fork (`count = 1`), where it stalls the other timers on that fork rather than HTTP. That full-tree walk is synchronous and has no timeout. |
+| Regression guards | `tests/Unit/Media/Transcoding/TranscodeManagerRound2Test.php`: `testDetachedLaunchCommandHasTheExpectedArgvShape` (argv shape through the exec seam, nothing spawned), `testMissingSweepScriptFallsBackToTheInProcessWalkWithoutSpawning` and `testMissingAutoloaderFallsBackToTheInProcessWalkWithoutSpawning`, and `testDetachedLaunchReclaimsInTheBackground` (the only real spawn; timing-tolerant, 60 s bound). |
 
 ---
 

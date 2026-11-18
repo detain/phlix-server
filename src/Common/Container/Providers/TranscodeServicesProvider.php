@@ -15,6 +15,7 @@ use DI\ContainerBuilder;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\DegradedBuild;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Env\EnvConfig;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\EncodeSettings;
@@ -180,6 +181,15 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
 
                     /** @var \Psr\Log\LoggerInterface $logger */
                     $logger = $c->get('logger.media');
+
+                    // EnvConfig never logs (config loads before the logger is initialised);
+                    // report any non-numeric integer env knob here, once per worker.
+                    foreach (EnvConfig::invalidIntegerNames() as $invalidEnv) {
+                        $logger->warning(
+                            'Ignoring a non-numeric integer env value; the default applies',
+                            ['env' => $invalidEnv]
+                        );
+                    }
 
                     // Get the merged hwaccel config (single source of truth).
                     // This combines hwaccel_base.php settings (enabled, prefer_hardware,

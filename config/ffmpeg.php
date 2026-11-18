@@ -79,16 +79,19 @@ return [
      * decode paths are not touched.
      *
      * MEASURED (hub.phlix, 12-core EPYC, 30 s of 1080p H.264 at -ss 1800, output
-     * `-threads 4` held fixed, two passes): decoder auto vs 1 / 2 / 4 threads gave
-     * wall 10.1–10.8 s and user 32.5–35.6 s, all within run-to-run noise. The
-     * decoder is a small share of an x264 encode, so one clip cannot show the
-     * contention benefit this cap is for. 2 is the default: it keeps frame-threaded
-     * decode for 4K-class sources (a single decoder thread is the bottleneck there)
-     * while bounding the pool from the auto count. 0 (or negative) disables the flag
-     * and restores the decoder's auto-sizing. Env override:
-     * PHLIX_SEGMENT_DECODE_THREADS (the `"0"`-survives rule, as for the encode cap).
+     * `-threads 4` held fixed, two passes): decoder auto 10.3 s, 1 thread 10.4-10.6 s,
+     * 2 threads 10.3-10.7 s, 4 threads 10.1-10.6 s wall. Every setting is within
+     * run-to-run noise, so this cap showed no benefit on that clip.
+     *
+     * Default 0: the flag is off and the decoder auto-sizes, which is identical to the
+     * behaviour before this knob existed. Enabling it is an opt-in for hosts that run
+     * many concurrent software encodes of 4K-class sources, where the decoder's
+     * auto-sized pool is expected to contend. Measure on your own host before enabling
+     * it. A positive value bounds the decoder's frame-thread pool; 0 or a negative
+     * value disables the flag. A non-numeric env value logs a warning and uses the
+     * default. Env override: PHLIX_SEGMENT_DECODE_THREADS.
      */
-    'segment_decode_threads' => EnvConfig::integer('PHLIX_SEGMENT_DECODE_THREADS', 2),
+    'segment_decode_threads' => EnvConfig::integer('PHLIX_SEGMENT_DECODE_THREADS', 0),
 
     /**
      * perf #11: directory for the persisted, cross-worker ffprobe cache

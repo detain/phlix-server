@@ -234,7 +234,7 @@ class FfmpegRunner
     /**
      * Wire the software-decode thread cap (perf #5). Same contract as
      * {@see setSegmentEncodeThreads()}: null re-enables the build-time chain
-     * (`PHLIX_SEGMENT_DECODE_THREADS` env → default 2); a value <= 0 drops the
+     * (`PHLIX_SEGMENT_DECODE_THREADS` env → default 0, i.e. off); a value <= 0 drops the
      * input-side `-threads` flag so the decoder auto-sizes.
      *
      * @since perf #5
@@ -259,12 +259,12 @@ class FfmpegRunner
 
     /**
      * Resolve the input-side software-decode `-threads` value (perf #5): the wired
-     * config value first, else `PHLIX_SEGMENT_DECODE_THREADS`, else 2. Mirrors
+     * config value first, else `PHLIX_SEGMENT_DECODE_THREADS`, else 0 (off). Mirrors
      * {@see resolveSegmentEncodeThreads()} so a hand-built runner behaves like production.
      */
     private function resolveSegmentDecodeThreads(): int
     {
-        return $this->segmentDecodeThreads ?? EnvConfig::integer('PHLIX_SEGMENT_DECODE_THREADS', 2);
+        return $this->segmentDecodeThreads ?? EnvConfig::integer('PHLIX_SEGMENT_DECODE_THREADS', 0);
     }
 
     /**

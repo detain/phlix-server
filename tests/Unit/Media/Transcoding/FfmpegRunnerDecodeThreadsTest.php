@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Media\Transcoding;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Common\Env\EnvConfig;
 use Phlix\Media\Transcoding\FfmpegRunner;
 
 /**
@@ -124,15 +125,29 @@ final class FfmpegRunnerDecodeThreadsTest extends TestCase
         self::assertStringNotContainsString('-threads', $cmd);
     }
 
-    public function testUnwiredRunnerDefaultsToTwoAndHonoursTheEnvOverride(): void
+    public function testUnwiredRunnerDefaultsToOffAndHonoursTheEnvOverride(): void
     {
-        self::assertSame('2', $this->inputThreads($this->build($this->runner(), $this->softwareRung())));
+        // Default is 0 (off): no input-side flag, identical to the pre-#5 command.
+        self::assertNull($this->inputThreads($this->build($this->runner(), $this->softwareRung())));
 
         putenv(self::ENV . '=3');
         self::assertSame('3', $this->inputThreads($this->build($this->runner(), $this->softwareRung())));
 
         // "0" from the environment survives as a real value (disable), not as unset.
         putenv(self::ENV . '=0');
+        self::assertNull($this->inputThreads($this->build($this->runner(), $this->softwareRung())));
+    }
+
+    public function testNonNumericEnvValueUsesTheDefaultAndIsNotTakenAsZero(): void
+    {
+        // "abc" must not silently become 0 and disable a configured cap: the default
+        // (off) applies and the knob is recorded for the warning the provider emits.
+        putenv(self::ENV . '=abc');
+        self::assertNull($this->inputThreads($this->build($this->runner(), $this->softwareRung())));
+        self::assertContains(self::ENV, EnvConfig::invalidIntegerNames());
+
+        // A non-numeric value must not fall back to a cap either: default is off.
+        putenv(self::ENV . '=4x');
         self::assertNull($this->inputThreads($this->build($this->runner(), $this->softwareRung())));
     }
 

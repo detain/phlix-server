@@ -26,15 +26,46 @@ namespace Phlix\Common\Env;
 final class EnvConfig
 {
     /**
-     * Read an integer knob: unset/empty → $default, otherwise the value
-     * cast the way `(int) getenv(...)` casts it (`"12x"` → 12 — the old
-     * sites' behavior, preserved).
+     * Names of integer knobs whose env value was set but not a whole number. Each such
+     * knob falls back to its default. Keyed by name, so it holds at most one entry per
+     * knob. Read it with {@see invalidIntegerNames()} where a logger is available: this
+     * class never logs, because the config files load before the logger is initialised.
+     *
+     * @var array<string, true>
+     */
+    private static array $invalidIntegers = [];
+
+    /**
+     * Read an integer knob: unset/empty → $default; a whole number (optionally signed,
+     * surrounding whitespace allowed) → that value, so `"0"` is an explicit 0. Anything
+     * else, such as `"abc"` or `"12x"`, is NOT silently cast to 0 (which would disable
+     * a cap). It yields $default and the name is recorded in {@see invalidIntegerNames()}.
      */
     public static function integer(string $name, int $default): int
     {
         $raw = getenv($name);
+        if ($raw === false || $raw === '') {
+            return $default;
+        }
 
-        return $raw === false || $raw === '' ? $default : (int) $raw;
+        $value = filter_var(trim($raw), FILTER_VALIDATE_INT);
+        if ($value === false) {
+            self::$invalidIntegers[$name] = true;
+
+            return $default;
+        }
+
+        return $value;
+    }
+
+    /**
+     * The env names read by {@see integer()} whose value was not a whole number.
+     *
+     * @return list<string>
+     */
+    public static function invalidIntegerNames(): array
+    {
+        return array_keys(self::$invalidIntegers);
     }
 
     /**

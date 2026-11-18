@@ -175,7 +175,8 @@ class Request
      * identity (signed-URL-only use). That check is
      * {@see \Phlix\Server\Http\Middleware\AccessScheduleMiddleware::denyForSignedRequest()}.
      * A later request that carries a session (Bearer, cookie, or relayed x-phlix-relay-user) is
-     * checked against its own session profile, and the token's `pid` is not consulted. The
+     * checked against its session profile, or the account's active profile when the session has none,
+     * and the token's `pid` is not consulted. The
      * controller reads this value because {@see \Phlix\Server\Http\RequestContext::getProfileId()}
      * is restored once the gate returns. For a relayed principal that restored value is null when
      * the route runs, so reading it there would mint an unbound token.

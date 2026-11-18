@@ -147,9 +147,9 @@ class TranscodeController
         // is the one that binds it. On a later segment request with no session identity (signed-URL
         // use only), the global gate checks the token's pid against that profile's schedule
         // (AccessScheduleMiddleware::denyForSignedRequest()). A request that carries a session (Bearer,
-        // cookie, or relayed x-phlix-relay-user) is checked against its own session profile, and the
-        // token's pid is not consulted. The token is unbound only when neither names a profile
-        // (see SignedUrl::mint()).
+        // cookie, or relayed x-phlix-relay-user) is checked against its session profile, or the account's
+        // active profile when the session has none, and the token's pid is not consulted. The token is
+        // unbound only when neither names a profile (see SignedUrl::mint()).
         $profileId = $request->gatedProfileId ?? \Phlix\Server\Http\RequestContext::getProfileId();
         $sign = static fn (mixed $url): mixed => is_string($url) && $url !== ''
             ? $signer->mint($url, null, null, $profileId)

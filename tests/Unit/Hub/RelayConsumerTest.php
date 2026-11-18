@@ -3909,8 +3909,15 @@ class RelayConsumerTest extends TestCase
 
     /**
      * Relay one stream start through the real identity mapping, the global schedule gate and the
-     * stream-URL route. The dispatcher stands in for the relay fork's dispatcher: it runs the gate
-     * as Application::handle() does, and only a request the gate passes reaches the route.
+     * stream-URL route. The dispatcher stands in for the relay fork's dispatcher. Production runs
+     * RelayRequestDispatcher::dispatch() (the deny, then the pre-router fast paths), then
+     * Application::dispatch(), whose global chain runs the gate: the middleware closure that calls
+     * scheduleGateFor() is registered in the Application constructor. This dispatcher calls
+     * scheduleGateFor() directly as a unit seam, not that full chain, and only a request the gate
+     * passes reaches the route. The helper calls scheduleGateFor() and TranscodeController::start()
+     * directly, so it skips Application::dispatch()'s middleware, the pre-router fast paths, the router
+     * and route-level auth; it does not prove the production gate wiring, which the boundary test that
+     * pins the middleware registration count covers.
      *
      * @return array{
      *     request: \Phlix\Server\Http\Request,
@@ -4023,9 +4030,11 @@ class RelayConsumerTest extends TestCase
             $use->method = 'GET';
             $use->path = '/hls/job-7/master.m3u8';
             $use->query = $query;
+            // The use request has a null userId, so scheduleGateFor() returns this same denyForSignedRequest() call.
             self::assertNull($schedule->denyForSignedRequest($use), 'p1 is open now, so the bound token is allowed');
 
             $locked = $this->relayAccessSchedule(self::relayP1Window('today'), $profiles);
+            // Same as above: a null userId makes scheduleGateFor() return this denyForSignedRequest() call.
             $refused = $locked->denyForSignedRequest($use);
             self::assertNotNull($refused, 'once p1 is locked, the same token is refused on use');
             self::assertSame(403, $refused->statusCode);

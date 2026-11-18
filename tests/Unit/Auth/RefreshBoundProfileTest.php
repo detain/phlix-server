@@ -162,6 +162,78 @@ final class RefreshBoundProfileTest extends TestCase
     }
 
     /**
+     * Finding 6. A family-carrying refresh whose bound profile is gone is refused BEFORE the family
+     * adjudication, so the refusal never consumes the presented grant. A retry is then audited as the
+     * same ownership refusal, not as 'refresh_token_reuse' (which would revoke the family).
+     *
+     * The store is stateful: the grant is live until something consumes it. Had the refusal run after
+     * the adjudication, the first presentation would mark the grant consumed, and a retry outside the
+     * grace window would read as reuse.
+     */
+    public function testARefusedSessionRefreshDoesNotConsumeItsGrantSoARetryIsNotReuse(): void
+    {
+        $jwt = $this->jwt();
+        $family = 'f' . str_repeat('e', 35);
+        $token = $jwt->createRefreshToken(self::USER, [
+            JwtHandler::CLAIM_PROFILE_ID => self::BOUND,
+            JwtHandler::CLAIM_SESSION_ID => $family,
+        ]);
+        $jti = (string) (($jwt->validateToken($token)['jti'] ?? ''));
+
+        // The bound profile is removed before the presentation.
+        $this->owned = [self::DEFAULT];
+
+        $consumed = false;
+        $store = $this->createMock(TokenSessionRepository::class);
+        $store->method('findGrant')->willReturnCallback(
+            static function () use (&$consumed, $jti, $family): array {
+                return [
+                    'jti' => $jti,
+                    'sessionId' => $family,
+                    'sessionStatus' => 'active',
+                    'consumed' => $consumed,
+                    'withinGrace' => false,
+                ];
+            }
+        );
+        $store->method('markGrantConsumed')->willReturnCallback(
+            static function () use (&$consumed): bool {
+                $consumed = true;
+
+                return true;
+            }
+        );
+        $store->expects(self::never())->method('revokeSession');
+
+        $reasons = [];
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->method('logFailedAuth')->willReturnCallback(
+            static function (string $reason) use (&$reasons): void {
+                $reasons[] = $reason;
+            }
+        );
+
+        $manager = $this->manager($jwt, null, $store, $audit);
+
+        // The first presentation is refused, then the client retries.
+        foreach ([1, 2] as $_) {
+            try {
+                $manager->refreshToken($token);
+                self::fail('a refused refresh must not mint');
+            } catch (\InvalidArgumentException) {
+                // expected: the ownership refusal
+            }
+        }
+
+        self::assertFalse($consumed, 'a refused presentation must not consume its grant');
+        self::assertSame(
+            ['profile_not_owned', 'profile_not_owned'],
+            $reasons,
+            'the retry is audited as the ownership refusal, not refresh_token_reuse'
+        );
+    }
+
+    /**
      * The access leg (finding 2). A profile claim the account no longer owns refuses the
      * access token. It must not run as the default for the token's whole lifetime.
      */

@@ -1639,6 +1639,22 @@ class AuthManager
 
         $jti = is_string($payload['jti'] ?? null) ? (string) $payload['jti'] : '';
 
+        // The family's bound profile. The `profile_id` claim rides in the refresh token and is
+        // re-carried on every rotation, so the claim IS the family's pid. A refresh re-mints
+        // for that profile or refuses. It must never re-derive the account default, which is
+        // what resolveProfileForUser() does for a stale claim on the access path. Otherwise a
+        // bearer bound to a profile that was since removed would refresh into the default.
+        //
+        // This check runs BEFORE the family adjudication below (finding 6). Adjudication consumes
+        // the presented grant, so a refusal made after it left the grant consumed, and the client's
+        // retry after the grace window was audited as 'refresh_token_reuse' (family revoked) rather
+        // than as the ownership refusal it really is. Refused here, the grant is never touched.
+        // It still runs before the grace memo, so a refusal is never re-delivered from memory.
+        $boundProfileId = JwtHandler::profileIdClaim($payload);
+        if ($boundProfileId !== null) {
+            $this->refuseUnownedRefreshProfile($userId, $boundProfileId);
+        }
+
         // CP-029 / D-1a: family + grant adjudication for every token the store
         // KNOWS (one carrying a `sid` claim). These are AUTHORIZATION
         // decisions, so they run here — BEFORE the grace memo below, exactly
@@ -1650,17 +1666,6 @@ class AuthManager
         $sessionId = JwtHandler::sessionIdClaim($payload);
         if ($sessionId !== null) {
             $this->adjudicateRefreshFamily($userId, $sessionId, $jti);
-        }
-
-        // The family's bound profile. The `profile_id` claim rides in the refresh token and is
-        // re-carried on every rotation, so the claim IS the family's pid. A refresh re-mints
-        // for that profile or refuses. It must never re-derive the account default, which is
-        // what resolveProfileForUser() does for a stale claim on the access path. Otherwise a
-        // bearer bound to a profile that was since removed would refresh into the default.
-        // This runs before the grace memo, so a refusal is never re-delivered from memory.
-        $boundProfileId = JwtHandler::profileIdClaim($payload);
-        if ($boundProfileId !== null) {
-            $this->refuseUnownedRefreshProfile($userId, $boundProfileId);
         }
 
         // S80: carry the session's profile across the re-mint. Without this a

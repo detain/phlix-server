@@ -2860,6 +2860,13 @@ class TranscodeManager
         $window = $this->joinWindowSeconds();
         $now = time();
         foreach ($hits as $hit) {
+            // Only the `.part-<hex>` marker means an encode is running. Its siblings
+            // (`.i`, `.s0`, `.m3u8`, `.prog`) are the same glob's hits. A sidecar outlives
+            // its marker when a killed ffmpeg writes its trailer after the cleanup, so a
+            // fresh sidecar must not make a dead encode look live.
+            if (preg_match('/\.part-p?[0-9a-f]{8}$/', $hit) !== 1) {
+                continue;
+            }
             $mtime = @filemtime($hit);
             if ($mtime !== false && ($now - $mtime) <= $window) {
                 return true;

@@ -913,6 +913,30 @@ final class TranscodeManagerPrewarmTest extends TestCase
     }
 
     /**
+     * A killed ffmpeg can write its trailer after the registry cleaned the temps. That
+     * leaves a FRESH sidecar (`.s0`) with no `.part-<hex>` marker. It is not a live
+     * encode, so a seek must not join it. The cap is full, so the refusal is a 503.
+     */
+    public function testSeekDoesNotJoinAFreshTrailerSidecarWhoseMarkerIsGone(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 0, 8);
+        $manager->setSegmentProcessRegistry(new SegmentProcessRegistry());
+        $jobId = (string) $manager->ensureHlsJob('media-1', 'web')['job_id'];
+        file_put_contents(
+            $this->segmentDir . '/' . $jobId . '/seg-voriginal-00000.m4s.part-0000abcd.s0',
+            ''
+        );
+        $this->liveTemps(8); // cap 8 is full of other live encodes
+        $this->pinSnapshotStale($manager);
+        $prop = new ReflectionProperty(TranscodeManager::class, 'segmentMaxWaitMs');
+        $prop->setValue($manager, 0);
+
+        $this->expectException(SegmentBusyException::class);
+        $manager->ensureSegment($jobId, 'original', 0);
+    }
+
+    /**
      * A corpse is a temp left by a killed chain (no `|| rm` ran). An hour old, it is
      * not a live encode. Joining it made the request wait the full poll and then 404.
      * The seek must be refused at the cap, with SegmentBusyException (503), as master

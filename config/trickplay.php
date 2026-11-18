@@ -3,7 +3,9 @@
 /**
  * Trickplay (scrubber preview) configuration.
  *
- * Both keys below are live: code reads each one.
+ * Two keys, read differently. `base_url` is read by Application::getTrickplayController().
+ * `enabled` is not read by any trickplay code path: it is the shipped default that the
+ * `trickplay.enabled` admin setting resolves against (see below).
  *
  * - `enabled` is the shipped default for the `trickplay.enabled` admin setting.
  *   The live toggle is read at use-time from SettingsRepository::getEffective()

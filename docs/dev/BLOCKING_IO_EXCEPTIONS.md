@@ -460,6 +460,30 @@ approximate across workers by at most that window.
 
 ---
 
+## Exception 12 — encode watchdog reads: `/proc/<pid>/stat` and the `-progress` tail (`SegmentProcessRegistry`)
+
+| | |
+|---|---|
+| Site | `src/Media/Transcoding/SegmentProcessRegistry.php` — `defaultProcStatReader()` (one `is_readable()` + one `file_get_contents()` of `/proc/<pid>/stat`), `lastOutTimeMicros()` (one `fopen()`, `fstat()`, `fseek()` and a bounded `stream_get_contents()` of the last 8 KB of an encode's `.prog` file), and `progressSignal()` (one `filemtime()`). |
+| Reached from | `SegmentProcessRegistry::sweep()`, driven by the per-worker 5 s timer and the request-throttled 1 s sweep in `TranscodeManager`. Each live tracked encode costs about two `/proc` reads and one progress read per sweep. |
+| Why it is sync | `/proc` is a kernel pseudo-filesystem, and a `.prog` file is local segment-cache metadata. Neither has a network path. PHP has no non-blocking file or `stat` primitive. |
+| Bound | The progress read is bounded to 8 KB (`PROGRESS_TAIL_BYTES`), whatever the encode's length. The `/proc` read is one line. Both run only for the encodes this worker tracks, and that count is capped by `server.hls.max_concurrent_segments` per worker (8 by default). On non-Linux the `/proc` reader returns null with no read. |
+| Cost | Measured below. The sweep cost is linear in this worker's live encodes, and it is below a millisecond at the default ceiling. |
+
+### Measurement (2026-11-17, real private helpers, median of 500 calls)
+
+```text
+progress file 405 KB (3 000 blocks), 8 KB tail read          22.1 us  (p90 22.4 us)
+progressSignal (mtime + tail), one temp                      22.6 us  (p90 22.8 us)
+progress probe, one temp                                     26.6 us  (p90 26.8 us)
+/proc/<pid>/stat read                                        21.5 us  (p90 21.7 us)
+```
+
+At the default ceiling of 8 encodes per worker, one sweep is about 8 × (27 + 22 +
+22) µs, or under 0.6 ms, every 1 to 5 s.
+
+---
+
 ## Not on this list
 
 Everything else. In particular, do not add an entry for a call you have not

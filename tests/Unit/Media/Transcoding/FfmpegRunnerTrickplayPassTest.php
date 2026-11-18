@@ -140,15 +140,61 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         $this->assertSame(10000, $result['bif_interval_ms']);
     }
 
-    public function testBifFramesStopAtTheFirstGap(): void
+    public function testBifGapFailsThePassAndPublishesNothing(): void
     {
         $runner = $this->scripted(6000.0);
         $runner->skipBifIndexes = [6];
 
-        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 0, 10, 320);
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 10, 320);
 
-        $this->assertNotNull($result);
-        $this->assertCount(5, $result['bif_frames'], 'A hole in the index must truncate, not skip.');
+        $this->assertNull($result, 'A hole in the BIF index is a partial archive and must fail the pass.');
+        $this->assertFileDoesNotExist($this->dir . '/out/sprite.jpg');
+        $this->assertFileDoesNotExist($this->dir . '/out/timeline.json');
+        for ($i = 1; $i <= 10; $i++) {
+            $this->assertFileDoesNotExist(sprintf($this->dir . '/out/bifframe_%05d.jpg', $i));
+        }
+    }
+
+    public function testBifShortfallWithNonZeroExitFailsThePassAndPublishesNothing(): void
+    {
+        // The reviewed repro: a directory planted where frame 10 goes. ffmpeg writes
+        // the sprite and frames 1-9, then fails with exit 251. The sprite is complete,
+        // but the archive would cover 90 s of a 120 s title, so nothing is published.
+        $runner = $this->scripted(6000.0);
+        $runner->bifFramesToWrite = 9;
+        $runner->exitCodeToReturn = 251;
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 10, 320);
+
+        $this->assertNull($result);
+        $this->assertFileDoesNotExist($this->dir . '/out/sprite.jpg');
+        $this->assertFileDoesNotExist($this->dir . '/out/timeline.json');
+        $this->assertFileDoesNotExist($this->dir . '/out/bifframe_00001.jpg');
+    }
+
+    public function testNonZeroExitFailsThePassEvenWhenEveryArtefactWasWritten(): void
+    {
+        $runner = $this->scripted(6000.0);
+        $runner->exitCodeToReturn = 1;
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 10, 320);
+
+        $this->assertNull($result);
+        $this->assertFileDoesNotExist($this->dir . '/out/sprite.jpg');
+        $this->assertFileDoesNotExist($this->dir . '/out/timeline.json');
+    }
+
+    public function testShortBifWithExitZeroStillFailsThePass(): void
+    {
+        // A silent early end of input can exit 0 with too few frames; the count
+        // check is what catches it, so the sprite must not be published either.
+        $runner = $this->scripted(6000.0);
+        $runner->bifFramesToWrite = 0;
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+
+        $this->assertNull($result);
+        $this->assertFileDoesNotExist($this->dir . '/out/sprite.jpg');
     }
 
     public function testSpriteFailureReturnsNullAndRemovesTheBifFrames(): void
@@ -165,30 +211,16 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         }
     }
 
-    public function testBifBranchFailureDoesNotFailTheSprite(): void
-    {
-        $runner = $this->scripted();
-        $runner->bifFramesToWrite = 0;
-
-        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
-
-        $this->assertNotNull($result, 'A BIF failure must not cost the sprite the web player needs.');
-        $this->assertNotNull($result['sprite']);
-        $this->assertNotNull($result['timeline']);
-        $this->assertSame([], $result['bif_frames']);
-        $this->assertSame(0, $result['bif_interval_ms']);
-    }
-
-    public function testATooShortBifIsDiscardedAndItsFileRemoved(): void
+    public function testATooShortBifFailsThePassAndItsFilesAreRemoved(): void
     {
         $runner = $this->scripted();
         $runner->bifFramesToWrite = 1;
 
         $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
 
-        $this->assertNotNull($result);
-        $this->assertSame([], $result['bif_frames']);
+        $this->assertNull($result);
         $this->assertFileDoesNotExist($this->dir . '/out/bifframe_00001.jpg');
+        $this->assertFileDoesNotExist($this->dir . '/out/sprite.jpg');
     }
 
     public function testRejectsRequestsWithNoBranchOrAnUnusableBif(): void
@@ -259,6 +291,12 @@ final class ScriptedTrickplayRunner extends FfmpegRunner
     /** @var list<int> BIF frame indexes to leave unwritten (a hole in the sequence). */
     public array $skipBifIndexes = [];
 
+    /** Exit code the scripted ffmpeg reports. */
+    public int $exitCodeToReturn = 0;
+
+    /** Text ffmpeg writes to its captured output, or null for none. */
+    public ?string $ffmpegMessage = null;
+
     public function __construct(string $ffmpeg, string $ffprobe, string $transcodeDir, private float $duration)
     {
         parent::__construct($ffmpeg, $ffprobe, $transcodeDir);
@@ -282,8 +320,8 @@ final class ScriptedTrickplayRunner extends FfmpegRunner
     protected function runTrickplayCommand(string $cmd, array &$output, int &$exitCode): void
     {
         $this->commands[] = $cmd;
-        $output = [];
-        $exitCode = 0;
+        $output = $this->ffmpegMessage === null ? [] : [$this->ffmpegMessage];
+        $exitCode = $this->exitCodeToReturn;
 
         if ($this->writeSprite && preg_match("#'([^']*/sprite\\.jpg)'#", $cmd, $m) === 1) {
             file_put_contents($m[1], self::JPEG);

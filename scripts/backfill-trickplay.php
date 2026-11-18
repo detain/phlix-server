@@ -170,7 +170,8 @@ foreach ($rows as $row) {
         $itemDir,
         TrickplayArtefacts::SPRITE_COUNT,
         TrickplayArtefacts::bifFrameCount($duration),
-        TrickplayArtefacts::BIF_FRAME_WIDTH
+        TrickplayArtefacts::BIF_FRAME_WIDTH,
+        ['item_id' => $itemId]
     );
     if ($result === null || $result['sprite'] === null || $result['timeline'] === null) {
         echo "  FAIL: {$path} (trickplay generation failed)\n";

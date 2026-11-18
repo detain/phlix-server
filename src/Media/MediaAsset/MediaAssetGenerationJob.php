@@ -280,7 +280,8 @@ class MediaAssetGenerationJob
                 $spriteDir,
                 TrickplayArtefacts::SPRITE_COUNT,
                 TrickplayArtefacts::bifFrameCount($job->duration),
-                TrickplayArtefacts::BIF_FRAME_WIDTH
+                TrickplayArtefacts::BIF_FRAME_WIDTH,
+                ['item_id' => $itemId]
             );
 
             if ($result === null || $result['sprite'] === null || $result['timeline'] === null) {

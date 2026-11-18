@@ -3162,11 +3162,14 @@ class FfmpegRunner
      * @param int    $bifCount    BIF frames (0 = no BIF branch; otherwise >= 2).
      * @param int    $bifWidth    BIF frame width in pixels; height follows the aspect ratio.
      *
+     * @param array<string, mixed> $logContext Extra fields for the failure log (e.g. item_id).
+     *
      * @return array{sprite: string|null, timeline: string|null, bif_frames: list<string>, bif_interval_ms: int}|null
-     *         Null when the probe fails, the request is invalid, or the sprite was
-     *         requested and not produced. A failed BIF branch yields
-     *         `bif_frames: []` and `bif_interval_ms: 0` and does not fail the sprite.
-     *         The caller owns any returned BIF frame files.
+     *         Null when the probe fails, the request is invalid, ffmpeg exits
+     *         non-zero, or any requested artefact is incomplete (sprite missing,
+     *         or fewer BIF frames than `$bifCount`). A null result publishes
+     *         nothing: everything the pass wrote is removed. The caller owns any
+     *         returned BIF frame files.
      *
      * @since 0.103.0
      */
@@ -3175,7 +3178,8 @@ class FfmpegRunner
         string $outputDir,
         int $spriteCount = 60,
         int $bifCount = 0,
-        int $bifWidth = 320
+        int $bifWidth = 320,
+        array $logContext = []
     ): ?array {
         $wantSprite = $spriteCount > 0;
         $wantBif = $bifCount > 0;
@@ -3323,21 +3327,29 @@ class FfmpegRunner
         $exitCode = 0;
         $this->runTrickplayCommand($cmd, $outputLines, $exitCode);
 
-        // Success is judged per artefact, not by the exit code alone: the sprite is
-        // the one the web player needs, and a BIF-branch error must not discard it.
-        if ($spritePath !== null && (!is_file($spritePath) || filesize($spritePath) === 0)) {
-            $this->logger->warning('Trickplay sprite generation failed', [
-                'video' => $videoPath,
-                'output' => implode("\n", $outputLines),
-            ]);
-            if ($bifPattern !== null) {
-                $this->removeBifFrames($bifPattern, $bifCount);
-            }
+        // The pass is all-or-nothing. A non-zero exit, a sprite that is missing, or
+        // a BIF with fewer frames than requested fails the whole pass and removes
+        // everything it wrote. The exit code alone is not enough: a BIF cut short by
+        // a mid-pass output error still leaves a complete-looking sprite, and the
+        // BIF count is the only thing that shows the shortfall.
+        $context = $logContext + [
+            'video' => $videoPath,
+            'exit_code' => $exitCode,
+            'output' => implode("\n", $outputLines),
+        ];
+
+        if ($exitCode !== 0) {
+            $this->logger->warning('Trickplay pass failed: ffmpeg exited non-zero', $context);
+            $this->discardTrickplayPass($spritePath, $timelinePath, $bifPattern, $bifCount);
+
             return null;
         }
 
-        if ($timelinePath !== null) {
-            $this->writeTrickplayTimeline($timelinePath, $spriteCount, $spriteOffset, $spriteInterval);
+        if ($spritePath !== null && (!is_file($spritePath) || filesize($spritePath) === 0)) {
+            $this->logger->warning('Trickplay sprite generation failed', $context);
+            $this->discardTrickplayPass($spritePath, $timelinePath, $bifPattern, $bifCount);
+
+            return null;
         }
 
         $frames = [];
@@ -3345,23 +3357,20 @@ class FfmpegRunner
         if ($bifPattern !== null) {
             $frames = $this->collectBifFrames($bifPattern, $bifCount);
             $intervalMs = (int) round($bifInterval * 1000.0);
-            if ($exitCode !== 0 && $frames === []) {
-                $this->logger->warning('BIF frame extraction failed', [
-                    'video' => $videoPath,
-                    'output' => implode("\n", $outputLines),
+            if (count($frames) !== $bifCount || $intervalMs < 1) {
+                $this->logger->warning('Trickplay BIF frames incomplete; pass discarded', $context + [
+                    'expected_frames' => $bifCount,
+                    'frames' => count($frames),
+                    'interval_ms' => $intervalMs,
                 ]);
+                $this->discardTrickplayPass($spritePath, $timelinePath, $bifPattern, $bifCount);
+
+                return null;
             }
-            if (count($frames) < 2 || $intervalMs < 1) {
-                if ($frames !== []) {
-                    $this->logger->warning('BIF frame extraction produced too few frames', [
-                        'video' => $videoPath,
-                        'frames' => count($frames),
-                    ]);
-                }
-                $this->removeBifFrames($bifPattern, $bifCount);
-                $frames = [];
-                $intervalMs = 0;
-            }
+        }
+
+        if ($timelinePath !== null) {
+            $this->writeTrickplayTimeline($timelinePath, $spriteCount, $spriteOffset, $spriteInterval);
         }
 
         return [
@@ -3537,6 +3546,22 @@ class FfmpegRunner
             if (is_file($framePath)) {
                 @unlink($framePath);
             }
+        }
+    }
+
+    /**
+     * Removes everything a failed trickplay pass wrote, so nothing partial is left
+     * under a published name. Called only on a failure path.
+     */
+    private function discardTrickplayPass(?string $spritePath, ?string $timelinePath, ?string $bifPattern, int $bifCount): void
+    {
+        foreach ([$spritePath, $timelinePath] as $path) {
+            if ($path !== null && is_file($path)) {
+                @unlink($path);
+            }
+        }
+        if ($bifPattern !== null) {
+            $this->removeBifFrames($bifPattern, $bifCount);
         }
     }
 

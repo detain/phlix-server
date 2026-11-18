@@ -291,6 +291,14 @@ class TranscodeManager
     private const ENCODE_WATCHDOG_REQUEST_SWEEP_MS = 1000;
 
     /**
+     * Seconds added to the wall-clock cap when deciding whether a temp is still a live
+     * encode to join ({@see joinWindowSeconds()}). It covers the sweep cadence (a 5 s
+     * timer and a 1 s request throttle), the SIGTERM→SIGKILL grace and the wrapper's
+     * own `-k` grace.
+     */
+    private const SEGMENT_JOIN_SLACK_SECONDS = 30;
+
+    /**
      * Slots kept free for interactive (reader-driven) encodes. A prewarm launch is
      * refused once the in-flight count would leave fewer than this many slots, so
      * prewarm yields to a seek before the seek is refused. See {@see prewarmFirstSegments()}.
@@ -2828,6 +2836,13 @@ class TranscodeManager
      * SegmentBusyException (the in-worker dedup cannot see it: its snapshot is up to
      * one reconcile interval stale).
      *
+     * "Live" means younger than {@see joinWindowSeconds()}. Any encode that is still
+     * running is reaped by its owner, or killed by the `timeout` wrapper, within that
+     * window, so an OLDER temp can only be a corpse. Joining a corpse made the request
+     * wait the full poll and then 404, where a refusal is an immediate 503. A
+     * corpse is also not purged here (no side effect on the join path). The count
+     * purge still bounds it.
+     *
      * @param string $final Absolute path of the target segment.
      */
     private function liveEncodeExistsFor(string $final): bool
@@ -2835,8 +2850,40 @@ class TranscodeManager
         $pattern = addcslashes(dirname($final), '*?[]\\')
             . '/' . addcslashes(basename($final), '*?[]\\') . '.part-*';
         $hits = glob($pattern);
+        if (!is_array($hits) || $hits === []) {
+            return false;
+        }
 
-        return is_array($hits) && $hits !== [] && $this->purgeDeadInFlightTemps($hits) !== [];
+        // File mtimes are wall-clock by nature, so the age is taken against time(). An
+        // hrtime cannot be stored in a file. The slack in joinWindowSeconds() absorbs a
+        // clock step.
+        $window = $this->joinWindowSeconds();
+        $now = time();
+        foreach ($hits as $hit) {
+            $mtime = @filemtime($hit);
+            if ($mtime !== false && ($now - $mtime) <= $window) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The age in seconds up to which a temp still counts as a LIVE encode for a join.
+     *
+     * Every live encode is reaped within the wall-clock cap by the watchdog, or killed
+     * by the `timeout` wrapper, whichever comes first. A temp older than that, plus a
+     * small slack for the sweep cadence and the SIGKILL grace, is dead. A wrapper
+     * timeout of 0 means none, so the cap alone applies.
+     */
+    private function joinWindowSeconds(): int
+    {
+        $wall = $this->segmentRegistry?->maxWallSeconds() ?? SegmentProcessRegistry::DEFAULT_MAX_WALL_SECONDS;
+        $timeout = $this->ffmpeg->getTranscodeTimeout();
+        $bound = $timeout > 0 ? min($wall, (float) $timeout) : $wall;
+
+        return (int) ceil($bound) + self::SEGMENT_JOIN_SLACK_SECONDS;
     }
 
     /**

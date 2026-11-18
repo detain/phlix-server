@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\SegmentBusyException;
+use Phlix\Media\Transcoding\SegmentProcessRegistry;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\RequestContext;
 use ReflectionMethod;
@@ -909,6 +910,77 @@ final class TranscodeManagerPrewarmTest extends TestCase
 
         $this->expectException(\Phlix\Media\Transcoding\SegmentBusyException::class);
         $manager->ensureSegment($jobId, 'original', 0);
+    }
+
+    /**
+     * A corpse is a temp left by a killed chain (no `|| rm` ran). An hour old, it is
+     * not a live encode. Joining it made the request wait the full poll and then 404.
+     * The seek must be refused at the cap, with SegmentBusyException (503), as master
+     * did. The registry is wired, as in production, so the join window is the wall cap.
+     */
+    public function testSeekDoesNotJoinACorpseAndIsRefusedAtTheCap(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 0, 8);
+        $manager->setSegmentProcessRegistry(new SegmentProcessRegistry());
+        $jobId = (string) $manager->ensureHlsJob('media-1', 'web')['job_id'];
+        $corpse = $this->segmentDir . '/' . $jobId . '/seg-voriginal-00000.m4s.part-0000abcd';
+        file_put_contents($corpse, '');
+        touch($corpse, time() - 3600);
+        $this->liveTemps(7); // cap 8 is full, the corpse counted among them
+        $this->pinSnapshotStale($manager);
+        $prop = new ReflectionProperty(TranscodeManager::class, 'segmentMaxWaitMs');
+        $prop->setValue($manager, 0);
+
+        $this->expectException(SegmentBusyException::class);
+        $manager->ensureSegment($jobId, 'original', 0);
+    }
+
+    /**
+     * The same corpse, produced by a REAL process: a shell touches the temp and then
+     * runs a long sleep. The sleep is SIGKILLed, so nothing runs the chain's `|| rm`
+     * cleanup, and the process is left as a zombie that nothing reaps. The temp is then
+     * aged past the join window, as a corpse is after a while.
+     */
+    public function testSeekDoesNotJoinARealKilledChainsLeftoverTemp(): void
+    {
+        if (!function_exists('posix_kill')) {
+            self::markTestSkipped('needs posix_kill to kill the real process');
+        }
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 0, 8);
+        $manager->setSegmentProcessRegistry(new SegmentProcessRegistry());
+        $jobId = (string) $manager->ensureHlsJob('media-1', 'web')['job_id'];
+        $corpse = $this->segmentDir . '/' . $jobId . '/seg-voriginal-00000.m4s.part-0000abcd';
+
+        $process = proc_open(
+            'touch ' . escapeshellarg($corpse) . '; exec sleep 60',
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+        );
+        self::assertIsResource($process);
+        $pid = (int) proc_get_status($process)['pid'];
+        foreach ($pipes as $pipe) {
+            fclose($pipe);
+        }
+        try {
+            for ($i = 0; $i < 100 && !is_file($corpse); $i++) {
+                usleep(20_000);
+            }
+            self::assertFileExists($corpse, 'the real chain must have written its temp');
+            posix_kill($pid, 9); // SIGKILL: no `|| rm`, the temp survives
+            touch($corpse, time() - 3600);
+
+            $this->liveTemps(7);
+            $this->pinSnapshotStale($manager);
+            $prop = new ReflectionProperty(TranscodeManager::class, 'segmentMaxWaitMs');
+            $prop->setValue($manager, 0);
+
+            $this->expectException(SegmentBusyException::class);
+            $manager->ensureSegment($jobId, 'original', 0);
+        } finally {
+            proc_close($process); // reaps the killed child
+        }
     }
 
     private function rrmdir(string $dir): void

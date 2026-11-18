@@ -432,17 +432,38 @@ changes.
 
 ## Exception 11 — trickplay local metadata reads (`TrickplayController`, `TrickplayArtefacts`)
 
-Local filesystem metadata under the trickplay root: `realpath()`, `stat()`,
-`filesize()` and `is_file()` in `TrickplayController.php` (about lines 148, 318,
-323 and 351). `hasBif()` runs on the item-detail request path
-(`MediaItemController.php:612`). `TrickplayArtefacts.php` (about line 106) reads
-`timeline.json` whole, but only from `isComplete()`, which the job and the
-backfill call, not a request.
+Local filesystem metadata under the trickplay root, on two paths.
 
-Bound: a fixed number of metadata calls per request, with no loop over items,
-and a timeline of `SPRITE_COUNT` (60) entries, about 2.5 KB. Measured on a warm
-local cache: realpath, stat and filesize together take about 10 µs; a timeline
-read and decode takes about 54 µs.
+**Request path (`TrickplayController.php`).** `hasBif()` calls `filesize()` (line
+194) and runs on the item-detail request path (`MediaItemController.php:612`).
+`resolveArtefact()` calls `realpath()` (line 364), and `serveArtefact()` calls
+`stat()` (line 407). The constructor's `realpath()` (line 108, in `resolveRoot()`)
+runs once per process per configured root, memoised, so it is not a per-request
+call.
+
+**Background path (`TrickplayArtefacts.php`).** `isComplete()` reads
+`timeline.json` whole (`timelineGeneration()`, line 135), two stamp files
+(`readStamp()`, line 187) and the BIF header and terminator (`bifIsWhole()`, line
+226). It is not reached from any request. The only callers are:
+
+- `LibraryScanWorker::start()` installs `Timer::add()` (`LibraryScanWorker.php:504`),
+  which calls `runOnce()` once per tick.
+- For a `media_assets` job, `runOnce()` calls `MediaAssetBackfill::reenqueueLibrary()`
+  (`LibraryScanWorker.php:312`).
+- `reenqueueLibrary()` pages the library in pages of 500 (`MediaAssetBackfill.php:128`,
+  `PAGE_SIZE = 500`) and calls `hasArtefacts()` for each item (line 147), which calls
+  `isComplete()` (line 220).
+- The backfill script calls `isComplete()` as well, from the CLI.
+
+Bound. Per request: a fixed number of metadata calls, with no loop over items. Per
+item in the background path: a timeline read (60 entries, about 4 KB now that each
+entry carries its generation), two small stamp reads, a 72-byte BIF read and one
+`stat()`. The per-item loop is bounded by the library's item count and has no cap per
+tick. A single `reenqueueLibrary()` call walks the whole library inside one tick, so
+the event loop is held for the length of that walk, and each item does blocking reads.
+Measured before the generation stamps, on a warm local cache: realpath, stat and
+filesize together about 10 µs; a timeline read and decode about 54 µs. Those figures
+were not re-measured after the stamps.
 
 **No timeout is enforced.** A stalled network mount under `transcode_dir` would
 block the worker for as long as the kernel waits. The bound above assumes a

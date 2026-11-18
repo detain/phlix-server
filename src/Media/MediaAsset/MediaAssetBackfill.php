@@ -196,11 +196,12 @@ class MediaAssetBackfill
     /**
      * Whether an item's trickplay artefacts are ALL present already.
      *
-     * The sprite, the timeline and the BIF must all be whole. The check is
-     * {@see TrickplayArtefacts::isComplete()}: the sprite is non-empty, the timeline
-     * parses to the full grid, and the BIF's index terminator matches its size. Requiring
-     * all three means a run interrupted part way, which is the state a crashed worker
-     * leaves, is retried instead of being recorded as done.
+     * The sprite, the timeline and the BIF must all be whole and carry the same generation
+     * stamp. The check is {@see TrickplayArtefacts::isComplete()}: the sprite is non-empty,
+     * the timeline parses to the full grid, the BIF's index terminator matches its size, and
+     * the stamps agree. Requiring all of it means a run interrupted part way, which is the
+     * state a crashed worker leaves, is retried instead of being recorded as done. Artefacts
+     * written before stamps existed are accepted when whole (see isComplete()).
      *
      * The directory is the PRODUCER's:
      * `FfmpegRunner::getTranscodeDir() . '/trickplay/' . $itemId`, matching

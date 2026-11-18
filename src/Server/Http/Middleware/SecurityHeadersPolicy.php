@@ -42,9 +42,13 @@ use Phlix\Admin\SettingsRepository;
  *
  * ⚠ Propagation delay: an admin edit to HSTS or frame options reaches a worker's
  * responses within {@see self::MEMO_TTL_SECONDS} seconds (up to 60 s, per worker
- * process), not immediately. That is the documented bound. Security posture is
- * unaffected in the strict sense: the memo holds the RESOLVED (coerced) value
- * and a failed read still resolves to the shipped floor, never to a weaker value.
+ * process), not immediately. That is the documented bound, and it applies in both
+ * directions. Tightening lags too: moving frame options from SAMEORIGIN to DENY, or
+ * raising the HSTS max-age, takes up to 60 s to reach each worker, and until then
+ * that worker keeps sending the looser value. Loosening lags the same way. The memo
+ * holds the RESOLVED (coerced) value, and a failed read still resolves to the
+ * shipped floor, so no read path yields a value weaker than the floor. What the
+ * memo does not give is an immediate change.
  *
  * The key is that the memo holds the RESOLVED (coerced) value, so a memoised
  * read and a cold read are byte-identical; null store, unreadable store and

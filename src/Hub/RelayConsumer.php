@@ -2195,9 +2195,13 @@ final class RelayConsumer
         $relayUser = $this->headerValue($envelope->headers, 'x-phlix-relay-user');
         $serverUserId = $this->resolveRelayIdentity($envelope, $relayUser);
         $request->userId = $serverUserId ?? ($relayUser !== '' ? $relayUser : 'hub-relay');
-        // Marked only when the mapping ran and found no row. A REFUSED mapping (an unexpected
-        // trust marker) keeps the fail-closed no-profile refusal, because its identity is not trusted.
-        $request->relayUnmapped = $serverUserId === null && $this->unexpectedRelayMarkers($envelope) === [];
+        // Marked only when a real relay principal was stamped, the mapping ran and found no row. An
+        // ABSENT header (the 'hub-relay' fallback above) is not an unmapped principal: it has no
+        // identity at all, so it keeps the fail-closed no-profile refusal. A REFUSED mapping (an
+        // unexpected trust marker) keeps the same refusal, because its identity is not trusted.
+        $request->relayUnmapped = $relayUser !== ''
+            && $serverUserId === null
+            && $this->unexpectedRelayMarkers($envelope) === [];
 
         // Client IP comes from the relay session, never from the producer-
         // suppliable x-forwarded-for header (now stripped): an untrusted relay

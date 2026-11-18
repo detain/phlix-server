@@ -1435,6 +1435,19 @@ class RelayConsumerTest extends TestCase
     }
 
     /**
+     * Finding 4. An envelope with NO x-phlix-relay-user header runs as the 'hub-relay' fallback, which
+     * is not a principal. It is never marked unmapped, so it keeps the fail-closed no-profile refusal
+     * instead of the unmapped exemption.
+     */
+    public function test_an_envelope_with_no_principal_header_is_not_marked_relay_unmapped(): void
+    {
+        $captured = $this->captureRelayedRequest([], null);
+
+        $this->assertSame('hub-relay', $captured->userId, 'the absent principal keeps the fallback identity');
+        $this->assertFalse($captured->relayUnmapped, 'an absent principal is not the unmapped exemption');
+    }
+
+    /**
      * RED ON A PROFILE IDENTITY STARTING TO CROSS (the S247 pin, re-derived):
      * the tunnel carries ONLY the authenticated relay principal. A profile
      * marker smuggled into the envelope is not just ignored — it REFUSES the

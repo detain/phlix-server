@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\StreamTrackShaper;
+use Phlix\Media\MediaAsset\StreamProbeScheduler;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Playback\GaplessPlaybackManager;
@@ -93,12 +94,24 @@ final class MediaItemControllerPlaybackInfoStoredRowsTest extends TestCase
         $itemRepo = new ItemRepository($db);
         $gapless = $this->createMock(GaplessPlaybackManager::class);
         $gapless->method('getPreferences')->willReturn(PlaybackPreferences::fromRaw(0, 0.3, 0.3));
+
+        // The legacy item is handed to the background-probe enqueue exactly once per playback-info
+        // request. The enqueue is the ONLY collaborator that may act on it; the double never probes.
+        $scheduler = $this->createMock(StreamProbeScheduler::class);
+        $scheduler->expects($this->once())->method('scheduleIfLegacy')->with(
+            $this->callback(static fn (array $item): bool => ($item['id'] ?? null) === 'ep-1'),
+            $stored,
+        )->willReturn(true);
+
         $controller = new MediaItemController(
             $itemRepo,
             new MarkerService($itemRepo, new MarkerCandidateRepository($itemRepo)),
             $gapless,
             new TrickplayController('/tmp/trickplay', ''),
             new ChapterMarkerService($this->createMock(Connection::class)),
+            null,
+            null,
+            $scheduler,
         );
 
         $body = json_decode($controller->getPlaybackInfo(new Request(), ['id' => 'ep-1'])->body, true);

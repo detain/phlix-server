@@ -17,6 +17,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Library\StreamTrackShaper;
+use Phlix\Media\MediaAsset\StreamProbeScheduler;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\SkipButtonSpec;
 use Phlix\Media\Playback\GaplessPlaybackManager;
@@ -92,6 +93,13 @@ class MediaItemController
      */
     private ?MusicLibraryService $musicLibrary;
 
+    /**
+     * Enqueues the background stream probe for a legacy item on playback info (see
+     * {@see \Phlix\Media\Library\StreamProbeBackfill::needsFullStreamProbe()}). Enqueue only, never a
+     * probe. Built on first use when not injected (the optional ctor arg is a test seam).
+     */
+    private ?StreamProbeScheduler $streamProbeScheduler;
+
     public function __construct(
         ItemRepository $itemRepository,
         MarkerService $markerService,
@@ -99,8 +107,10 @@ class MediaItemController
         TrickplayController $trickplayController,
         ChapterMarkerService $chapterMarkerService,
         ?RatingGate $ratingGate = null,
-        ?MusicLibraryService $musicLibrary = null
+        ?MusicLibraryService $musicLibrary = null,
+        ?StreamProbeScheduler $streamProbeScheduler = null
     ) {
+        $this->streamProbeScheduler = $streamProbeScheduler;
         $this->itemRepository = $itemRepository;
         $this->markerService = $markerService;
         $this->gaplessManager = $gaplessManager;
@@ -346,12 +356,14 @@ class MediaItemController
         // this API path and WebPortalRouter::getPlaybackInfo() (the other
         // dispatch path) emit byte-identical shapes.
         //
-        // Item C: playback info serves the STORED rows only and never forks
-        // ffprobe in the request. Legacy AUDIO and SUBTITLE gaps have no automated
-        // repair: a rescan is the only repair. The detail path's
-        // StreamProbeBackfill::ensureVideoCodecFor() repairs only a missing video
-        // codec. A queued audio/subtitle backfill is an owner decision, still pending.
+        // Playback info serves the STORED rows and never forks ffprobe in the request.
+        // A legacy item (unprobed, no subtitle row, fewer than two audio rows) is
+        // repaired in the background: the scheduler enqueues a full-track-set probe
+        // that the MediaAssetWorker runs off the request path, so the NEXT playback
+        // has the full track set. The enqueue is a cheap file write. The same
+        // scheduler and predicate serve WebPortalRouter::getPlaybackInfo().
         $streams = $this->itemRepository->getItemStreams($itemId);
+        $this->streamProbeScheduler()->scheduleIfLegacy($item, $streams);
         $audioTracks = StreamTrackShaper::audioTracks($streams);
         $subtitleTracks = StreamTrackShaper::subtitleTracks($streams, $itemId);
 
@@ -441,6 +453,15 @@ class MediaItemController
         return false;
     }
 
+
+    /**
+     * Returns the stream-probe scheduler, building it on first use when none was injected
+     * (mirrors WebPortalRouter::streamProbeScheduler() so both dispatch paths enqueue identically).
+     */
+    private function streamProbeScheduler(): StreamProbeScheduler
+    {
+        return $this->streamProbeScheduler ??= new StreamProbeScheduler();
+    }
 
     /**
      * Builds the pre-flight ABR ladder PREVIEW for a media item (D6).

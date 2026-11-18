@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\MediaAsset;
 
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\MarkerService;
 use Phlix\Media\MarkerType;
 use Phlix\Media\Markers\ChapterMarkerService;
@@ -125,6 +126,69 @@ class MediaAssetGenerationJob
         ]);
 
         return $chapterOk && $trickplayOk;
+    }
+
+    /**
+     * Runs one background full-track-set probe for a legacy item and persists the result.
+     *
+     * Returns true when the job needs no further run: the item is gone, was already probed,
+     * was probed and written, or its media file is not present on disk. A missing file is a
+     * terminal drop: it returns true and is NOT re-queued, because a retry cannot make the file
+     * appear. Returns false on a failed run that may succeed later (probe failure). A throw (a
+     * rolled-back write) is also a failed run that may succeed later. The worker re-queues BOTH a false
+     * return and a throw as a failed attempt, up to the retry bound. Neither stamps anything.
+     *
+     * Ordering: the ffprobe completes BEFORE the transaction opens, so a partial probe never
+     * reaches the database. {@see ItemRepository::replaceStreams()} then swaps the whole set in
+     * one transaction, and {@see ItemRepository::markStreamsProbed()} runs only after that write
+     * has succeeded. A throw from replaceStreams() propagates to the worker as a failed attempt.
+     *
+     * The probe runs through {@see FfmpegRunner::probe()}, which is bounded by its own timeout and
+     * takes the coroutine-aware command path inside a worker coroutine.
+     *
+     * @param StreamProbeJob $job The queued stream-probe job
+     *
+     * @throws \Throwable When the stream write rolls back (the worker counts it as a failed attempt)
+     */
+    public function processStreamProbe(StreamProbeJob $job): bool
+    {
+        $item = $this->itemRepo->findById($job->itemId);
+        if ($item === null) {
+            $this->logger->info('MediaAssetGenerationJob: stream probe skipped, item no longer exists', [
+                'item_id' => $job->itemId,
+            ]);
+            return true;
+        }
+
+        // Another path (a rescan, or an earlier run) already completed the full set.
+        if (!empty($item['streams_probed_at'])) {
+            return true;
+        }
+
+        // A missing media file is terminal for this job: retrying a file that is not there only burns
+        // the attempt budget. The next playback of the item re-enqueues it if the file is back.
+        $path = is_string($item['path'] ?? null) ? $item['path'] : '';
+        if ($path === '' || !is_file($path)) {
+            $this->logger->warning('MediaAssetGenerationJob: stream probe dropped, media file not present', [
+                'item_id' => $job->itemId,
+            ]);
+            return true;
+        }
+
+        $probe = $this->ffmpeg->probe($path);
+        if (!is_array($probe)) {
+            return false;
+        }
+
+        $summary = MediaScanner::summarizeProbe($probe);
+        if ($summary['streams'] !== []) {
+            $this->itemRepo->replaceStreams($job->itemId, $summary['streams']);
+        }
+        // A probe that read no streams is still a completed probe: the stored rows are left as they
+        // are (there is nothing to replace them with) and the marker is stamped, so it is not retried.
+        $this->itemRepo->markStreamsProbed($job->itemId);
+
+        return true;
     }
 
     /**

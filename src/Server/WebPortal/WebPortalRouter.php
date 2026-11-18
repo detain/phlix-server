@@ -26,6 +26,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\Library\StreamProbeBackfill;
+use Phlix\Media\MediaAsset\StreamProbeScheduler;
 use Phlix\Media\Library\StreamTrackShaper;
 use Phlix\Media\MarkerType;
 use Phlix\Media\Markers\MarkerService;
@@ -163,9 +164,16 @@ class WebPortalRouter
      *      ensureVideoCodecFor(), which covers only the video codec); built on
      *      first use when not injected (the optional ctor arg is a test seam).
      *      getPlaybackInfo() does not probe: it serves the stored media_streams
-     *      rows, and legacy audio and subtitle gaps are repaired only by a rescan.
+     *      rows and enqueues the background full probe for a legacy item instead.
      */
     private ?StreamProbeBackfill $streamBackfill;
+
+    /**
+     * @var StreamProbeScheduler|null Enqueues the background full-track-set probe for a
+     *      legacy item on playback info (enqueue only, never a probe). Built on first use
+     *      when not injected (the optional ctor arg is a test seam).
+     */
+    private ?StreamProbeScheduler $streamProbeScheduler;
 
     /**
      * @var RatingGate|null Shared parental-control access gate; built lazily from
@@ -244,7 +252,8 @@ class WebPortalRouter
         ?StreamProbeBackfill $streamBackfill = null,
         ?\Phlix\Admin\SettingsRepository $settings = null,
         ?ThemesController $themesController = null,
-        ?ArtworkStorage $artworkStorage = null
+        ?ArtworkStorage $artworkStorage = null,
+        ?StreamProbeScheduler $streamProbeScheduler = null
     ) {
         // SessionManager and AuthManager are accepted for future middleware wiring
         // but not stored — see WebPortalRouter routes for authenticated endpoints.
@@ -274,6 +283,7 @@ class WebPortalRouter
         $this->collectionService = $collectionService;
         $this->musicLibraryService = $musicLibraryService;
         $this->streamBackfill = $streamBackfill;
+        $this->streamProbeScheduler = $streamProbeScheduler;
         $this->router = new Router();
         $this->registerRoutes();
     }
@@ -1554,8 +1564,9 @@ class WebPortalRouter
      *
      * Returns playback information including available media sources
      * and direct play capabilities. This is used by the player
-     * to initialize playback. It serves the stored media_streams rows and never probes;
-     * legacy audio and subtitle gaps are repaired only by a rescan.
+     * to initialize playback. It serves the stored media_streams rows and never probes inline;
+     * a legacy item (unprobed, no subtitle row, fewer than two audio rows) is queued for a
+     * background full-track-set probe that repairs it for the next playback.
      *
      * @param Request $request The HTTP request; the parental filter is resolved
      *        from it and, for SV-3.3, the optional `X-Phlix-Client-Capabilities`
@@ -1610,10 +1621,13 @@ class WebPortalRouter
         // this portal path and MediaItemController::getPlaybackInfo() (the
         // other dispatch path) emit byte-identical shapes.
         //
-        // Item C: STORED rows only, no inline ffprobe. This matches
-        // MediaItemController::getPlaybackInfo(), which made the same change.
+        // STORED rows only, no inline ffprobe. A legacy item is repaired in the background:
+        // the scheduler enqueues a full-track-set probe that the MediaAssetWorker runs off the
+        // request path, so the NEXT playback has the full track set. This is the same scheduler
+        // and predicate MediaItemController::getPlaybackInfo() uses, so the two paths enqueue identically.
         $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
         $streams = $this->itemRepository->getItemStreams($itemId);
+        $this->streamProbeScheduler()->scheduleIfLegacy($item, $streams);
         $audioTracks = StreamTrackShaper::audioTracks($streams);
         $subtitleTracks = StreamTrackShaper::subtitleTracks($streams, $itemId);
 
@@ -1686,12 +1700,22 @@ class WebPortalRouter
     }
 
     /**
+     * Returns the stream-probe scheduler, building it on first use when none was injected.
+     * Enqueue only: a playback-info request never probes through it.
+     */
+    private function streamProbeScheduler(): StreamProbeScheduler
+    {
+        return $this->streamProbeScheduler ??= new StreamProbeScheduler();
+    }
+
+    /**
      * Returns the lazy stream backfill, building it on first use when none was
      * injected. Used only by {@see getMediaItem()}, through
      * the narrow video-codec trigger {@see StreamProbeBackfill::ensureVideoCodecFor()}.
      * {@see getPlaybackInfo()} does not call it: that path serves the stored
-     * media_streams rows and never probes, so legacy audio and subtitle gaps are
-     * repaired only by a rescan.
+     * media_streams rows and never probes inline. Legacy audio and subtitle gaps are
+     * repaired by the background stream-probe job that {@see streamProbeScheduler()}
+     * enqueues.
      *
      * Deliberately NOT resolved from the DI container: `WebPortalServicesProvider`
      * passes `null` here, and this accessor is what production has run on since

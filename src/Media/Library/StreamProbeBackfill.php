@@ -23,17 +23,18 @@ use Psr\Log\LoggerInterface;
  * Items scanned before migration 071 carry at most one video + one audio row
  * and no subtitle rows, so the playback-info track menus (see
  * {@see StreamTrackShaper}) show a single audio track and zero subtitles until
- * the item is rescanned.
+ * the background full-track-set probe repairs them (or the item is rescanned).
  *
- * Item C: playback info does NOT call this class. Both playback-info dispatch
- * paths ({@see \Phlix\Server\Http\Controllers\MediaItemController::getPlaybackInfo()}
- * and {@see \Phlix\Server\WebPortal\WebPortalRouter::getPlaybackInfo()}) serve the
- * stored `media_streams` rows and never fork ffprobe inside the request.
- * Consequently, legacy AUDIO and SUBTITLE gaps have NO automated repair path:
- * a rescan is the only repair. {@see ensureVideoCodecFor()} repairs only a missing
- * video codec. A queued stream-backfill job covering audio and subtitle gaps is
- * an OWNER DECISION that is still pending; do not add an inline probe in its
- * place. A legacy item keeps `streams_probed_at` NULL, so it stays repairable by rescan.
+ * Playback info does NOT probe. Both playback-info dispatch paths
+ * ({@see \Phlix\Server\Http\Controllers\MediaItemController::getPlaybackInfo()} and
+ * {@see \Phlix\Server\WebPortal\WebPortalRouter::getPlaybackInfo()}) serve the stored
+ * `media_streams` rows, and when {@see needsFullStreamProbe()} matches a legacy item they
+ * enqueue a BACKGROUND full-track-set probe ({@see \Phlix\Media\MediaAsset\StreamProbeScheduler})
+ * that a worker runs under the bounded probe path and writes through
+ * {@see ItemRepository::replaceStreams()}. So legacy AUDIO and SUBTITLE gaps are repaired by
+ * that background job, and by a rescan as well. {@see ensureVideoCodecFor()} repairs only a
+ * missing video codec, on the detail path, and never by enqueueing. A legacy item keeps
+ * `streams_probed_at` NULL until a successful full probe stamps it.
  *
  * Guards — the probe runs AT MOST ONCE per item, with exactly ONE deliberate
  * (and self-limiting) exception, the TRANSIENT write failure below:
@@ -120,6 +121,68 @@ class StreamProbeBackfill
         $this->ffmpeg = $ffmpeg;
         $this->ffmpegResolved = $ffmpeg !== null;
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::MEDIA);
+    }
+
+    /**
+     * Legacy trigger for the BACKGROUND full-track-set probe (playback info).
+     *
+     * True when the item is a legacy item whose stored rows cannot be the full set:
+     * - `streams_probed_at` is NULL (no successful full probe has run), and
+     * - the rows hold no subtitle row and fewer than two audio rows
+     *   ({@see looksFullyProbed()} is false), and
+     * - the item has an id and a path.
+     *
+     * An item whose VIDEO codec is missing is NOT matched. That is a video repair, owned by the
+     * existing {@see ensureVideoCodecFor()} path on the detail endpoint, which replaces the whole
+     * set with its full probe. Playback info does not enqueue a second, stream-only job for it.
+     *
+     * Pure and free of I/O (no stat, no probe, no write), so both playback-info paths can call it
+     * on every request. The enqueue that follows a true result is a cheap file write.
+     *
+     * @param array<string, mixed>             $item    Hydrated media_items row (`id`, `path`, `streams_probed_at`).
+     * @param array<int, array<string, mixed>> $streams The item's stored `media_streams` rows.
+     */
+    public static function needsFullStreamProbe(array $item, array $streams): bool
+    {
+        $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
+        $path = is_string($item['path'] ?? null) ? $item['path'] : '';
+        if ($itemId === '' || $path === '') {
+            return false;
+        }
+
+        if (!empty($item['streams_probed_at'])) {
+            return false;
+        }
+
+        if (self::videoCodecMissing($streams)) {
+            return false;
+        }
+
+        return !self::looksFullyProbed($streams);
+    }
+
+    /**
+     * Rows already carrying a subtitle track or a second audio track can only have come
+     * from a full-set probe, so they are trusted without probing.
+     *
+     * @param array<int, array<string, mixed>> $streams
+     */
+    private static function looksFullyProbed(array $streams): bool
+    {
+        $audio = 0;
+        foreach ($streams as $stream) {
+            if (!is_array($stream)) {
+                continue;
+            }
+            $type = $stream['stream_type'] ?? null;
+            if ($type === 'subtitle') {
+                return true;
+            }
+            if ($type === 'audio' && ++$audio >= 2) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

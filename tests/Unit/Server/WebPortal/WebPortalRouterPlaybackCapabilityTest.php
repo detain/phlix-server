@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Server\WebPortal;
 use Phlix\Auth\AuthManager;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\MediaAsset\StreamProbeScheduler;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Markers\SkipButtonSpec;
@@ -71,7 +72,11 @@ class WebPortalRouterPlaybackCapabilityTest extends TestCase
         ]];
     }
 
-    private function router(ItemRepository $repo): WebPortalRouter
+    /**
+     * @param StreamProbeScheduler|null $scheduler The background-probe enqueue seam. Defaults to a
+     *        double, so no test reaches the real queue directory.
+     */
+    private function router(ItemRepository $repo, ?StreamProbeScheduler $scheduler = null): WebPortalRouter
     {
         $pms = $this->createMock(PlaybackMarkerService::class);
         // SkipButtonSpec is final and cannot be auto-doubled; return a real one.
@@ -87,6 +92,7 @@ class WebPortalRouterPlaybackCapabilityTest extends TestCase
             $this->createMock(AuthManager::class),
             $pms,
             $this->createMock(MarkerService::class),
+            streamProbeScheduler: $scheduler ?? $this->createMock(StreamProbeScheduler::class),
         );
     }
 
@@ -299,13 +305,66 @@ class WebPortalRouterPlaybackCapabilityTest extends TestCase
             $repo->expects($this->never())->method('addStream');
             $repo->expects($this->never())->method('markStreamsProbed');
 
-            $resp = $this->router($repo)->getPlaybackInfo(
+            // Playback info hands the item to the background-probe enqueue exactly once; the enqueue
+            // is a file write and is not a probe, so the repository assertions above still hold.
+            $scheduler = $this->createMock(StreamProbeScheduler::class);
+            $scheduler->expects($this->once())->method('scheduleIfLegacy')->willReturn(false);
+
+            $resp = $this->router($repo, $scheduler)->getPlaybackInfo(
                 $this->requestWithCaps('{"eac3": false}'),
                 ['id' => 'm1']
             );
 
             // The stored eac3 row is judged as stored: the client cannot decode it.
             $this->assertFalse($this->directPlayOf($resp));
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    /**
+     * A legacy item (unprobed, one audio row, no subtitle row) reaches the background-probe enqueue
+     * with its stored rows, on the same single call the API path makes.
+     */
+    public function testLegacyItemIsHandedToTheBackgroundProbeEnqueueOnce(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'phlix-pb-legacy-');
+        self::assertIsString($path);
+        file_put_contents($path, 'not a real media file');
+
+        try {
+            $item = [
+                'id' => 'm1',
+                'name' => 'Legacy',
+                'type' => 'movie',
+                'path' => $path,
+                'content_rating' => null,
+                'metadata_json' => '{}',
+                'streams_probed_at' => null,
+            ];
+            $stored = [
+                ['id' => 'v1', 'stream_type' => 'video', 'stream_index' => 0, 'codec' => 'h264'],
+                ...$this->singleAudio('aac'),
+            ];
+
+            $repo = $this->createMock(ItemRepository::class);
+            $repo->method('findById')->willReturn($item);
+            $repo->method('getItemStreams')->willReturn($stored);
+            $repo->expects($this->never())->method('replaceStreams');
+            $repo->expects($this->never())->method('markStreamsProbed');
+
+            $scheduler = $this->createMock(StreamProbeScheduler::class);
+            $scheduler->expects($this->once())->method('scheduleIfLegacy')->with(
+                $this->callback(static fn (array $row): bool => ($row['id'] ?? null) === 'm1'),
+                $stored,
+            )->willReturn(true);
+
+            $resp = $this->router($repo, $scheduler)->getPlaybackInfo(
+                $this->requestWithCaps(null),
+                ['id' => 'm1']
+            );
+
+            $this->assertSame(200, $resp->statusCode);
         } finally {
             @unlink($path);
         }

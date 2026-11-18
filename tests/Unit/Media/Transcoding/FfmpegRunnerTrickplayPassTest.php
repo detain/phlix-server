@@ -603,8 +603,10 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
     public function testARollbackRestoreThatIsRefusedStopsAndNamesTheFile(): void
     {
         // The timeline's rename fails, so the publish rolls back the sprite and the stamp. The
-        // sprite is restored first and that restore is refused. The rollback stops there, so the
-        // stamp keeps the new token, the timeline keeps the old one, and the warning names the sprite.
+        // rollback restores newest first, so the sprite is restored before the stamp. Only the
+        // restore onto sprite.jpg is refused; the stamp's restore would succeed if it were tried.
+        // The rollback must stop at the refused sprite: the stamp keeps the new token, the timeline
+        // keeps the old one, the single warning names the sprite, and the stamp is never restored.
         mkdir($this->dir . '/out', 0755, true);
         file_put_contents($this->dir . '/out/sprite.gen', 'OLD-GEN');
         file_put_contents($this->dir . '/out/sprite.jpg', 'OLD-SPRITE');
@@ -612,7 +614,7 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         $logger = new RecordingLogger();
         $runner = $this->scripted(6000.0, $logger);
         $runner->failRenameFrom = $this->dir . '/out/.tmp-timeline.json';
-        $runner->failRestoreRenames = true;
+        $runner->failRestoreTo = $this->dir . '/out/sprite.jpg';
 
         $this->assertNull($runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 0, 320));
 
@@ -622,6 +624,23 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         $context = $logger->contextOf('could not restore a file');
         $this->assertNotNull($context, 'A refused restore must be logged.');
         $this->assertSame($this->dir . '/out/sprite.jpg', $context['file']);
+
+        $restoreWarnings = array_filter(
+            $logger->records,
+            static fn (array $record): bool => $record['level'] === 'warning'
+                && str_contains($record['message'], 'could not restore a file')
+        );
+        $this->assertCount(1, $restoreWarnings, 'The rollback must stop after the first refused restore.');
+
+        $stampRestores = array_filter(
+            $runner->renames,
+            static fn (array $rename): bool => basename($rename['from']) === '.tmp-previous-sprite.gen'
+        );
+        $this->assertSame(
+            [],
+            $stampRestores,
+            'The stamp restore must not be attempted after a refused sprite restore.'
+        );
     }
 
     public function testACleanRunWithEmptyOutputStillPublishes(): void

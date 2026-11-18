@@ -55,10 +55,12 @@ final class ScriptedTrickplayRunner extends FfmpegRunner
     public array $renames = [];
 
     /**
-     * Whether the rollback's restore renames fail: renames FROM a previous-copy name. The publish
-     * renames are unaffected, so the failure happens only once a publish has already gone wrong.
+     * Destination path whose rollback restore is refused, or null for none. A restore is a rename
+     * FROM a previous-copy name ONTO its final name. Only the restore onto this path fails, so every
+     * other restore still succeeds, and a rollback that carries on past the refused one is visible
+     * in $renames. The publish renames are unaffected.
      */
-    public bool $failRestoreRenames = false;
+    public ?string $failRestoreTo = null;
 
     /**
      * Whether the hard link to a previous copy is refused, so the copy fallback runs.
@@ -80,7 +82,11 @@ final class ScriptedTrickplayRunner extends FfmpegRunner
             return false;
         }
 
-        if ($this->failRestoreRenames && str_starts_with(basename($from), self::TEMP_FILE_PREFIX . 'previous-')) {
+        if (
+            $this->failRestoreTo !== null
+            && $to === $this->failRestoreTo
+            && str_starts_with(basename($from), self::TEMP_FILE_PREFIX . 'previous-')
+        ) {
             return false;
         }
 

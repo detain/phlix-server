@@ -219,6 +219,26 @@ final class TrickplayArtefactsTest extends TestCase
         $this->assertFalse(TrickplayArtefacts::isComplete($this->dir), 'A BIF without its stamp is not complete.');
     }
 
+    public function testATornSetLeftByARefusedRestoreIsNotComplete(): void
+    {
+        // A publish whose timeline rename failed, and whose sprite restore was refused, leaves
+        // the sprite stamp on the new token while the timeline keeps the old one. The set here is
+        // a whole 60-entry timeline tagged X, a sprite stamp Y and a sprite.jpg present. The BIF
+        // stamp carries X, the timeline's token, so the sprite stamp is the only disagreement.
+        $x = '0123456789abcdef';
+        $y = 'fedcba9876543210';
+        $this->writeGenerationSet($x, $y, $x);
+        $this->assertFileExists($this->dir . '/' . FfmpegRunner::SPRITE_FILENAME);
+        $this->assertFalse(
+            TrickplayArtefacts::isComplete($this->dir),
+            'A timeline from the old pass beside a sprite stamp from the new one is a torn set.'
+        );
+
+        // Control: the same set with token X on the sprite stamp as well is complete.
+        $this->writeGenerationSet($x, $x, $x);
+        $this->assertTrue(TrickplayArtefacts::isComplete($this->dir), 'One token on every part is complete.');
+    }
+
     public function testAMismatchedOrDamagedTimelineGenerationIsIncomplete(): void
     {
         $gen = '0123456789abcdef';

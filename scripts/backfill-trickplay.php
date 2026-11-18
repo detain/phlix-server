@@ -32,6 +32,8 @@ require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/bootstrap_env.php';
 
 use Phlix\Common\Database\ConnectionPool;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Streaming\Trickplay\TrickplayArtefacts;
 use Phlix\Media\Transcoding\FfmpegRunner;
@@ -186,18 +188,33 @@ foreach ($rows as $row) {
     }
     $attempted++;
 
-    $probe = $ffmpeg->probe($path);
-    $rawDuration = $probe['format']['duration'] ?? null;
-    $duration = is_numeric($rawDuration) ? (float) $rawDuration : 0.0;
+    // An exception from probe or generation must not end the run: the item's lock is
+    // released, the failure is logged, and the next item runs.
+    try {
+        $probe = $ffmpeg->probe($path);
+        $rawDuration = $probe['format']['duration'] ?? null;
+        $duration = is_numeric($rawDuration) ? (float) $rawDuration : 0.0;
 
-    $result = $ffmpeg->generateTrickplayArtefacts(
-        $path,
-        $itemDir,
-        TrickplayArtefacts::SPRITE_COUNT,
-        TrickplayArtefacts::bifFrameCount($duration),
-        TrickplayArtefacts::BIF_FRAME_WIDTH,
-        ['item_id' => $itemId]
-    );
+        $result = $ffmpeg->generateTrickplayArtefacts(
+            $path,
+            $itemDir,
+            TrickplayArtefacts::SPRITE_COUNT,
+            TrickplayArtefacts::bifFrameCount($duration),
+            TrickplayArtefacts::BIF_FRAME_WIDTH,
+            ['item_id' => $itemId]
+        );
+    } catch (\Throwable $e) {
+        echo "  FAIL: {$path} (trickplay generation threw: {$e->getMessage()})\n";
+        LoggerFactory::get(LogChannels::TRANSCODING)->error('Trickplay backfill item threw; continuing', [
+            'item_id' => $itemId,
+            'video' => $path,
+            'exception' => $e->getMessage(),
+        ]);
+        TrickplayArtefacts::unlock($lock);
+        $failed++;
+        continue;
+    }
+
     if ($result === null || $result['sprite'] === null || $result['timeline'] === null) {
         echo "  FAIL: {$path} (trickplay generation failed; marked, see the ffmpeg log)\n";
         TrickplayArtefacts::markFailed($itemDir, 'trickplay pass produced no sprite or timeline');

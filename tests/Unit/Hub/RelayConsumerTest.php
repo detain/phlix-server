@@ -3915,9 +3915,11 @@ class RelayConsumerTest extends TestCase
      * scheduleGateFor() is registered in the Application constructor. This dispatcher calls
      * scheduleGateFor() directly as a unit seam, not that full chain, and only a request the gate
      * passes reaches the route. The helper calls scheduleGateFor() and TranscodeController::start()
-     * directly, so it skips Application::dispatch()'s middleware, the pre-router fast paths, the router
-     * and route-level auth; it does not prove the production gate wiring, which the boundary test that
-     * pins the middleware registration count covers.
+     * directly, so it skips RelayRequestDispatcher::isRelayDenied(), Application::dispatch()'s
+     * middleware, the pre-router fast paths, the WebPortalRouter fallback, the router and route-level
+     * auth. No test drives the constructor closure's call to scheduleGateFor(). The boundary test
+     * ApplicationHeadOnlyBoundaryTest pins only the count of global middleware registrations, so it
+     * would not catch a closure that stopped calling the gate.
      *
      * @return array{
      *     request: \Phlix\Server\Http\Request,

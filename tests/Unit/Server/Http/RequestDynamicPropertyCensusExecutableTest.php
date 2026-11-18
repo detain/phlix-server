@@ -1246,7 +1246,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // ApplicationScheduleGateTest, TranscodeFileServerCacheTest,
     // PreRouterFastPathsAccessScheduleTest, AccessScheduleNoProfileMemoTest). Measured from the
     // phpunit red at 2115 on the branch tip; no production file was added.
-    private const EXPECTED_PHP_FILES = 2115;
+    // +1 2115→2116 (perf/C relay-identity wiring): HubServicesProviderRelayConsumerWiringTest, the
+    // container-level pin that the production RelayConsumer receives the RelayIdentityResolver.
+    // Measured from the phpunit red at 2116; no production file was added.
+    private const EXPECTED_PHP_FILES = 2116;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

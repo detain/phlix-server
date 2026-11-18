@@ -2684,7 +2684,11 @@ class Application
      *    middleware fails closed (the AccessScheduled 403), EXCEPT for an unmapped
      *    relayed principal ({@see \Phlix\Server\Http\Request::$relayUnmapped}): it has
      *    no server account, so no profile or schedule exists for it, and it passes as
-     *    master did. A mapped relayed principal and every local session are refused.
+     *    master did. A mapped relayed principal carries no profile either, since the relay
+     *    consumer sets none. The middleware tests it on its account's active profile, as it
+     *    does a local session with no profile claim, and refuses it only when that account has
+     *    no resolvable profile. The relay fork in start.php passes the resolver, so this is the
+     *    production path for a linked hub user.
      *    RequestContext is published for the middleware's duration and restored afterwards.
      *    A request that passes has the profile the middleware tested published as
      *    {@see \Phlix\Server\Http\Request::$gatedProfileId} before that restore.

@@ -152,8 +152,10 @@ class Request
      * Such a principal has no server account, so it has no profile and no access schedule can
      * apply to it. The schedule gate and the artwork and avatar fast paths therefore do not refuse
      * it for lacking a profile, which matches the behaviour before the S301 identity mapping. A
-     * principal the server DOES map to an account, and every local session, leave this false and
-     * keep the fail-closed no-profile refusal.
+     * principal the server maps to an account leaves this false. In production the relay fork
+     * passes the resolver, so a linked hub user runs as its server user: its schedule is tested on
+     * the account's active profile, as for a local session with no profile claim. It is refused
+     * only when that account has no resolvable profile.
      *
      * ⚠ **Never assign this from request input.** Only {@see \Phlix\Hub\RelayConsumer::buildRequest()},
      * which reads the tunnel envelope, sets it, after the identity mapping has run and found no row.
@@ -171,7 +173,8 @@ class Request
      * A route that mints a signed URL for the session binds the URL to this profile, so the
      * URL is checked against the same schedule on each later use. The controller reads it
      * because {@see \Phlix\Server\Http\RequestContext::getProfileId()} is restored once the gate
-     * returns, so it is null by the time a route runs.
+     * returns. For a relayed principal that restored value is null when the route runs, so
+     * reading it there would mint an unbound token.
      *
      * ⚠ **Never assign this from request input.** Only
      * {@see \Phlix\Server\Core\Application::scheduleGateFor()} sets it, from the profile the

@@ -381,6 +381,34 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
      * accompanied. Two separate encoders in one command is an ffmpeg error, and
      * a branch that only appended would still satisfy the case above.
      */
+    /**
+     * The CMAF encode writes its fragment only at the end, so the stall watchdog
+     * needs `-progress` to see a live signal. The progress file must sit beside
+     * the `.part-<hex>` temp (so the `{tmp}.*` cleanup reaches it), and the
+     * MPEG-TS branch must not get one: its temp grows continuously, and its
+     * byte-identical pinned string has no progress file.
+     */
+    public function test_fmp4_video_command_writes_a_progress_file_beside_the_temp(): void
+    {
+        $tmp = self::OUT_M4S . '.part-deadbeef';
+
+        $cmd = $this->runner()->buildSegmentCommand(
+            '/media/in.mkv',
+            $tmp,
+            252.0,
+            6.0,
+            $this->videoParams() + ['segment_format' => 'fmp4']
+        );
+
+        $this->assertStringContainsString(
+            " -progress '/tmp/segs/job1/seg-v720p-00042.m4s.part-deadbeef.prog' -f hls",
+            $cmd
+        );
+
+        $ts = $this->runner()->buildSegmentCommand('/media/in.mkv', self::OUT_TS, 252.0, 6.0, $this->videoParams());
+        $this->assertStringNotContainsString('-progress', $ts);
+    }
+
     public function test_fmp4_video_command_drops_the_mpegts_muxer(): void
     {
         $cmd = $this->runner()->buildSegmentCommand(
@@ -761,7 +789,9 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
         $stem = '/tmp/segs/job1/seg-v720p-00042.m4s.part-deadbeef';
 
         $tail = substr($cmd, (int) strpos($cmd, ' ; rm -f '));
-        foreach (['', '.i', '.s0', '.m3u8'] as $suffix) {
+        // `.prog` is the progress file the stall watchdog reads (see -progress below);
+        // it must go on the success path too, with the other sidecars.
+        foreach (['', '.i', '.s0', '.m3u8', '.prog'] as $suffix) {
             $this->assertStringContainsString(
                 "'\\''{$stem}{$suffix}'\\''",
                 $tail,

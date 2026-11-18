@@ -95,13 +95,34 @@ final class FfmpegRunnerProbeCacheTest extends TestCase
     }
 
     /** A runner over $cacheDir whose wall clock reads exactly $now. */
-    private function runnerAt(string $cacheDir, int $now): FfmpegRunner
+    private function runnerAt(string $cacheDir, int $now, ?string $ffprobe = null): FfmpegRunner
     {
-        $runner = new FfmpegRunner('/usr/bin/ffmpeg', $this->ffprobe, $this->dir);
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', $ffprobe ?? $this->ffprobe, $this->dir);
         $runner->setProbeCache(new ProbeCache($cacheDir));
         $runner->setWallClock(static fn (): int => $now);
 
         return $runner;
+    }
+
+    /**
+     * A fake ffprobe whose output depends on the media bytes: width 1280 when the file holds "v2",
+     * otherwise 1920. It still appends one line to the counter per real run.
+     */
+    private function contentAwareFfprobe(): string
+    {
+        $script = $this->dir . '/fake-ffprobe-content';
+        $body = <<<'SH'
+#!/bin/sh
+for last; do :; done
+echo run >> COUNTER
+if grep -q v2 "$last"; then width=1280; else width=1920; fi
+printf '{"streams":[{"index":0,"codec_type":"video","codec_name":"h264","width":%s,"height":1080}],' "$width"
+printf '"format":{"duration":"12.000000","format_name":"matroska,webm"}}\n'
+SH;
+        file_put_contents($script, str_replace('COUNTER', escapeshellarg($this->counter), $body) . "\n");
+        chmod($script, 0755);
+
+        return $script;
     }
 
     public function testASecondWorkerIsServedFromThePersistedCacheWithoutRunningFfprobe(): void
@@ -240,5 +261,60 @@ final class FfmpegRunnerProbeCacheTest extends TestCase
 
         $this->runnerAt($cacheDir, $mtime + ProbeCache::RACY_WINDOW_SECONDS + 1)->probe($this->media);
         self::assertSame(2, $this->probeRuns(), 'the stored entry answers the fresh runner');
+    }
+
+    /**
+     * Finding 2: a server clock that runs ahead of this host (NFS, SMB) stamps the file with a future mtime.
+     * A same-size rewrite inside that server second would leave the stamp unchanged, so the probe is neither
+     * persisted nor memoized, and the file is probed again until the clock passes it. The local clock is
+     * 10 s behind the real time, the mtime is 7 s ahead of the clock, and the ctime is the real touch time,
+     * so both timestamps lie ahead of the clock.
+     */
+    public function testAFutureDatedFileIsNeitherPersistedNorMemoized(): void
+    {
+        $cacheDir = $this->dir . '/cache';
+        $clock = time() - 10;
+        touch($this->media, $clock + 7);
+        clearstatcache();
+
+        $runner = $this->runnerAt($cacheDir, $clock);
+        $runner->probe($this->media);
+        self::assertSame([], glob($cacheDir . '/*.json') ?: [], 'a future-dated result is not persisted');
+
+        $runner->probe($this->media);
+        self::assertSame(2, $this->probeRuns(), 'and not memoized, so the same runner probes again');
+
+        $this->runnerAt($cacheDir, $clock)->probe($this->media);
+        self::assertSame(3, $this->probeRuns(), 'a second worker also probes, because nothing was stored');
+    }
+
+    /**
+     * Finding 5: a same-size rewrite within the same second as the probe. The file is probed with the clock
+     * pinned to its mtime. It is then rewritten at the same size, and its mtime is restored to the probed value,
+     * so only the bytes differ. The second probe must run ffprobe again and return the new output, not a stale
+     * entry.
+     */
+    public function testASameSizeRewriteWithinTheSameSecondIsReprobed(): void
+    {
+        $cacheDir = $this->dir . '/cache';
+        $ffprobe = $this->contentAwareFfprobe();
+        $mtime = filemtime($this->media);
+        self::assertIsInt($mtime);
+
+        $first = $this->runnerAt($cacheDir, $mtime, $ffprobe)->probe($this->media);
+        self::assertSame(1920, $first['streams'][0]['width'] ?? null, 'the original bytes probe as 1920');
+        self::assertSame(1, $this->probeRuns());
+
+        // Same size as "media-bytes-v1" (14 bytes), rewritten in place, with the mtime put back to the probed value.
+        file_put_contents($this->media, 'media-bytes-v2');
+        touch($this->media, $mtime);
+        clearstatcache();
+        self::assertSame(strlen('media-bytes-v1'), filesize($this->media));
+
+        $second = $this->runnerAt($cacheDir, $mtime, $ffprobe)->probe($this->media);
+
+        self::assertSame(2, $this->probeRuns(), 'the rewritten file is probed again');
+        self::assertSame(1280, $second['streams'][0]['width'] ?? null, 'the new output is returned, not a stale entry');
+        self::assertSame([], glob($cacheDir . '/*.json') ?: [], 'the racy results are not persisted');
     }
 }

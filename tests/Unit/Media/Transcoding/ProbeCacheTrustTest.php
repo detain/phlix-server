@@ -159,6 +159,33 @@ final class ProbeCacheTrustTest extends TestCase
         self::assertFileDoesNotExist($dir . '/' . sha1('/media/b.mkv') . '.json');
     }
 
+    /**
+     * Finding 1: an in-place widening (same inode, group-write added) is refused, latched and warned once.
+     * Restoring the mode does not re-enable the cache, so the refusal is not a silent skip that undoes itself.
+     */
+    public function testAnInPlaceWidenedDirectoryWarnsOnceAndStaysOff(): void
+    {
+        $dir = $this->root . '/inplace';
+        mkdir($dir, 0700);
+        $logger = new ProbeCacheRecordingLogger();
+        $cache = ProbeCache::createIfSecure($dir, ProbeCache::MAX_ENTRIES, $logger);
+        self::assertInstanceOf(ProbeCache::class, $cache);
+
+        chmod($dir, 0770);
+        self::assertNull($cache->read('/media/a.mkv', 1, 1, 7, 9), 'a widened directory is never read');
+        $cache->write('/media/b.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        self::assertNull($cache->read('/media/b.mkv', 1, 1, 7, 9));
+
+        chmod($dir, 0700);
+        $cache->write('/media/c.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        self::assertNull($cache->read('/media/c.mkv', 1, 1, 7, 9), 'still off after the mode is restored');
+        self::assertSame([], glob($dir . '/*') ?: [], 'nothing is written while the cache is off');
+
+        $warnings = $logger->messages('warning');
+        self::assertCount(1, $warnings, 'the in-place widening is warned exactly once');
+        self::assertStringContainsString('writable by group or other', $warnings[0]);
+    }
+
     /** Item 2(a): a group-writable ancestor without the sticky bit refuses the cache. */
     public function testAGroupWritableAncestorDisablesTheCache(): void
     {
@@ -580,11 +607,12 @@ final class ProbeCacheTrustTest extends TestCase
     }
 
     /**
-     * Item 9: a recreate whose mkdir fails (here the parent is not writable) is not retried on every
-     * probe miss. It is held back for RECREATE_BACKOFF_SECONDS and warns once per attempt. The window
-     * is expired through its monotonic-clock field, so the next write retries and recreates the directory.
+     * Item 9 and finding 4: a recreate whose mkdir fails (here the parent is not writable) is not retried
+     * on every probe miss. It is held back for RECREATE_BACKOFF_SECONDS. The first failure of the instance
+     * logs one warning. Failures in later backoff windows log at debug, so the warning count stays at one
+     * across two windows. The window is expired through its monotonic-clock field, so the test does not wait.
      */
-    public function testAFailedRecreateBacksOffAndWarnsOncePerWindow(): void
+    public function testAFailedRecreateBacksOffAndWarnsOnceForTheInstance(): void
     {
         $parent = $this->root . '/backoff';
         mkdir($parent, 0700);
@@ -593,6 +621,7 @@ final class ProbeCacheTrustTest extends TestCase
         $logger = new ProbeCacheRecordingLogger();
         $cache = ProbeCache::createIfSecure($dir, ProbeCache::MAX_ENTRIES, $logger);
         self::assertInstanceOf(ProbeCache::class, $cache);
+        $until = new \ReflectionProperty(ProbeCache::class, 'recreateBackoffUntil');
 
         $this->removeTree($dir);
         chmod($parent, 0500);
@@ -610,15 +639,28 @@ final class ProbeCacheTrustTest extends TestCase
             $cache->write('/media/c.mkv', 1, 1, 7, 9, $this->sampleProbe());
             self::assertDirectoryDoesNotExist($dir, 'still backing off, so the recreate is not attempted');
 
-            // Expire the window: the next write retries, and the writable parent lets it succeed.
-            $until = new \ReflectionProperty(ProbeCache::class, 'recreateBackoffUntil');
+            // Second window, the parent still not writable: the retry fails again. It is held back again
+            // and logged at debug, so the warning count does not grow.
+            chmod($parent, 0500);
             $until->setValue($cache, 0);
             $cache->write('/media/d.mkv', 1, 1, 7, 9, $this->sampleProbe());
+            self::assertDirectoryDoesNotExist($dir);
+            self::assertCount(1, $logger->messages('warning'), 'a second failed window does not warn again');
+            $stillMissing = array_filter(
+                $logger->messages('debug'),
+                static fn (string $m): bool => str_contains($m, 'still missing'),
+            );
+            self::assertCount(1, $stillMissing, 'the second failed attempt is logged at debug');
+
+            // The parent is writable again and the window expires: the recreate succeeds.
+            chmod($parent, 0700);
+            $until->setValue($cache, 0);
+            $cache->write('/media/e.mkv', 1, 1, 7, 9, $this->sampleProbe());
         } finally {
             chmod($parent, 0700);
         }
 
         self::assertDirectoryExists($dir);
-        self::assertNotNull($cache->read('/media/d.mkv', 1, 1, 7, 9));
+        self::assertNotNull($cache->read('/media/e.mkv', 1, 1, 7, 9));
     }
 }

@@ -28,11 +28,18 @@ use Workerman\Timer;
  *    still match. ctime and inode catch a replace-by-rename. mtime and ctime are whole
  *    seconds, so a same-size in-place rewrite within the same second as the probe leaves all
  *    five unchanged. The racy-stat guard ({@see isRacy()}) covers that: when the file's mtime
- *    or ctime is within RACY_WINDOW_SECONDS of the wall clock at probe time, the result is
- *    neither persisted nor kept in the in-process memo, so the next probe runs ffprobe again.
- *    A rewrite after that window cannot leave the stamp unchanged: the mtime has moved on, so
- *    it is a miss. The residue is a filesystem whose timestamps are coarser than one second
- *    (its window would need widening) or a wall clock that moves backwards.
+ *    or ctime is not more than RACY_WINDOW_SECONDS older than the wall clock at probe time, or is
+ *    ahead of it at all, the result is neither persisted nor kept in the in-process memo, so the
+ *    next probe runs ffprobe again. A future timestamp is racy however far ahead it is, so a
+ *    server clock that runs ahead of this host (NFS, SMB) keeps its files re-probed until the
+ *    clock passes them. A rewrite after that window cannot leave the stamp unchanged: the mtime
+ *    has moved on, so it is a miss. The residue is a filesystem whose timestamps are coarser than
+ *    one second (its window would need widening), or a wall clock that moves backwards after the
+ *    probe, so that a rewrite lands on the stored second.
+ *    The guard also assumes that ctime is not refreshed on every stat. A mount whose ctime tracks
+ *    the wall clock on every stat makes every file racy. Each probe then runs ffprobe, and nothing
+ *    is memoized or persisted. The result stays correct, so this costs only the cache. Nothing
+ *    logs it.
  *  - Trust: the directory is used only when all of these hold. The configured path is
  *    absolute and has no "." or ".." segment, which is refused rather than normalised,
  *    because lstat follows a link through "." (for example /x/link/.). Its trailing
@@ -95,8 +102,9 @@ final class ProbeCache
     public const MAX_ENTRY_BYTES = 65536;
 
     /**
-     * Racy-stat window, in whole seconds. A file whose mtime or ctime is within this many seconds of
-     * the wall clock at probe time is not persisted and is not memoized. See {@see isRacy()}.
+     * Racy-stat window, in whole seconds. A file whose mtime or ctime is this many seconds older than
+     * the wall clock at probe time, or is ahead of it, is not persisted and is not memoized. See
+     * {@see isRacy()}.
      */
     public const RACY_WINDOW_SECONDS = 2;
 
@@ -127,8 +135,8 @@ final class ProbeCache
     public const PRUNE_LOCK_FILE = '.prune.lock';
 
     /**
-     * Seconds a failed recreate of a removed directory waits before it is tried again. One
-     * failed attempt logs one warning, so this also bounds that warning to once per window.
+     * Seconds a failed recreate of a removed directory waits before it is tried again. The first
+     * failed attempt of an instance logs one warning. Later failed attempts log at debug only.
      */
     public const RECREATE_BACKOFF_SECONDS = 60;
 
@@ -171,6 +179,12 @@ final class ProbeCache
      * backoff is in force. It is a monotonic interval, so hrtime is used, never time().
      */
     private ?int $recreateBackoffUntil = null;
+
+    /**
+     * True once a failed recreate has logged its warning. Later failed recreates of this instance log at
+     * debug, so a permanently failing mkdir does not log a line every backoff window.
+     */
+    private bool $recreateWarned = false;
 
     /**
      * @param string               $directory   Absolute cache directory (created on first write, mode 0700).
@@ -230,10 +244,13 @@ final class ProbeCache
             // Establishes the identity (device and inode) that every later check compares against.
             $reason = $cache->trustFailure();
             if ($reason !== null) {
-                $logger?->warning(
-                    'ffprobe disk cache disabled: ' . $reason,
-                    ['directory' => $directory]
-                );
+                // A refusal of the directory's own inode is already latched and logged by trustFailure().
+                if ($cache->latched === null) {
+                    $logger?->warning(
+                        'ffprobe disk cache disabled: ' . $reason,
+                        ['directory' => $directory]
+                    );
+                }
                 return null;
             }
 
@@ -245,16 +262,17 @@ final class ProbeCache
     }
 
     /**
-     * True when a file's mtime or ctime is within {@see self::RACY_WINDOW_SECONDS} of $now, in either
-     * direction (a future timestamp counts, because of clock skew). Such a file can be rewritten in
-     * place without changing its size, mtime, ctime or inode, so its probe result must not be stored.
-     * The caller passes time(): this compares wall-clock file timestamps, which the hrtime() rule for
-     * elapsed intervals does not cover.
+     * True when a file's mtime or ctime is at most {@see self::RACY_WINDOW_SECONDS} older than $now,
+     * or is ahead of $now at all. A future timestamp is racy however far ahead it is, because of clock
+     * skew on a network mount: such a file's stamp is set by a clock that runs ahead of this host.
+     * Such a file can be rewritten in place without changing its size, mtime, ctime or inode, so its
+     * probe result must not be stored. The caller passes time(): this compares wall-clock file
+     * timestamps, which the hrtime() rule for elapsed intervals does not cover.
      */
     public static function isRacy(int $mtime, int $ctime, int $now): bool
     {
-        return abs($now - $mtime) <= self::RACY_WINDOW_SECONDS
-            || abs($now - $ctime) <= self::RACY_WINDOW_SECONDS;
+        return $now - $mtime <= self::RACY_WINDOW_SECONDS
+            || $now - $ctime <= self::RACY_WINDOW_SECONDS;
     }
 
     /**
@@ -546,7 +564,8 @@ final class ProbeCache
      * when trust was first established (a changed pair is adopted by {@see adoptReplacement()}
      * or latches the cache off); it is a real directory; it is owned by the
      * expected uid; and it has no group or other write bit. An instance built without
-     * {@see createIfSecure()} records its identity at its first check.
+     * {@see createIfSecure()} records its identity at its first check. A refusal of the directory's
+     * own inode, including a widening in place, is latched by {@see latch()}, so it is logged once.
      */
     private function trustFailure(): ?string
     {
@@ -579,7 +598,11 @@ final class ProbeCache
             }
         }
 
-        return $this->inodeFailure($st);
+        // The same inode can be widened in place (for example a group-write bit added). That refusal is
+        // latched too, so the cache stays off for the process and is logged once, not silently skipped.
+        $reason = $this->inodeFailure($st);
+
+        return $reason === null ? null : $this->latch($reason);
     }
 
     /**
@@ -723,7 +746,8 @@ final class ProbeCache
      * device and inode are then recorded afresh, and the normal check runs on the new directory.
      * A location that the check refuses, or a new directory that fails the check, switches the
      * cache off with one warning. A failed mkdir is a skip, and the next recreate is held back for
-     * {@see self::RECREATE_BACKOFF_SECONDS}, with one warning for each failed attempt.
+     * {@see self::RECREATE_BACKOFF_SECONDS}. The first failed mkdir of this instance logs one warning;
+     * later failed attempts log at debug.
      *
      * @return string|null The refusal reason, or null when the directory is back and trusted.
      */
@@ -742,18 +766,27 @@ final class ProbeCache
         if (!@mkdir($this->directory, 0700, true) && !is_dir($this->directory)) {
             $this->recreateBackoffUntil = (is_int($now) ? $now : 0)
                 + self::RECREATE_BACKOFF_SECONDS * 1_000_000_000;
-            $this->logger?->warning(
-                'ffprobe disk cache directory is missing and could not be recreated; retrying in '
-                . self::RECREATE_BACKOFF_SECONDS . ' s',
-                ['directory' => $this->directory]
-            );
+            if ($this->recreateWarned) {
+                $this->logger?->debug(
+                    'ffprobe disk cache directory is still missing and could not be recreated',
+                    ['directory' => $this->directory]
+                );
+            } else {
+                $this->recreateWarned = true;
+                $this->logger?->warning(
+                    'ffprobe disk cache directory is missing and could not be recreated; retrying in '
+                    . self::RECREATE_BACKOFF_SECONDS . ' s',
+                    ['directory' => $this->directory]
+                );
+            }
             return 'directory is missing and could not be recreated';
         }
         $this->recreateBackoffUntil = null;
         $this->identity = null;
         $reason = $this->trustFailure();
         if ($reason !== null) {
-            return $this->latch($reason);
+            // trustFailure() has already latched and logged an inode refusal; any other reason is latched here.
+            return $this->latched ?? $this->latch($reason);
         }
         if ($wasTrusted) {
             $this->logger?->warning(

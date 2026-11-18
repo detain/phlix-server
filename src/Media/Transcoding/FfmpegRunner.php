@@ -376,8 +376,8 @@ class FfmpegRunner
         // lifetime. The size/mtime guard handles a file that changes on disk (e.g.
         // after a re-encode). A failed probe is memoized as null but is retried.
         $stamp = $this->probeFileStamp($inputPath);
-        // Racy-stat guard: a file whose mtime or ctime is within ProbeCache::RACY_WINDOW_SECONDS of now
-        // can be rewritten in place without changing its stamp, so this probe's result is neither
+        // Racy-stat guard: a file whose mtime or ctime is at most ProbeCache::RACY_WINDOW_SECONDS older than now,
+        // or is ahead of now, can be rewritten in place without changing its stamp, so this probe's result is neither
         // persisted nor memoized, and the next call runs ffprobe again.
         $racy = $stamp !== null && ProbeCache::isRacy($stamp['mtime'], $stamp['ctime'], $this->probeClock());
         $cacheKey = $inputPath . ':' . ($stamp === null ? '' : implode(':', [

@@ -266,10 +266,23 @@ class MediaAssetGenerationJob
             return true;
         }
 
+        $lock = null;
         try {
             $spriteDir = $this->ffmpeg->getTranscodeDir() . '/trickplay/' . $itemId;
             if (!is_dir($spriteDir)) {
                 @mkdir($spriteDir, 0755, true);
+            }
+
+            // One pass per item at a time: the backfill script writes the same
+            // directory. Skip without waiting if it holds the lock; its pass produces
+            // the same artefacts.
+            $lock = TrickplayArtefacts::tryLock($spriteDir);
+            if ($lock === null) {
+                $this->logger->info('MediaAssetGenerationJob: trickplay skipped, another pass holds the item', [
+                    'item_id' => $itemId,
+                ]);
+
+                return true;
             }
 
             // ONE ffmpeg pass produces the sprite, its timeline and the BIF frames.
@@ -314,6 +327,8 @@ class MediaAssetGenerationJob
             ]);
 
             return false;
+        } finally {
+            TrickplayArtefacts::unlock($lock);
         }
     }
 

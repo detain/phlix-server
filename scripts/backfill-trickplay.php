@@ -159,6 +159,16 @@ foreach ($rows as $row) {
         echo "  stop: generation limit reached\n";
         break;
     }
+
+    // One pass per item at a time: the in-app media-asset worker writes the same
+    // directory. A held lock means the other pass is producing this item, so skip
+    // it without waiting. The lock is released on every path below.
+    $lock = TrickplayArtefacts::tryLock($itemDir);
+    if ($lock === null) {
+        echo "  skip: {$path} (another trickplay pass holds this item)\n";
+        $skipped++;
+        continue;
+    }
     $attempted++;
 
     $probe = $ffmpeg->probe($path);
@@ -175,6 +185,7 @@ foreach ($rows as $row) {
     );
     if ($result === null || $result['sprite'] === null || $result['timeline'] === null) {
         echo "  FAIL: {$path} (trickplay generation failed)\n";
+        TrickplayArtefacts::unlock($lock);
         $failed++;
         continue;
     }
@@ -191,6 +202,7 @@ foreach ($rows as $row) {
             @unlink($frame);
         }
         echo "  FAIL: {$path} (store failed: {$e->getMessage()})\n";
+        TrickplayArtefacts::unlock($lock);
         $failed++;
         continue;
     }
@@ -207,6 +219,7 @@ foreach ($rows as $row) {
         }
     }
 
+    TrickplayArtefacts::unlock($lock);
     $updated++;
     echo '  ok:   ' . $path . ($bifWritten ? '' : ' (no BIF)') . "\n";
 }

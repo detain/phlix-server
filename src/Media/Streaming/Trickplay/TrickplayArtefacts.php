@@ -190,6 +190,46 @@ final class TrickplayArtefacts
         return $unpacked[1];
     }
 
+    /** Name of the per-item pass lock. Hidden, so it never reads as an artefact. */
+    public const LOCK_FILENAME = '.trickplay.lock';
+
+    /**
+     * Takes an item's pass lock without waiting.
+     *
+     * The media-asset job and the backfill script write an item's artefacts into
+     * the same directory. Each takes this lock before it generates, and skips the
+     * item when the other holds it, so two passes never write the same files at
+     * once. It is an flock on a file in the item directory: it works across
+     * processes, and the lock is released when the handle is released.
+     *
+     * @param string $dir The item's trickplay directory (created if missing).
+     *
+     * @return \SplFileObject|null The held lock, or null when another pass holds it
+     *                             (or the directory cannot be used).
+     */
+    public static function tryLock(string $dir): ?\SplFileObject
+    {
+        if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+            return null;
+        }
+
+        try {
+            $lock = new \SplFileObject($dir . '/' . self::LOCK_FILENAME, 'c');
+        } catch (\RuntimeException) {
+            return null;
+        }
+
+        return $lock->flock(LOCK_EX | LOCK_NB) ? $lock : null;
+    }
+
+    /**
+     * Releases a lock taken with {@see tryLock()}. Safe to call with null.
+     */
+    public static function unlock(?\SplFileObject $lock): void
+    {
+        $lock?->flock(LOCK_UN);
+    }
+
     /**
      * Builds `thumbs.bif` from frames a trickplay pass already extracted.
      *

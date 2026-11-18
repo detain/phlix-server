@@ -185,8 +185,8 @@ class TranscodeManager
      * ({@see segmentEncodeInFlight()}) so a client retry of a slow segment (the
      * common hls.js first-byte-timeout re-request — by far the more frequent of the
      * two hot-path checks) no longer globs `{final}.part-*` per request. **The
-     * GLOBAL CAP is NOT derived from this set** — it reads the shared scan snapshot
-     * (see {@see countInFlightSegmentEncodes()} for the bound that gives). An entry is added
+     * GLOBAL CAP is NOT derived from this set** — it is the cross-worker slot ledger
+     * (see {@see EncodeSlotLedger} and {@see admitSegmentLaunch()}). An entry is added
      * the instant an encode is launched and
      * removed when its launcher observes completion or failure
      * ({@see produceSegment()}'s `finally`, which now wraps the launch itself so the
@@ -245,12 +245,9 @@ class TranscodeManager
      * absolute final segment path, refreshed by {@see reconcileInFlightSegments()}
      * at most once per {@see SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS}.
      *
-     * Feeds the per-segment dedup ({@see segmentEncodeInFlight()}) and, through the shared
-     * scan snapshot, the global cap ({@see countInFlightSegmentEncodes()}). A sibling
-     * worker's in-flight encode is seen with up to one scan window (1 s) of staleness.
-     * The cap therefore bounds launches per worker plus a stale view of the others, not
-     * a live total. Worst-case overshoot is W x the cap within one window, where W is the
-     * number of HTTP workers (14 by default).
+     * Feeds the per-segment dedup ({@see segmentEncodeInFlight()}) only. Admission is not
+     * decided from it: the global cap is the cross-worker slot ledger ({@see EncodeSlotLedger}),
+     * which is one locked read per launch and so has no stale view of the other workers.
      *
      * @var array<string, true>
      */
@@ -262,9 +259,8 @@ class TranscodeManager
     /**
      * Minimum spacing (ms) between in-flight reconciliation globs that refresh
      * {@see $globalInFlightSnapshot} (the DEDUP-only cross-worker view) and self-heal
-     * {@see $segmentEncodesInFlight}. Does NOT throttle or otherwise govern the
-     * global-cap glob in {@see countInFlightSegmentEncodes()}, which always reads
-     * the shared tree live.
+     * {@see $segmentEncodesInFlight}. It does not govern admission, which is the slot
+     * ledger ({@see admitSegmentLaunch()}).
      */
     private const SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS = 1000;
 
@@ -306,12 +302,12 @@ class TranscodeManager
     private $monotonicNsSource = null;
 
     /**
-     * The shared, time-bounded snapshot of the in-flight temps in the segment tree, read by
-     * the global cap, the prewarm budget and the dedup reconcile. Shape: `base` = untagged
-     * on-demand temp paths, `prewarm` = `.part-p` temp paths, both post-purge. Null until
-     * the first scan.
+     * The shared, time-bounded snapshot of the in-flight temps in the segment tree. It feeds the
+     * dedup reconcile and the reaper/prune paths only. It does NOT decide admission: that is the
+     * slot ledger ({@see EncodeSlotLedger}). Shape: `base` = untagged on-demand temp paths,
+     * `prewarm` = `.part-p` temp paths, both post-purge. Null until the first scan.
      *
-     * @var array{base: list<string>, prewarm: list<string>, finals: array<string, true>}|null
+     * @var array{base: list<string>, prewarm: list<string>}|null
      */
     private ?array $inFlightScan = null;
 
@@ -319,23 +315,51 @@ class TranscodeManager
     private ?int $inFlightScanNs = null;
 
     /**
-     * Encodes this worker launched that the shared scan may not show yet, keyed by final path.
-     * A just-launched encode's temp may not be on disk yet, so a scan can miss it; these are
-     * counted on top of the scan so a burst of launches inside one scan window cannot slip past
-     * the cap. An entry is kept until its final segment is published, or until
-     * {@see self::SEGMENT_UNSEEN_LAUNCH_MAX_NS} has elapsed on the monotonic clock, whichever is
-     * first. A scan refresh does NOT clear it. An entry whose temp the scan already shows is not
-     * counted twice (see {@see liveUnseenLaunches()}).
-     *
-     * @var array<string, array{prewarm: bool, startedNs: int}> final path => family and launch time
+     * Cross-worker admission ledger for on-demand and prewarm segment encodes. Built on first
+     * use from the segment root and the encode wall bound, or injected by a test through
+     * {@see setEncodeSlotLedger()}.
      */
-    private array $unseenLaunches = [];
+    private ?EncodeSlotLedger $slotLedger = null;
+
+    /**
+     * Ledger tokens this worker admitted whose launch has not been released yet, keyed by final
+     * path, then by token. The value is `at` (wall-clock admission time) and `pid` (the launched
+     * process, 0 until settled). A token is released when its own launch is finished, when it ages
+     * past the ledger lifetime, or when it is reaped (then it moves to {@see $reapedHeld}). The map
+     * exists only to find a token from its final path. It never decides admission.
+     *
+     * @var array<string, array<string, array{at: int, pid: int}>>
+     */
+    private array $ledgerHeld = [];
+
+    /**
+     * Ledger tokens of REAPED launches, keyed by final path, then by reap id. One entry per
+     * invalidation ({@see moveHeldToReaped()}), so each reap settles on its own. `settled` is null
+     * while the reap is pending, true once the registry confirmed it gone (its tokens are then
+     * released), and false once the registry settled it unconfirmed (its tokens keep their slots
+     * until their lines age out, and no later confirmed settle of the key can release them).
+     * See {@see onSegmentKeySettled()}.
+     *
+     * @var array<string, array<int, array{settled: ?bool, tokens: array<string, array{at: int, pid: int}>}>>
+     */
+    private array $reapedHeld = [];
+
+    /** Monotonic id of the next reap recorded in {@see $reapedHeld}. */
+    private int $reapSeq = 0;
+
+    /**
+     * Failed ledger releases awaiting a retry on the next reconcile tick, keyed by token, with the
+     * number of attempts so far. A release is retried at most RELEASE_MAX_ATTEMPTS times.
+     *
+     * @var array<string, int>
+     */
+    private array $releasePending = [];
+
+    /** Attempts before a failed ledger release is logged and dropped. The age expiry then reclaims it. */
+    private const RELEASE_MAX_ATTEMPTS = 3;
 
     /** Minimum spacing (ns) between shared in-flight scans. */
     private const SEGMENT_INFLIGHT_SCAN_INTERVAL_NS = 1_000_000_000;
-
-    /** Longest (ns) a local launch stays counted while its final segment is unpublished. */
-    private const SEGMENT_UNSEEN_LAUNCH_MAX_NS = 10_000_000_000;
 
     /**
      * Grace (ns) from launch before the wait loop may stop polling for a segment whose encode
@@ -426,8 +450,9 @@ class TranscodeManager
 
     /**
      * Glob (relative to a job directory) matching exactly the atomic-write temps
-     * of in-flight segment encodes. Feeds BOTH the global cap, via the shared scan
-     * ({@see countInFlightSegmentEncodes()}), and the cross-worker dedup snapshot
+     * of in-flight segment encodes. Feeds the shared scan snapshot
+     * ({@see inFlightSnapshot()}, reaper and prune only; admission is the slot ledger)
+     * and the cross-worker dedup snapshot
      * ({@see reconcileInFlightSegments()}).
      *
      * ⚠ S56 replaced the previous `seg-*.ts.part-*` with this. Two reasons, and
@@ -459,7 +484,7 @@ class TranscodeManager
      * DISJOINT (a random 8-hex suffix can never collide with the tag), and the
      * TOTAL cap counts BOTH globs summed — prewarm encodes remain full weight
      * against the ceiling while their own share is separately countable
-     * ({@see countInFlightPrewarmEncodes()}), which is what lets prewarm be
+     * (the prewarm rules of {@see admitSegmentLaunch()}), which is what lets prewarm be
      * budgeted to half the box without the count lying about the whole. The exact
      * `-p????????` length anchor keeps the CMAF `<tmp>.i`/`.s0`/`.m3u8` siblings
      * out for the same reason S56 anchored the base pattern.
@@ -1563,7 +1588,7 @@ class TranscodeManager
      * `$segParams` and the `$variantId` that prefixes the segment filename; the
      * timeline (segment count / boundaries / duration) is identical across every
      * variant of a job. The dedup ({@see segmentEncodeInFlight()}), global cap
-     * ({@see countInFlightSegmentEncodes()} → {@see SegmentBusyException}), the
+     * ({@see admitSegmentLaunch()} → {@see SegmentBusyException}), the
      * coroutine-yielding poll, and the LRU touch are unchanged from pre-A5.
      *
      * @param string               $jobId     Transcode job id.
@@ -1630,23 +1655,20 @@ class TranscodeManager
             @mkdir($dir, 0775, true);
         }
 
-        // Refresh the cross-worker snapshot from the shared segment tree at most once
-        // per reconcile window (see reconcileInFlightSegments()). It feeds the dedup
-        // check and is also the source of the global cap's count, which reads the same
-        // shared scan (see countInFlightSegmentEncodes()). Both views can be up to 1 s
-        // stale for sibling workers.
+        // Refresh the dedup snapshot from the shared segment tree at most once per reconcile
+        // window (see reconcileInFlightSegments()). It feeds the dedup check only. Admission
+        // is decided by the slot ledger, not by this snapshot.
         $this->reconcileInFlightSegments();
 
-        // SV-4.1: Reserve the slot BEFORE the yieldable glob to close the double-encode
-        // race. The old order was: dedup-check → glob → reserve, which meant a second
-        // request could glob between the old request's glob and its reservation, see
-        // nothing in-flight, and both would proceed to encode the same segment. Now the
-        // reservation is placed first; if the glob then finds we're over cap, the
-        // finally block rolls it back via $overCap (below).
+        // Order: the dedup reservation is placed before the ledger admission, with no yield
+        // between the dedup check and the reservation, so a second request in this worker sees
+        // this launch. A refused admission rolls the reservation back in the finally block
+        // (compare-and-clear by generation). Admission itself is one locked ledger access, and
+        // it does not glob the segment tree (see admitSegmentLaunch()).
         $reserved = false;
         $overCap = false;
         $myGen = 0;
-        $inFlight = 0;
+        $slot = null; // ledger grant for this call's launch, if it admitted one
         if (!$this->segmentEncodeInFlight($final)) {
             // Record the launch in-worker BEFORE the yieldable glob. The add and the
             // dedup check above run with no coroutine yield between them, so this
@@ -1663,20 +1685,17 @@ class TranscodeManager
 
             // Global ceiling: bound total concurrent encodes so a burst of cold seeks
             // (many viewers, or one frantic scrub) can't saturate the CPU. Over the
-            // ceiling we fast-fail (503 + Retry-After) rather than pile on. The count
-            // comes from the shared scan snapshot, refreshed at most once per second,
-            // plus this worker's own launches that the scan may not show yet. The
-            // bound is per-worker launches plus a 1 s stale view of the other workers.
-            // Across the 14 HTTP workers, one window can overshoot the cap by up to
-            // W x cap (decision for the owner; the cap is server.hls.max_concurrent_segments).
+            // ceiling we fast-fail (503 + Retry-After) rather than pile on. Admission is
+            // the cross-worker slot ledger (EncodeSlotLedger): one locked read-modify-write
+            // per launch, so the cap is hard across all HTTP workers. Prewarm launches go
+            // through the same ledger with the prewarm rules (see admitSegmentLaunch()).
             $this->watchdogTick();
-            $inFlight = $this->countInFlightSegmentEncodes();
-            if ($inFlight >= $this->maxConcurrentSegments) {
-                // (8a) A sibling worker may already be encoding this exact segment. The
-                // in-worker dedup cannot see that (its snapshot lags by up to one reconcile
-                // interval), so check the shared tree for this segment only. If it is being
-                // encoded, join it as a waiter instead of refusing the seek. Only a segment
-                // nobody is encoding is refused, so the cap stays a real bound.
+            $slot = $this->admitSegmentLaunch(!$waitForEncode);
+            if ($slot === null) {
+                // (8a) A sibling worker may already be encoding this exact segment. Check the
+                // shared tree for this segment only. If it is being encoded, join it as a waiter
+                // instead of refusing the seek. Only a segment nobody is encoding is refused, so
+                // the cap stays a real bound.
                 $overCap = !$this->liveEncodeExistsFor($final);
                 // Roll back the reservation immediately — the finally below never
                 // runs on this throw (it precedes the try), so the rollback must
@@ -1684,6 +1703,10 @@ class TranscodeManager
                 // correct even in the (guaranteed-safe here) event of concurrency.
                 $this->clearReservationIfMine($final, $myGen);
                 if ($overCap) {
+                    if (!$waitForEncode) {
+                        // A prewarm launch stands down silently. Its caller stops the head start.
+                        return null;
+                    }
                     throw new SegmentBusyException(
                         'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
                     );
@@ -1728,26 +1751,17 @@ class TranscodeManager
             // back half of the box to demand. This is what ends the measured
             // 7.9 s seg0-inline stall: creation could previously stack its
             // whole window against the ceiling ahead of the first real request.
-            // (8b) Prewarm yields to interactive demand BEFORE a seek is refused. Once this
-            // launch would leave fewer than INTERACTIVE_HEADROOM_SLOTS free, the head start
-            // stands down, so a seek (video + audio) always finds the slots it needs. The
-            // reader keeps the full ceiling, as before; only prewarm is held back.
-            if ($inFlight + 1 > $this->maxConcurrentSegments - $this->interactiveHeadroom()) {
-                $this->clearReservationIfMine($final, $myGen);
-
-                return null;
-            }
-            if ($this->countInFlightPrewarmEncodes() >= $this->prewarmInFlightBudget()) {
-                // Same compare-and-clear discipline as the cap rollback above:
-                // we reserved this slot at :1433's family and own the generation.
-                $this->clearReservationIfMine($final, $myGen);
-
+            // (8b) Prewarm yields to interactive demand BEFORE a seek is refused. The ledger's
+            // prewarm rules (admitSegmentLaunch()) hold back the interactive headroom and the
+            // prewarm budget. A refused prewarm launch already stood down above, so an admitted
+            // one reaches this point with its slot granted.
+            if ($slot === null) {
                 return null;
             }
             try {
                 $this->touchJobDir($dir);
                 $this->ensureDiskSpace();
-                $segParams = $this->withEncodeThreads($segParams, $inFlight + 1);
+                $segParams = $this->withEncodeThreads($segParams, $slot['inFlight']);
                 $pid = $this->ffmpeg->startSegmentEncode(
                     $inputPath,
                     $final,
@@ -1758,19 +1772,19 @@ class TranscodeManager
                     null,
                     prewarm: true,
                 );
-                if ($pid > 0) {
-                    $this->noteLaunch($final, true); // a failed launch (0) is not in flight
-                }
+                $this->settleLaunch($final, $slot['token'], $pid); // a failed launch (0) releases its slot
             } catch (\Throwable $e) {
-                // The reservation must not leak when the launch itself fails —
+                // The reservation and the slot must not leak when the launch itself fails —
                 // mirrors the inline finally's compare-and-clear.
                 $this->clearReservationIfMine($final, $myGen);
+                $this->releaseSlot($slot['token']);
                 throw $e;
             }
             return $final;
         }
 
         $launched = false;
+        $slotToken = null; // this call's ledger token while its encode is still in flight
         $waitStartNs = $this->nowNs();
         try {
             // SV-4.2-disconnect (SS-1): count this client as an active waiter on
@@ -1778,7 +1792,7 @@ class TranscodeManager
             // launch/yield, so a concurrent cancel/disconnect kill can tell that a
             // SECOND client still wants this exact segment (the finally decrements).
             $this->incrementSegmentWaiter($final);
-            if (!$reserved) {
+            if (!$reserved || $slot === null) {
                 // segmentEncodeInFlight was true — an encode for this exact segment
                 // is already running; piggyback on it rather than spawning a duplicate.
                 // SV-4.2-disconnect F6 (ACCEPTED TRADEOFF): a piggybacker registers
@@ -1795,29 +1809,33 @@ class TranscodeManager
                 // reap-on-last-waiter machinery for this bounded case.
                 $this->touchJobDir($dir);
             } else {
-                // We hold the reservation. Launch the encode.
+                // We hold the reservation and the ledger slot. Launch the encode.
                 $launched = true;
                 $this->touchJobDir($dir);
-                // SV-1.9: ENOSPC guard — check disk space before spawning FFmpeg.
-                // Throws SegmentCacheFullException if below threshold; the HLS
-                // controller catches it, sweeps the cache, and returns 503.
-                $this->ensureDiskSpace();
-                $segParams = $this->withEncodeThreads($segParams, $inFlight + 1);
-                // SV-4.2: pass $final as the cancel key so the spawned ffmpeg PID
-                // is tracked, and the relay cancel group (the hub channel/request
-                // id, when this dispatch is servicing a relayed request) so an
-                // HTTP_CANCEL can kill the encode by channel id (X1).
-                $pid = $this->ffmpeg->startSegmentEncode(
-                    $inputPath,
-                    $final,
-                    $start,
-                    $segLen,
-                    $segParams,
-                    $final,
-                    RequestContext::getRelayCancelGroup(),
-                );
-                if ($pid > 0) {
-                    $this->noteLaunch($final, false); // a failed launch (0) is not in flight
+                try {
+                    // SV-1.9: ENOSPC guard — check disk space before spawning FFmpeg.
+                    // Throws SegmentCacheFullException if below threshold; the HLS
+                    // controller catches it, sweeps the cache, and returns 503.
+                    $this->ensureDiskSpace();
+                    $segParams = $this->withEncodeThreads($segParams, $slot['inFlight']);
+                    // SV-4.2: pass $final as the cancel key so the spawned ffmpeg PID
+                    // is tracked, and the relay cancel group (the hub channel/request
+                    // id, when this dispatch is servicing a relayed request) so an
+                    // HTTP_CANCEL can kill the encode by channel id (X1).
+                    $pid = $this->ffmpeg->startSegmentEncode(
+                        $inputPath,
+                        $final,
+                        $start,
+                        $segLen,
+                        $segParams,
+                        $final,
+                        RequestContext::getRelayCancelGroup(),
+                    );
+                    $slotToken = $this->settleLaunch($final, $slot['token'], $pid) ? $slot['token'] : null;
+                } catch (\Throwable $e) {
+                    // A launch that fails before the encode runs releases its slot at once.
+                    $this->releaseSlot($slot['token']);
+                    throw $e;
                 }
             }
 
@@ -1843,6 +1861,17 @@ class TranscodeManager
             // in this coroutine (no yield between), so no concurrent cancel can
             // observe an inconsistent waiter/registry state.
             $this->decrementSegmentWaiter($final);
+            // Ledger slot (EncodeSlotLedger): free it when the encode published, or when it is
+            // dead without output. A still-running encode after the poll gave up keeps its slot.
+            // Its line is released when it is reaped, when it publishes, or when it ages out.
+            // This check runs BEFORE releaseSegmentProcessAfterWaitTimeout(), which stops
+            // tracking the key, and after that point a live key reads as "alive".
+            // The decision uses THIS launch's own identity (its token and pid), not the key-wide view,
+            // so a sibling launch's death or publish cannot free this token. See launchFinished().
+            if ($slotToken !== null && $this->launchFinished($final, $slotToken)) {
+                $this->releaseSlot($slotToken);
+                $slotToken = null;
+            }
             // Release this worker's fast-path record for the encode WE launched,
             // whether it completed, failed before/while launching, timed out, or the
             // poll threw. Always removing it here means a launched increment can
@@ -1850,11 +1879,9 @@ class TranscodeManager
             // $launched only flips true AFTER the increment, so a throw from the cap
             // check (SegmentBusyException) or anything before it leaves $launched
             // false and this is a correct no-op — nothing was ever recorded to
-            // release. A still-running or slow encode does NOT stop counting against
-            // the global cap: its `.part-*` temp lives on disk until it renames, and
-            // the launch stays in $unseenLaunches until its final is published (or
-            // SEGMENT_UNSEEN_LAUNCH_MAX_NS elapses), so countInFlightSegmentEncodes()
-            // keeps counting it across scan refreshes. The reconcile self-heal remains only a safety
+            // release. A still-running or slow encode does NOT free its ledger slot here:
+            // the slot stays held (see $ledgerHeld) until the encode publishes, is reaped,
+            // or ages out of the ledger, so the cap keeps counting it. The reconcile self-heal remains only a safety
             // net for the dedup-only snapshot (the rare case this finally never runs,
             // e.g. a hard coroutine kill).
             if ($launched) {
@@ -2143,7 +2170,7 @@ class TranscodeManager
         $reserved = false;
         $overCap = false;
         $myGen = 0;
-        $inFlight = 0;
+        $slot = null; // ledger grant for this call's launch, if it admitted one
         if (!$this->segmentEncodeInFlight($final)) {
             // SV-4.2-disconnect F1: generation-stamped reservation (see produceSegment).
             $myGen = ++$this->reservationSeq;
@@ -2151,8 +2178,8 @@ class TranscodeManager
             $reserved = true;
 
             $this->watchdogTick();
-            $inFlight = $this->countInFlightSegmentEncodes();
-            if ($inFlight >= $this->maxConcurrentSegments) {
+            $slot = $this->admitSegmentLaunch(false);
+            if ($slot === null) {
                 // (8a) As in produceSegment(): join a live sibling encode of this exact
                 // segment instead of refusing it. Only an unclaimed segment is refused.
                 $overCap = !$this->liveEncodeExistsFor($final);
@@ -2167,37 +2194,42 @@ class TranscodeManager
         }
 
         $launched = false;
+        $slotToken = null; // this call's ledger token while its encode is still in flight
         $waitStartNs = $this->nowNs();
         try {
             // SV-4.2-disconnect (SS-1): count this client as an active waiter on
             // $final (launcher AND piggyback), BEFORE any launch/yield, so a
             // concurrent cancel/disconnect kill sees a second still-wanting client.
             $this->incrementSegmentWaiter($final);
-            if (!$reserved) {
+            if (!$reserved || $slot === null) {
                 // Dedup hit — an encode for this exact segment is already running.
                 $this->touchJobDir($dir);
             } else {
                 $launched = true;
                 $this->touchJobDir($dir);
-                // SV-1.9: ENOSPC guard — check disk space before spawning FFmpeg.
-                // Throws SegmentCacheFullException if below threshold; the HLS
-                // controller catches it, sweeps the cache, and returns 503.
-                $this->ensureDiskSpace();
-                $segParams = $this->withEncodeThreads($segParams, $inFlight + 1);
-                // SV-4.2: track the spawned PID under $final, plus the relay cancel
-                // group (hub channel/request id) so an HTTP_CANCEL kills by channel
-                // id (X1).
-                $pid = $this->ffmpeg->startSegmentEncode(
-                    $inputPath,
-                    $final,
-                    $start,
-                    $segLen,
-                    $segParams,
-                    $final,
-                    RequestContext::getRelayCancelGroup(),
-                );
-                if ($pid > 0) {
-                    $this->noteLaunch($final, false); // a failed launch (0) is not in flight
+                try {
+                    // SV-1.9: ENOSPC guard — check disk space before spawning FFmpeg.
+                    // Throws SegmentCacheFullException if below threshold; the HLS
+                    // controller catches it, sweeps the cache, and returns 503.
+                    $this->ensureDiskSpace();
+                    $segParams = $this->withEncodeThreads($segParams, $slot['inFlight']);
+                    // SV-4.2: track the spawned PID under $final, plus the relay cancel
+                    // group (hub channel/request id) so an HTTP_CANCEL kills by channel
+                    // id (X1).
+                    $pid = $this->ffmpeg->startSegmentEncode(
+                        $inputPath,
+                        $final,
+                        $start,
+                        $segLen,
+                        $segParams,
+                        $final,
+                        RequestContext::getRelayCancelGroup(),
+                    );
+                    $slotToken = $this->settleLaunch($final, $slot['token'], $pid) ? $slot['token'] : null;
+                } catch (\Throwable $e) {
+                    // A launch that fails before the encode runs releases its slot at once.
+                    $this->releaseSlot($slot['token']);
+                    throw $e;
                 }
             }
 
@@ -2218,6 +2250,14 @@ class TranscodeManager
             // $final (unconditional — launcher and piggyback both incremented) so
             // the map returns to 0 with no leak.
             $this->decrementSegmentWaiter($final);
+            // Ledger slot: same rule as produceSegment()'s finally. Free it when the encode
+            // published or is dead, before the registry hand-off below.
+            // The decision uses THIS launch's own identity (its token and pid), not the key-wide view,
+            // so a sibling launch's death or publish cannot free this token. See launchFinished().
+            if ($slotToken !== null && $this->launchFinished($final, $slotToken)) {
+                $this->releaseSlot($slotToken);
+                $slotToken = null;
+            }
             if ($launched) {
                 // SV-4.2-disconnect F1 (compare-and-clear): only clear + release
                 // while we still own the current generation for $final — see the
@@ -2346,11 +2386,19 @@ class TranscodeManager
      * reservation is created afterwards and its generation-guarded `finally`
      * protects it from the reaped launcher.
      *
+     * The ledger slots are NOT freed here. The reap sends only a TERM, and the process can keep
+     * running through the registry's grace. Its tokens move to {@see $reapedHeld}, and they are
+     * released only when the registry confirms the key's processes are gone, through
+     * {@see onSegmentKeySettled()}. An unconfirmed kill keeps its slot until the line ages out. So a
+     * reaped encode never lets a new admission past the cap while it can still run. See the
+     * Exception 11 note.
+     *
      * @param string $final Final segment path (the reaped registry cancel key).
      */
     public function invalidateReservation(string $final): void
     {
         unset($this->segmentEncodesInFlight[$final], $this->globalInFlightSnapshot[$final]);
+        $this->moveHeldToReaped($final);
     }
 
     /**
@@ -2547,7 +2595,7 @@ class TranscodeManager
     /**
      * True when an on-demand encode for exactly this segment is already running.
      *
-     * DEDUP ONLY (does not gate the global cap — see {@see countInFlightSegmentEncodes()}).
+     * DEDUP ONLY (does not gate the global cap — see {@see admitSegmentLaunch()}).
      * Reads purely from the in-worker bookkeeping — this worker's exact
      * {@see $segmentEncodesInFlight} launches plus the last global snapshot of every
      * worker's `.part-*` temps ({@see $globalInFlightSnapshot}) — so this,
@@ -2570,84 +2618,356 @@ class TranscodeManager
     }
 
     /**
-     * Count on-demand segment encodes in flight, for the global concurrency ceiling in
-     * {@see produceSegment()}. The count is NOT live. It is the shared scan snapshot
-     * ({@see inFlightSnapshot()}, one scan of the shared segment tree per 1 s window)
-     * plus this worker's own launches that the scan may not show yet
-     * ({@see liveUnseenLaunches()}).
+     * Admit one segment launch through the cross-worker slot ledger ({@see EncodeSlotLedger}).
      *
-     * The bound this gives:
-     *   - this worker never admits more than the cap counting its own launches, since they
-     *     are added on top of the scan;
-     *   - sibling workers' launches are seen with up to 1 s of staleness;
-     *   - so across W HTTP workers, one window can have up to W x cap segment encodes in
-     *     flight. That is the cap plus an overshoot of (W-1) x cap. With W = 14 and the
-     *     default cap of 8, that is up to 112 in flight, 104 over the cap. Choosing a live
-     *     glob instead costs one whole-tree scan per cache miss. That trade-off is a
-     *     decision for the owner, and the code keeps the throttled snapshot.
+     * This replaces the old count-based decision. That count was a directory scan refreshed at
+     * most once per second, plus local launch bookkeeping, so across W workers it could overshoot
+     * the cap by W x cap. The ledger is one locked read-modify-write per launch, and it never
+     * scans the tree.
      *
-     * @return int Number of segment encodes counted as in flight.
+     * Rules, all on the same ledger:
+     *  - on-demand (reader): live entries < cap, where cap is server.hls.max_concurrent_segments;
+     *  - prewarm: the reader's rule, plus live entries < cap - interactiveHeadroom() (prewarm
+     *    yields the headroom to a seek), plus live prewarm entries < prewarmInFlightBudget()
+     *    (floor(cap / 2)).
+     *
+     * A refusal is null, and it is also the fail-closed answer when the ledger cannot be locked.
+     *
+     * @return array{token: string, inFlight: int}|null The ledger token to hold for this launch
+     *         and the live count including it, or null when refused.
      */
-    private function countInFlightSegmentEncodes(): int
+    private function admitSegmentLaunch(bool $prewarm): ?array
     {
-        // Wave A′: the total counts BOTH families summed — untagged (on-demand)
-        // temps by the S56-exact base pattern and prewarm-tagged temps by the
-        // disjoint `p`-prefixed pattern. An encode in flight is an encode in
-        // flight for the ceiling's purposes regardless of who launched it; only
-        // the prewarm BUDGET ({@see countInFlightPrewarmEncodes()}) treats the
-        // families differently.
-        //
-        // Fix A′′′: the scan passes through {@see purgeDeadInFlightTemps()} inside
-        // {@see inFlightSnapshot()} — provably-dead orphaned temps are unlinked and
-        // stop counting. The count is the shared snapshot plus this worker's own
-        // unpublished launches (see {@see liveUnseenLaunches()}).
-        $families = $this->inFlightSnapshot();
-
-        return count($families['base'])
-            + count($families['prewarm'])
-            + count($this->liveUnseenLaunches($families['finals']));
-    }
-
-    /**
-     * The launches this worker recorded whose final segment is not yet published, as a list of
-     * their prewarm flags. An entry is dropped when its final exists or when it is older than
-     * {@see self::SEGMENT_UNSEEN_LAUNCH_MAX_NS} on the monotonic clock. An entry whose temp the
-     * latest scan already shows is skipped, because the scan counts that encode, so one
-     * encode is never counted twice.
-     *
-     * @param array<string, true> $scannedFinals Finals that have a live temp in the latest scan.
-     *
-     * @return list<bool>
-     */
-    private function liveUnseenLaunches(array $scannedFinals): array
-    {
-        $now = $this->nowNs();
-        $live = [];
-        foreach ($this->unseenLaunches as $final => $entry) {
-            if (is_file((string) $final) || ($now - $entry['startedNs']) >= self::SEGMENT_UNSEEN_LAUNCH_MAX_NS) {
-                unset($this->unseenLaunches[$final]);
-                continue;
-            }
-            if (isset($scannedFinals[$final])) {
-                continue;
-            }
-            $live[] = $entry['prewarm'];
+        // A published or dead encode frees its slot before this decision, not at the next
+        // throttled reconcile. The sweep reads only the few slots this worker holds (at most
+        // the cap), with one is_file() each and a liveness probe for a running one.
+        $this->sweepHeldSlots();
+        $ledger = $this->slotLedger();
+        if (!$prewarm) {
+            return $ledger->acquire($this->maxConcurrentSegments);
         }
 
-        return $live;
+        return $ledger->acquire(
+            $this->maxConcurrentSegments,
+            true,
+            $this->maxConcurrentSegments - $this->interactiveHeadroom(),
+            $this->prewarmInFlightBudget(),
+        );
     }
 
     /**
-     * The shared in-flight snapshot: one segment-tree scan serves the global cap, the
-     * prewarm budget and the dedup reconcile, refreshed at most once per
-     * {@see self::SEGMENT_INFLIGHT_SCAN_INTERVAL_NS} on the monotonic clock. A single launch
-     * therefore performs at most one scan, however many of those reads it makes.
+     * The ledger this manager admits through. Built once per worker from the segment cache root
+     * and the encode wall bound, unless a test injected one.
+     */
+    private function slotLedger(): EncodeSlotLedger
+    {
+        return $this->slotLedger ??= new EncodeSlotLedger(
+            $this->segmentDir . '/' . EncodeSlotLedger::FILE_NAME,
+            EncodeSlotLedger::lifetimeFor($this->segmentMaxWallSeconds()),
+            $this->logger,
+        );
+    }
+
+    /**
+     * Inject the admission ledger. A test uses it to pass a ledger with a fake clock or lock.
+     */
+    public function setEncodeSlotLedger(EncodeSlotLedger $ledger): void
+    {
+        $this->slotLedger = $ledger;
+    }
+
+    /**
+     * The encode wall bound in seconds (`ffmpeg.segment_max_wall_seconds`). A launch's ledger
+     * line is held at most this long, plus the ledger's margin.
+     */
+    private function segmentMaxWallSeconds(): int
+    {
+        // The one normalisation of this value: the registry watchdog takes the same int (see
+        // TranscodeServicesProvider), so the ledger lifetime and the registry's cap cannot disagree.
+        return EncodeSlotLedger::wallSecondsFrom(
+            \Phlix\Config\EffectiveConfig::file('ffmpeg')['segment_max_wall_seconds'] ?? null,
+            (int) SegmentProcessRegistry::DEFAULT_MAX_WALL_SECONDS,
+        );
+    }
+
+    /**
+     * Record the outcome of a launch in the slot bookkeeping. A launch that started (positive
+     * PID) keeps its ledger token held until its encode publishes, dies, or is reaped. A failed
+     * launch (0) releases its token at once. Returns true when the token stays held.
+     */
+    private function settleLaunch(string $final, string $token, int $pid): bool
+    {
+        if ($pid > 0) {
+            $this->ledgerHeld[$final][$token] = ['at' => time(), 'pid' => $pid];
+            // Record the pid on the line, so the ledger keeps it past its lifetime while it runs.
+            // A failed write leaves the pid at 0: the line then expires by age, as before.
+            $this->slotLedger()->attachPid($token, $pid);
+
+            return true;
+        }
+        $this->releaseSlot($token);
+
+        return false;
+    }
+
+    /**
+     * Release one launch's ledger token, from its own launch path (the finished check, the
+     * sweep's age expiry, or a failed launch). A token that is in {@see $reapedHeld} is NEVER
+     * released here: a reaped launch's slot is released only by the settle gate
+     * ({@see onSegmentKeySettled()}), because its process may still run through the registry's
+     * grace, whatever the new encode of the same key has done since.
+     */
+    private function releaseSlot(string $token): void
+    {
+        if ($this->isReapedToken($token)) {
+            return;
+        }
+        $this->releaseLedgerToken($token);
+    }
+
+    /**
+     * The ledger release itself, used by {@see releaseSlot()} and by the settle gate. Idempotent: a
+     * token that is already released, expired, or unknown is a no-op in the ledger.
      *
-     * A refresh does not touch {@see $unseenLaunches}. Those entries expire on their own when
-     * their final is published or after {@see self::SEGMENT_UNSEEN_LAUNCH_MAX_NS}.
+     * A release that failed on a write, or on the lock, stays pending and is retried by the next
+     * reconcile tick, at most RELEASE_MAX_ATTEMPTS times. The false return means "deferred", and the
+     * caller stops its pass. The token is kept in the held maps, so it is not dropped. After the last
+     * attempt it is logged and forgotten here, and its line expires by age. A false return with no
+     * failure is the idempotent no-op, and is not retried.
      *
-     * @return array{base: list<string>, prewarm: list<string>, finals: array<string, true>}
-     *         Post-purge temp paths per family, plus the set of final paths they belong to.
+     * @return bool False when the release was deferred to the retry queue, true otherwise.
+     */
+    private function releaseLedgerToken(string $token): bool
+    {
+        $ledger = $this->slotLedger();
+        $ledger->release($token);
+        if ($ledger->lastFailed()) {
+            $attempts = ($this->releasePending[$token] ?? 0) + 1;
+            if ($attempts < self::RELEASE_MAX_ATTEMPTS) {
+                $this->releasePending[$token] = $attempts;
+
+                return false; // kept in the held maps, retried by sweepHeldSlots()
+            }
+            $this->logger->warning('Encode slot release failed repeatedly; the line expires by age', [
+                'attempts' => $attempts,
+            ]);
+        }
+        unset($this->releasePending[$token]);
+
+        foreach ($this->ledgerHeld as $final => $tokens) {
+            if (isset($tokens[$token])) {
+                unset($this->ledgerHeld[$final][$token]);
+                if ($this->ledgerHeld[$final] === []) {
+                    unset($this->ledgerHeld[$final]);
+                }
+            }
+        }
+        foreach ($this->reapedHeld as $final => $reaps) {
+            foreach ($reaps as $reapId => $reap) {
+                if (isset($reap['tokens'][$token])) {
+                    unset($this->reapedHeld[$final][$reapId]['tokens'][$token]);
+                    if ($this->reapedHeld[$final][$reapId]['tokens'] === []) {
+                        unset($this->reapedHeld[$final][$reapId]);
+                    }
+                }
+            }
+            if (($this->reapedHeld[$final] ?? []) === []) {
+                unset($this->reapedHeld[$final]);
+            }
+        }
+
+        return true;
+    }
+
+    /** True when the token belongs to a reap in {@see $reapedHeld}. */
+    private function isReapedToken(string $token): bool
+    {
+        foreach ($this->reapedHeld as $reaps) {
+            foreach ($reaps as $reap) {
+                if (isset($reap['tokens'][$token])) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * True when the token belongs to a reap that is not confirmed settled (pending, or unconfirmed). Only
+     * a confirmed settle lets the settle gate free such a token. A token of a confirmed reap is not held
+     * by this check, so its deferred release can still be retried.
+     */
+    private function isUnsettledReapedToken(string $token): bool
+    {
+        foreach ($this->reapedHeld as $reaps) {
+            foreach ($reaps as $reap) {
+                if (isset($reap['tokens'][$token]) && $reap['settled'] !== true) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether a held launch is finished, judged from its OWN identity: its token's pid, read through
+     * the registry. A key-wide answer is used only where it is all there is:
+     *  - the launch's pid is tracked under the key (or as an orphan): finished when that pid is no
+     *    longer a live process. A dead or published sibling of the same key does not change it;
+     *  - the key is untracked by this worker (no registry record, or no registry wired): the only
+     *    signal left is the published file, so finished means the final exists. This is the case that
+     *    keeps the pre-existing behaviour.
+     * A test seam ({@see setEncodeLivenessProbe()}) answers for the key, as it did before.
+     */
+    private function launchFinished(string $final, string $token): bool
+    {
+        if ($this->encodeLivenessProbe !== null) {
+            return is_file($final) || !(bool) ($this->encodeLivenessProbe)($final);
+        }
+        $pid = $this->ledgerHeld[$final][$token]['pid'] ?? 0;
+        $alive = $this->segmentRegistry?->launchAlive($final, (int) $pid);
+        if ($alive === null) {
+            return is_file($final);
+        }
+        // A token with no pid (a reaped token, whose ledgerHeld entry has moved on, or one whose launch
+        // never recorded a pid) is not known to be finished. launchAlive() reads it as not alive, which would
+        // release it. Only the settle gate or the age bound frees such a token.
+        if ((int) $pid <= 0) {
+            return false;
+        }
+
+        return !$alive;
+    }
+
+    /**
+     * Move a reaped key's held tokens to {@see $reapedHeld}, under a new reap id. They stay held
+     * until the registry settles the key. A reap stops the key's processes, but TERM is not a
+     * confirmed stop, so the slots are not freed here. Each reap settles on its own, so an earlier
+     * unconfirmed reap's tokens are never released by a later reap's confirmed settle.
+     */
+    private function moveHeldToReaped(string $final): void
+    {
+        $tokens = $this->ledgerHeld[$final] ?? [];
+        unset($this->ledgerHeld[$final]);
+        if ($tokens === []) {
+            return;
+        }
+        $this->reapSeq++;
+        $this->reapedHeld[$final][$this->reapSeq] = ['settled' => null, 'tokens' => $tokens];
+    }
+
+    /**
+     * Registry callback ({@see SegmentProcessRegistry::setSettledCallback()}). Fired once no reaped
+     * launch of `$final` remains in the registry. The settle applies to the key's PENDING reaps only,
+     * that is the ones not yet settled:
+     *  - `$confirmed` true: every pending reap's tokens are released through the ledger;
+     *  - `$confirmed` false: the pending reaps are marked unconfirmed. Their tokens keep their slots
+     *    until their lines age out, and no later confirmed settle of this key can release them.
+     * A reap recorded after a settle is pending again, so its own settle decides only its own tokens.
+     */
+    public function onSegmentKeySettled(string $final, bool $confirmed): void
+    {
+        if (!isset($this->reapedHeld[$final])) {
+            return;
+        }
+        foreach ($this->reapedHeld[$final] as $reapId => $reap) {
+            if ($reap['settled'] !== null) {
+                continue;
+            }
+            if (!$confirmed) {
+                $this->reapedHeld[$final][$reapId]['settled'] = false;
+                continue;
+            }
+            $this->reapedHeld[$final][$reapId]['settled'] = true;
+            foreach (array_keys($reap['tokens']) as $token) {
+                if (!$this->releaseLedgerToken((string) $token)) {
+                    return; // deferred: retried by sweepHeldSlots() while the reap stays settled
+                }
+            }
+        }
+    }
+
+    /**
+     * Release held ledger tokens whose encode has finished or died, and expire the ones older
+     * than the ledger lifetime. Runs from the reconcile tick, once per window. A token is kept
+     * only while its encode is still running. Pending failed releases are retried first. A reaped
+     * key's tokens are released only once the registry has confirmed it.
+     */
+    private function sweepHeldSlots(): void
+    {
+        $now = time();
+        $lifetime = EncodeSlotLedger::lifetimeFor($this->segmentMaxWallSeconds());
+
+        // A deferred release (the ledger is contended or unwritable) ends this pass at once, so a
+        // held lock costs one bounded attempt per tick, not one per token. The rest waits for the next tick.
+        foreach (array_keys($this->releasePending) as $token) {
+            // A deferred release is retried through the same guard as releaseSlot(). A token that was
+            // reaped after its release failed is released only by its settle gate, never by this retry.
+            if ($this->isUnsettledReapedToken((string) $token)) {
+                continue;
+            }
+            if (!$this->releaseLedgerToken((string) $token)) {
+                return;
+            }
+        }
+
+        foreach ($this->ledgerHeld as $final => $tokens) {
+            foreach ($tokens as $token => $held) {
+                if (isset($this->releasePending[(string) $token])) {
+                    continue; // handled by the retry pass above
+                }
+                $aged = ($now - $held['at']) >= $lifetime;
+                if (
+                    ($aged || $this->launchFinished((string) $final, (string) $token))
+                    && !$this->releaseLedgerToken((string) $token)
+                ) {
+                    return;
+                }
+            }
+        }
+
+        foreach ($this->reapedHeld as $final => $reaps) {
+            foreach ($reaps as $reapId => $reap) {
+                if ($reap['settled'] === true) {
+                    // Settled confirmed, but the release was deferred earlier: retry it here.
+                    foreach (array_keys($reap['tokens']) as $token) {
+                        if (
+                            !isset($this->releasePending[(string) $token])
+                            && !$this->releaseLedgerToken((string) $token)
+                        ) {
+                            return;
+                        }
+                    }
+                    continue;
+                }
+                // Pending or unconfirmed: nothing is released here. Forget the reap once every token
+                // is past its lifetime, since the ledger has expired those lines by then.
+                $expired = true;
+                foreach ($reap['tokens'] as $held) {
+                    if (($now - $held['at']) < $lifetime) {
+                        $expired = false;
+                        break;
+                    }
+                }
+                if ($expired) {
+                    unset($this->reapedHeld[$final][$reapId]);
+                }
+            }
+            if (($this->reapedHeld[$final] ?? []) === []) {
+                unset($this->reapedHeld[$final]);
+            }
+        }
+    }
+
+    /**
+     * The shared in-flight snapshot: one segment-tree scan, refreshed at most once per
+     * {@see self::SEGMENT_INFLIGHT_SCAN_INTERVAL_NS} on the monotonic clock. The dedup reconcile
+     * and the reaper/prune paths read it. Admission does NOT read it: that is the slot ledger.
+     *
+     * @return array{base: list<string>, prewarm: list<string>}
+     *         Post-purge temp paths per family.
      */
     private function inFlightSnapshot(): array
     {
@@ -2665,30 +2985,11 @@ class TranscodeManager
         $base = $this->purgeDeadInFlightTemps($families['base']);
         $prewarm = $this->purgeDeadInFlightTemps($families['prewarm']);
 
-        $finals = [];
-        foreach (array_merge($base, $prewarm) as $part) {
-            $final = preg_replace('/\.part-p?[0-9a-f]+$/', '', $part);
-            if (is_string($final) && $final !== $part) {
-                $finals[$final] = true;
-            }
-        }
-        $this->inFlightScan = ['base' => $base, 'prewarm' => $prewarm, 'finals' => $finals];
+        $this->inFlightScan = ['base' => $base, 'prewarm' => $prewarm];
 
         return $this->inFlightScan;
     }
 
-    /**
-     * Records an encode this worker has just spawned, so the next counts include it even
-     * before its temp is visible in the shared snapshot. Call this only when
-     * startSegmentEncode() actually started the encode (it returned a positive PID).
-     *
-     * @param string $final    Final segment path (the cancel key).
-     * @param bool   $prewarm  True for a C6 head-start launch (counts toward the prewarm budget).
-     */
-    private function noteLaunch(string $final, bool $prewarm): void
-    {
-        $this->unseenLaunches[$final] = ['prewarm' => $prewarm, 'startedNs' => $this->nowNs()];
-    }
 
     /**
      * Every in-flight atomic-write temp in the shared segment tree, split into the
@@ -2765,20 +3066,6 @@ class TranscodeManager
         }
 
         return $families;
-    }
-
-    /**
-     * Count in-flight encodes that were launched by the C6 prewarm head start, across ALL jobs
-     * and ALL workers, from the shared scan snapshot's `.part-p{8 hex}`-tagged temps (wave A′),
-     * plus this worker's own unpublished prewarm launches. The same snapshot bound as
-     * {@see countInFlightSegmentEncodes()} applies: sibling workers are seen up to 1 s late.
-     * Reading the snapshot keeps this budget off the whole-tree glob on every prewarm decision.
-     */
-    private function countInFlightPrewarmEncodes(): int
-    {
-        $families = $this->inFlightSnapshot();
-
-        return count($families['prewarm']) + count(array_filter($this->liveUnseenLaunches($families['finals'])));
     }
 
     /**
@@ -2920,7 +3207,7 @@ class TranscodeManager
      * Reconcile the in-worker DEDUP bookkeeping against the shared segment tree —
      * throttled to at most one glob per {@see SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS}.
      * Its output ({@see $globalInFlightSnapshot}) does not feed the global cap, which reads the
-     * shared scan snapshot (see {@see countInFlightSegmentEncodes()}); this only keeps
+     * slot ledger (see {@see admitSegmentLaunch()}); this only keeps
      * {@see segmentEncodeInFlight()}'s cross-worker dedup view fresh and self-heals
      * {@see $segmentEncodesInFlight}.
      *
@@ -2971,6 +3258,10 @@ class TranscodeManager
             }
         }
         $this->globalInFlightSnapshot = $snapshot;
+
+        // Ledger slots this worker holds: release the ones whose encode published or died, and
+        // expire the ones past the ledger lifetime. Admission itself never reads this snapshot.
+        $this->sweepHeldSlots();
 
         foreach ($this->segmentEncodesInFlight as $final => $entry) {
             if (isset($snapshot[$final])) {
@@ -3196,6 +3487,11 @@ class TranscodeManager
     public function setSegmentProcessRegistry(?SegmentProcessRegistry $registry): void
     {
         $this->segmentRegistry = $registry;
+        // The registry tells this manager when a reaped key is confirmed gone, which is when its
+        // ledger slots are freed (see onSegmentKeySettled()).
+        $registry?->setSettledCallback(
+            fn (string $key, bool $confirmed) => $this->onSegmentKeySettled($key, $confirmed)
+        );
     }
 
     /**
@@ -3284,7 +3580,8 @@ class TranscodeManager
      * instead of joining it. This is a known bound, listed in the open items of
      * {@see SegmentProcessRegistry}. Joining a corpse made the request wait the full poll
      * and then 404, where a refusal is an immediate 503. A corpse is also not purged here
-     * (no side effect on the join path). The count purge still bounds it.
+     * (no side effect on the join path). The dead-temp purge in {@see inFlightSnapshot()} bounds
+     * it, and the slot ledger's age expiry frees the slot of a corpse (see EncodeSlotLedger).
      *
      * @param string $final Absolute path of the target segment.
      */

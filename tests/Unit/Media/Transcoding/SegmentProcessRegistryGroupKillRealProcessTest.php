@@ -189,10 +189,26 @@ SH;
             self::assertSame([], $cleaned, 'no temp is removed while the group may still be alive');
             self::assertContains($child, self::groupMembers($leader), 'the child is still alive inside the grace');
 
-            // Past the grace: one SIGKILL to the group, then the record is dropped.
+            // Past the grace: the pass that sends SIGKILL keeps the record and its temp. The group is still
+            // observed alive on that pass (the TERMed leader is an un-reaped zombie in it).
             $registry->sweep($t + (int) (2 * self::GRACE_SECONDS * self::SEC));
-            self::assertSame(0, $registry->orphanCount(), 'the record is dropped after the SIGKILL step');
-            self::assertSame([$tmp], $cleaned, 'the launch temp is removed once the group is escalated');
+            self::assertSame(1, $registry->orphanCount(), 'the record is still held on the pass that sends SIGKILL');
+            self::assertSame([], $cleaned, 'no temp is removed on the pass that sends SIGKILL');
+
+            // Reap the TERMed leader, as its parent does, then wait until the group reads gone by the
+            // same probe the registry uses: kill(-pgid, 0) fails (ESRCH). The TERM-ignoring child must
+            // be among the processes that went.
+            proc_get_status($process);
+            $deadline = hrtime(true) + 5 * self::SEC;
+            while (hrtime(true) < $deadline && posix_kill(-$leader, 0)) {
+                usleep(20_000);
+            }
+            self::assertFalse(posix_kill(-$leader, 0), 'the group is observed gone by the probe after the SIGKILL step');
+
+            // One more pass: the group is observed gone, so the record is dropped and the temp is removed.
+            $registry->sweep($t + (int) (3 * self::GRACE_SECONDS * self::SEC));
+            self::assertSame(0, $registry->orphanCount(), 'the record is dropped on the pass that observes the group gone');
+            self::assertSame([$tmp], $cleaned, 'the launch temp is removed once the group is observed gone');
 
             // The SIGKILL is asynchronous, so poll briefly. The child must be gone.
             $deadline = hrtime(true) + 5 * self::SEC;

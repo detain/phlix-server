@@ -55,8 +55,9 @@ use Psr\Log\NullLogger;
  * it. A reaped encode's slot and `.part` temp are released once its group has
  * had its SIGKILL. The sweep is non-blocking: SIGTERM now, SIGKILL on a later sweep.
  *
- * PID identity (Linux): the liveness probe is `posix_kill($pid, 0)`, which reports
- * a zombie as alive and cannot tell a reused PID from the encode it launched. So on
+ * PID identity (Linux): the liveness probe is `posix_kill($pid, 0)`, read as alive unless it
+ * fails with ESRCH (EPERM counts as alive). It reports a zombie as alive and cannot tell a reused PID
+ * from the encode it launched. So on
  * Linux each PID's `/proc/<pid>/stat` start time (field 22) is recorded at
  * registration. A PID whose state is `Z`, or whose start time has changed, is dead
  * for liveness.
@@ -166,6 +167,13 @@ final class SegmentProcessRegistry
     private const PROGRESS_TAIL_BYTES = 8192;
 
     /**
+     * Linux ESRCH (3), read through posix_get_last_error() after a failed signal-0 probe: no process
+     * has that PID, or no process has that group id. It is the only errno that reads as "gone". EPERM
+     * (1) means the target exists but may not be signalled by this process, so it reads as alive.
+     */
+    private const ERRNO_ESRCH = 3;
+
+    /**
      * The shipped wall-clock cap in seconds (see {@see $maxWallSeconds}). Public so
      * the manager can bound a temp join without holding a registry instance.
      */
@@ -239,8 +247,9 @@ final class SegmentProcessRegistry
     private $signalSender;
 
     /**
-     * Liveness probe: fn(int $pid): bool. Defaults to posix_kill($pid, 0) /
-     * /proc probe against the group-leader PID. Overridable in tests. A zombie
+     * Liveness probe: fn(int $pid): bool. Defaults to posix_kill($pid, 0), read through the signal-0
+     * seam ({@see $signalZero}: ESRCH is gone, EPERM is alive), or the /proc probe without posix. Overridable
+     * in tests. A zombie
      * reports alive here, so {@see isLive()} also checks `/proc`.
      *
      * @var callable(int): bool
@@ -316,6 +325,40 @@ final class SegmentProcessRegistry
     private $onReap = null;
 
     /**
+     * Fired when a reaped key has no launch left in the registry: `fn(string $key, bool $confirmed)`.
+     *
+     * When a settle is reported, and whether it is confirmed:
+     *  - a SIGNALLED reap (kill(), killGroup(), a stall or a wall-clock reap) is always settled at a grace
+     *    tick, never at the TERM. Each launch is observed at the grace tick after its TERM, and the SIGKILL
+     *    step has run by then. A launch that is still held (its group alive, or its identity unknown with
+     *    its process alive) keeps the record until the hold bound. The settle is confirmed only when every
+     *    launch of the key was observed gone at a grace tick inside the bound: its process group
+     *    (`kill(-pgid, 0)`) returned ESRCH, and its identity could be checked;
+     *  - a launch that was NEVER signalled (a watchdog-held launch released with no TERM) and was then
+     *    found dead by a sweep, is confirmed at the first sweep that observes its process group gone (ESRCH)
+     *    too. Nothing was sent to it, so nothing can have been killed, and the observation is the same one a
+     *    grace tick takes. While the group is still alive its record and temps are held; at the hold bound
+     *    the record is dropped UNCONFIRMED.
+     * A process that survives the KILL (for example one in D state) holds the record, and the settle is
+     * unconfirmed once the hold bound passes. A launch whose identity cannot be checked (`/proc` unreadable
+     * at the reap) is unconfirmed as well. Unconfirmed means the owner keeps its ledger slot until the line
+     * ages out. The owner ({@see TranscodeManager}) frees its slot only on a confirmed settle. The settle
+     * is fired only when no orphan record for the key remains, so a later sibling reap is never released early.
+     *
+     * @var (callable(string, bool): void)|null
+     */
+    private $onSettled = null;
+
+    /**
+     * Keys with an orphan record dropped UNCONFIRMED while another record of the same key was still
+     * held. Their next settle is reported unconfirmed, and the mark is cleared when it is reported.
+     * Bounded by the keys that have a held orphan, so it does not grow without limit.
+     *
+     * @var array<string, true>
+     */
+    private array $unconfirmedKeys = [];
+
+    /**
      * Seconds to wait for graceful SIGTERM exit before escalating to SIGKILL.
      * Deliberately short: segment encodes are small and disposable.
      */
@@ -345,9 +388,17 @@ final class SegmentProcessRegistry
      * releases its temp at once. A launch that may still run (see {@see heldPids()}) keeps its
      * own temp and its cap slot, up to {@see $unverifiedHoldSeconds} after TERM.
      *
+     * `unverified` is true for a reaped record whose launch had a recorded start time but no membership
+     * snapshot at TERM (`/proc` unreadable). Its settle is never confirmed.
+     *
+     * `deadNs` is set for a record that was never signalled (`termNs` null) and whose leader was found dead while
+     * its process group was still observed alive. Its temps and the record are held until that group is observed
+     * gone, or until the hold bound passes from `deadNs` (see the dead-before-signal branch of {@see sweep()}).
+     *
      * @var list<array{key: string, pids: array<int, int>, starts: array<int, int|null>,
      *     tmps: array<int, string>, tmpsByPid: array<int, array<int, string>>, startedNs: int,
-     *     lastToken: int, lastGrowNs: int, termNs: int|null, members: array<int, int>|null}>
+     *     lastToken: int, lastGrowNs: int, termNs: int|null, members: array<int, int>|null,
+     *     unverified: bool, deadNs: int|null}>
      */
     private array $orphans = [];
 
@@ -411,14 +462,27 @@ final class SegmentProcessRegistry
 
     /**
      * Group-alive probe: fn(int $pid): bool. True while any process still carries `$pid` as its
-     * process group id (`kill(-pid, 0)`). It is asked about each UNCHECKED leader of a TERMed record
-     * (see {@see heldPids()} and {@see uncheckedGroupAlive()}). Such a group's members were never
-     * snapshotted, so nothing in it can be KILLed, but they still hold the temp and the cap slot.
-     * Overridable in tests. Its default is false when posix is absent.
+     * process group id (`kill(-pid, 0)`). It is asked about every leader of a TERMed record, at the grace
+     * tick and in the settle check (see {@see heldPids()} and {@see groupGone()}). A group still alive
+     * holds its launch, and only a group observed gone lets a settle be confirmed. A group's members that
+     * were never snapshotted cannot be KILLed, but they still hold the temp and the cap slot.
+     * The default reads {@see $signalZero}: ESRCH is gone, and every other outcome, EPERM included, is
+     * alive. Without posix the group is alive too, so nothing is observed gone and the settle is unconfirmed.
+     * Overridable in tests.
      *
      * @var callable(int): bool
      */
     private $groupAliveProbe;
+
+    /**
+     * Raw signal-0 probe: fn(int $target): ?int. `$target` is a PID, or a negative group id for a group.
+     * It returns 0 when the signal was deliverable, the errno (posix_get_last_error()) when the call failed,
+     * and null when the posix extension is missing. The group-alive and liveness defaults read it. Overridable
+     * in tests, so EPERM, ESRCH and a missing posix extension are exercised without real processes.
+     *
+     * @var callable(int): (int|null)
+     */
+    private $signalZero;
 
     /**
      * Per-process signal sender: fn(int $pid, int $signal): void. Sends to ONE PID (not the
@@ -467,13 +531,14 @@ final class SegmentProcessRegistry
     ) {
         $this->logger = $logger ?? new NullLogger();
         $this->signalSender = $signalSender ?? self::defaultSignalSender();
-        $this->isAlive = $isAlive ?? self::defaultLivenessProbe();
+        $this->signalZero = self::defaultSignalZeroProbe();
+        $this->isAlive = $isAlive ?? $this->defaultLivenessProbe();
         $this->procStat = self::defaultProcStatReader();
         $this->tempCleaner = $tempCleaner ?? self::defaultTempCleaner();
         $this->gracePeriodSeconds = $gracePeriodSeconds;
         $this->progressProbe = self::defaultProgressProbe();
         $this->groupMembersProbe = self::defaultGroupMembersProbe();
-        $this->groupAliveProbe = self::defaultGroupAliveProbe();
+        $this->groupAliveProbe = $this->defaultGroupAliveProbe();
         $this->processSignalSender = self::defaultProcessSignalSender();
         $this->procMounted = self::defaultProcMounted();
     }
@@ -560,13 +625,25 @@ final class SegmentProcessRegistry
 
     /**
      * Override the group-alive probe used for an unchecked leader's group (see {@see $groupAliveProbe}).
-     * Null restores the default (`posix_kill(-pid, 0)`, or false without posix). Tests pass a fake.
+     * Null restores the default (`kill(-pid, 0)` through {@see $signalZero}). Tests pass a fake.
      *
      * @param (callable(int): bool)|null $groupAliveProbe
      */
     public function setGroupAliveProbe(?callable $groupAliveProbe): void
     {
-        $this->groupAliveProbe = $groupAliveProbe ?? self::defaultGroupAliveProbe();
+        $this->groupAliveProbe = $groupAliveProbe ?? $this->defaultGroupAliveProbe();
+    }
+
+    /**
+     * Override the raw signal-0 probe under the group-alive and liveness defaults (see {@see $signalZero}).
+     * Null restores the posix call. A test passes an errno (1 for EPERM, 3 for ESRCH), 0 for delivered, or
+     * null for a missing posix extension.
+     *
+     * @param (callable(int): (int|null))|null $signalZero
+     */
+    public function setSignalZeroProbe(?callable $signalZero): void
+    {
+        $this->signalZero = $signalZero ?? self::defaultSignalZeroProbe();
     }
 
     /**
@@ -617,6 +694,38 @@ final class SegmentProcessRegistry
     public function setReapCallback(?callable $onReap): void
     {
         $this->onReap = $onReap;
+    }
+
+    /**
+     * Wire the settled callback: `fn(string $key, bool $confirmed)`. See {@see $onSettled}. Passing
+     * null clears it.
+     *
+     * @param (callable(string, bool): void)|null $onSettled
+     */
+    public function setSettledCallback(?callable $onSettled): void
+    {
+        $this->onSettled = $onSettled;
+    }
+
+    /**
+     * Report a reaped key as settled, unless an orphan record for it still remains. Called after the
+     * orphan list is final for the pass.
+     */
+    private function notifySettled(string $key, bool $confirmed): void
+    {
+        foreach ($this->orphans as $orphan) {
+            if ($orphan['key'] === $key) {
+                return; // still held: the taint, if any, waits for the settle that reports the whole key
+            }
+        }
+        // An earlier unconfirmed drop of this key (its orphan went while a sibling was still held) makes
+        // every later settle of the key unconfirmed, so a confirmed sibling cannot free the earlier launch.
+        $confirmed = $confirmed && !isset($this->unconfirmedKeys[$key]);
+        unset($this->unconfirmedKeys[$key]);
+        if ($this->onSettled === null) {
+            return;
+        }
+        ($this->onSettled)($key, $confirmed);
     }
 
     /**
@@ -717,7 +826,9 @@ final class SegmentProcessRegistry
      * (see {@see sigkillMembers()}). Each launch's temp is removed unless that launch is still held
      * (see the grace branch and {@see heldPids()}). The SIGKILL is not waited on.
      * Nothing in the pass sleeps. A launch that was found dead before any signal has its
-     * temps removed at once. Driven by a per-worker timer and also, throttled, from the cap
+     * temps removed at once only when its process group is observed gone; while the group is
+     * still alive, its temps and record are held until a later pass sees the group gone, or
+     * until the hold bound passes. Driven by a per-worker timer and also, throttled, from the cap
      * check in TranscodeManager.
      *
      * Rules, per launch:
@@ -785,6 +896,9 @@ final class SegmentProcessRegistry
         }
 
         $keep = [];
+        // Keys whose orphan record was dropped this pass => true while every dropped record of the key
+        // is confirmed gone (dead or KILLed within the bound), false if any may still run.
+        $dropped = [];
         foreach ($this->orphans as $orphan) {
             if ($orphan['termNs'] !== null) {
                 // Already sent TERM. Hold the record for the whole grace window, whatever the
@@ -801,9 +915,10 @@ final class SegmentProcessRegistry
                 // Each launch's temp is judged on its own launch (see heldPids()). A launch that is dead
                 // or was KILLed releases its temp now, even when a sibling launch of the same record is
                 // still held. Only a launch that may still run keeps its temp, and only up to the bound.
-                $held = $now - $orphan['termNs'] < $this->unverifiedHoldNanoseconds()
-                    ? $this->heldPids($orphan['pids'], $orphan['starts'], $orphan['members'])
-                    : [];
+                $bounded = $now - $orphan['termNs'] >= $this->unverifiedHoldNanoseconds();
+                $held = $bounded
+                    ? []
+                    : $this->heldPids($orphan['pids'], $orphan['starts'], $orphan['members']);
                 $remaining = [];
                 foreach ($orphan['tmpsByPid'] as $pid => $pidTmps) {
                     if (in_array($pid, $held, true)) {
@@ -813,7 +928,13 @@ final class SegmentProcessRegistry
                     }
                 }
                 if ($held === []) {
-                    continue; // escalated and dropped
+                    // Escalated and dropped. Confirmed only when every group was observed gone at this tick
+                    // (heldPids() holds any launch whose group is still alive), the bound did not pass, and
+                    // the identity was verifiable. Otherwise the settle is unconfirmed.
+                    $dropped[$orphan['key']] = ($dropped[$orphan['key']] ?? true)
+                        && !$bounded
+                        && !$orphan['unverified'];
+                    continue;
                 }
                 // Something this launch cannot KILL may still run. Keep the record with only the held
                 // launches' temps, so their cap slot stays until that is verified gone or the bound passes.
@@ -824,8 +945,30 @@ final class SegmentProcessRegistry
             }
 
             if (!$this->anyAlive($orphan['pids'], $orphan['starts'])) {
+                // Dead before any signal: this record was never sent a TERM, so this is not a grace tick, and the
+                // settle is taken here, as documented on $onSettled. The leader is `timeout` (the registered pgid
+                // leader of `setsid timeout … sh -c '… && mv -f <tmp> <out>'`), and its publishing shell is a child
+                // that can outlive it. So the leader's death does not mean the group is empty: the temp (and the
+                // record) are held while the process group is still observed alive. The temp is the path its `mv`
+                // needs, so removing it early is what would stop a publish. See Exception 12.
+                if ($this->groupGone($orphan['pids'])) {
+                    // Nothing in the group runs (or none existed): the temp goes at once, and the settle is confirmed.
+                    $this->cleanTemps($orphan['tmps']);
+                    $dropped[$orphan['key']] = $dropped[$orphan['key']] ?? true;
+                    continue;
+                }
+                $deadNs = $orphan['deadNs'] ?? $now;
+                if ($now - $deadNs < $this->unverifiedHoldNanoseconds()) {
+                    // Still held: keep the record and its temps until the group reads gone at a later tick.
+                    $orphan['deadNs'] = $deadNs;
+                    $keep[] = $orphan;
+                    continue;
+                }
+                // The hold bound passed with the group still alive: the temps go, and the settle is unconfirmed
+                // (a member may still run). `false` dominates any earlier confirmed drop of the same key.
                 $this->cleanTemps($orphan['tmps']);
-                continue; // dead before any signal → gone
+                $dropped[$orphan['key']] = false;
+                continue;
             }
 
             $lastToken = $orphan['lastToken'];
@@ -843,11 +986,21 @@ final class SegmentProcessRegistry
                 ]);
                 $orphan['termNs'] = $now;
                 $orphan['members'] = $this->sendTerm($orphan['pids'], $orphan['starts']);
+                // Same rule as signalOrphanForStall(): an identity unknown at the TERM (no membership snapshot
+                // while a start time was recorded) makes the settle unconfirmed, whatever the group reads at the grace.
+                $orphan['unverified'] = $orphan['unverified']
+                    || ($orphan['members'] === null && $this->anyRecordedStart($orphan['pids'], $orphan['starts']));
                 $signalled++;
             }
             $keep[] = $orphan;
         }
         $this->orphans = $keep;
+        foreach ($dropped as $droppedKey => $confirmed) {
+            if (!$confirmed) {
+                $this->unconfirmedKeys[(string) $droppedKey] = true;
+            }
+            $this->notifySettled((string) $droppedKey, $confirmed);
+        }
 
         return $signalled;
     }
@@ -895,6 +1048,8 @@ final class SegmentProcessRegistry
             'lastGrowNs' => $progress['lastGrowNs'],
             'termNs' => null,
             'members' => null,
+            'unverified' => false,
+            'deadNs' => null,
         ];
 
         return array_key_last($this->orphans);
@@ -903,6 +1058,9 @@ final class SegmentProcessRegistry
     /**
      * Send SIGTERM to the orphan at the given index for a stall/wall reap, marking it
      * as signalled so the next pass escalates it to SIGKILL if it outlives the grace.
+     * An identity that is unknown at the TERM (`/proc` unreadable, so no membership snapshot)
+     * marks the record unverified, exactly as {@see reapTracked()} does. Its settle is then
+     * unconfirmed, whatever the group looks like at the grace.
      *
      * @param int|null $index Index into {@see $orphans}; null is a no-op.
      *
@@ -914,20 +1072,22 @@ final class SegmentProcessRegistry
             return 0;
         }
         $orphan = $this->orphans[$index];
-        $this->orphans[$index]['members'] = $this->sendTerm($orphan['pids'], $orphan['starts']);
+        $members = $this->sendTerm($orphan['pids'], $orphan['starts']);
+        $this->orphans[$index]['members'] = $members;
         $this->orphans[$index]['termNs'] = $now;
+        $this->orphans[$index]['unverified'] = $orphan['unverified']
+            || ($members === null && $this->anyRecordedStart($orphan['pids'], $orphan['starts']));
 
         return 1;
     }
 
     /**
      * Reap a tracked launch without waiting: SIGTERM now, and the SIGKILL escalation later from
-     * {@see sweep()}. A launch with nothing left to escalate (no member in the snapshot, no PID
-     * alive, and no unchecked group still alive) has its temps removed at once. This holds for a
-     * null snapshot too, so an all-unchecked record whose leader exited on TERM is still held while
-     * its group lives. Otherwise its record moves to the orphan list with its TERM time, its
-     * membership snapshot and its temps. Its temps go when sweep() drops the record, or earlier
-     * for a launch that is no longer held.
+     * {@see sweep()}. A launch with nothing left to escalate (no member in the snapshot, no PID alive, and
+     * no group still alive) has its temps removed at once, as before. Its settle is not reported here: the
+     * group was signalled, so the record is still made, with no temps, and the confirmation is taken at the
+     * grace tick (see {@see sweep()}). Otherwise the whole record moves to the orphan list, and its temps go
+     * when sweep() drops the record, or earlier for a launch that is no longer held.
      *
      * @param array<int, int>                $pids
      * @param array<int, int|null>           $starts
@@ -943,13 +1103,19 @@ final class SegmentProcessRegistry
         int $now,
     ): void {
         $members = $this->sendTerm($pids, $starts);
-        $nothingLeft = ($members === [] || $members === null)
+        // A launch with a recorded start time that has no membership snapshot (`/proc` unreadable at the
+        // reap) has an identity this worker cannot check. Its group may still hold a child, so it cannot
+        // be settled as gone: it is recorded unverified, and its settle is unconfirmed.
+        $unverified = $members === null && $this->anyRecordedStart($pids, $starts);
+        $nothingLeft = !$unverified
+            && ($members === [] || $members === null)
             && !$this->anyAlive($pids, $starts)
-            && !$this->uncheckedGroupAlive($pids, $starts);
+            && $this->groupGone($pids);
         if ($nothingLeft) {
+            // Nothing can still hold a temp, so the temps (and the cap slot they count for) go now.
             $this->cleanTemps($tmps);
-
-            return;
+            $tmps = [];
+            $tmpsByPid = [];
         }
 
         $this->orphans[] = [
@@ -963,7 +1129,44 @@ final class SegmentProcessRegistry
             'lastGrowNs' => $now,
             'termNs' => $now,
             'members' => $members,
+            'unverified' => $unverified,
+            'deadNs' => null,
         ];
+    }
+
+    /**
+     * True when at least one PID of a launch record has a recorded start time.
+     *
+     * @param array<int, int>      $pids
+     * @param array<int, int|null> $starts
+     */
+    private function anyRecordedStart(array $pids, array $starts): bool
+    {
+        foreach ($pids as $pid) {
+            if (($starts[$pid] ?? null) !== null) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * True when no process group of the given launches is observed alive now: `kill(-pgid, 0)` fails for
+     * every PID (ESRCH). This is the observation a confirmed settle needs. It covers checked and unchecked
+     * launches alike.
+     *
+     * @param array<int, int> $pids
+     */
+    private function groupGone(array $pids): bool
+    {
+        foreach ($pids as $pid) {
+            if (($this->groupAliveProbe)($pid)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -1056,18 +1259,18 @@ final class SegmentProcessRegistry
      * The PIDs of a TERMed record whose launch may still run once its grace has elapsed. The
      * verdict is per launch, so a dead or KILLed launch with a recorded start time releases its
      * temp even when a sibling launch of the same record is still held:
-     *  - an UNCHECKED launch (no start time) is held only while its process group still exists
-     *    (`kill(-pid, 0)`). Every launch runs under setsid, so a live leader is the leader of its own
-     *    group, and the group probe covers it. Its group's members were never snapshotted, so no
-     *    KILL reaches them, but they still hold the temp and the cap slot. A PID that is alive but
-     *    no longer leads a group does not hold the launch;
-     *  - a launch with a recorded start time is held when it has no membership snapshot, or its
-     *    identity is unknown at the grace, while its launched process is alive (isLive: not a zombie,
+     *  - a launch whose process group is still observed alive (`kill(-pid, 0)`) is held, whatever its
+     *    leader did, and whether or not it has a start time. The SIGKILL is not waited on, so a group that
+     *    survives it (for example a D-state child) keeps its slot. Every launch runs under setsid, so a live
+     *    leader leads its own group, and the probe covers its members too;
+     *  - additionally, a launch with a recorded start time is held when it has no membership snapshot, or
+     *    its identity is unknown at the grace, while its launched process is alive (isLive: not a zombie,
      *    and start time still matching where the stat can be read). With no snapshot nothing can KILL
      *    it. An unknown identity (`/proc` unreadable, or a malformed stat line) is held because the
-     *    SIGKILL step skips an unknown process, which may still run. With a snapshot and a known
-     *    identity, its group was KILLed at the grace, or it is gone, or its identity is 'reused',
-     *    so it is not held.
+     *    SIGKILL step skips an unknown process, which may still run.
+     *
+     * A confirmed settle needs an empty result at a grace tick that is inside the hold bound, with the
+     * identity verifiable. See {@see sweep()}.
      *
      * An empty result means nothing is held, and the record is dropped at the grace.
      *
@@ -1082,40 +1285,19 @@ final class SegmentProcessRegistry
         $held = [];
         foreach ($pids as $pid) {
             $start = $starts[$pid] ?? null;
-            if ($start === null) {
-                $stillRuns = ($this->groupAliveProbe)($pid);
-            } else {
-                $stillRuns = ($members === null || $this->identityOf($pid, $start) === 'unknown')
-                    && $this->isLive($pid, $start);
-            }
+            // A launch whose process group is still observed alive is held, whatever its leader did. The SIGKILL
+            // is not waited on, so a group that survives it (for example a D-state child) keeps its slot until the
+            // hold bound. The group probe is the only observation a confirmed settle accepts.
+            $stillRuns = ($this->groupAliveProbe)($pid)
+                || ($start !== null
+                    && ($members === null || $this->identityOf($pid, $start) === 'unknown')
+                    && $this->isLive($pid, $start));
             if ($stillRuns) {
                 $held[] = $pid;
             }
         }
 
         return $held;
-    }
-
-    /**
-     * True when an UNCHECKED leader (no start time was recorded) still has a live process group.
-     * Such a leader has no recorded start time, so its group is never snapshotted and never KILLed. Its
-     * group can still hold a child that keeps the temp and the cap slot. The probe is
-     * `kill(-pid, 0)`, which also sees an unreaped zombie leader whose group has no other member,
-     * so that zombie reads as live. Accepted: the hold it drives is bounded, so a zombie or a
-     * reused group id costs a held slot for at most the hold bound.
-     *
-     * @param array<int, int>      $pids
-     * @param array<int, int|null> $starts
-     */
-    private function uncheckedGroupAlive(array $pids, array $starts): bool
-    {
-        foreach ($pids as $pid) {
-            if (($starts[$pid] ?? null) === null && ($this->groupAliveProbe)($pid)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**
@@ -1599,6 +1781,39 @@ final class SegmentProcessRegistry
     }
 
     /**
+     * Read-only liveness of ONE launch of a cancel key, judged by its own PID. The PID is looked up
+     * among the key's live entries and its orphan records. Returns null when this registry knows
+     * nothing of the key (no entry, no orphan), so the caller cannot judge the launch from here.
+     * Otherwise it returns true only when the PID is tracked and still a live process with its
+     * recorded identity. A PID that is not tracked under a known key is not alive. Signals nothing
+     * and changes no bookkeeping.
+     *
+     * @param string $key Cancel key (the segment's final path for on-demand encodes).
+     * @param int    $pid The launched process id (0 when unknown, which is never tracked).
+     */
+    public function launchAlive(string $key, int $pid): ?bool
+    {
+        $known = $this->tracksKey($key);
+        $tracked = in_array($pid, $this->pids[$key] ?? [], true);
+        $start = $this->starts[$key][$pid] ?? null;
+        foreach ($this->orphans as $orphan) {
+            if ($orphan['key'] !== $key) {
+                continue;
+            }
+            $known = true;
+            if (in_array($pid, $orphan['pids'], true)) {
+                $tracked = true;
+                $start = $orphan['starts'][$pid] ?? null;
+            }
+        }
+        if (!$known) {
+            return null;
+        }
+
+        return $tracked && $this->isLive($pid, $start);
+    }
+
+    /**
      * Remove a key's PID entry, its identity records and its group links (no signalling).
      *
      * @param string $key Cancel key to drop.
@@ -1674,19 +1889,57 @@ final class SegmentProcessRegistry
     }
 
     /**
+     * The raw signal-0 probe over posix: 0 when `posix_kill($target, 0)` succeeds, otherwise the errno
+     * from posix_get_last_error(). Null when the posix extension is missing.
+     *
+     * @return callable(int): (int|null)
+     */
+    private static function defaultSignalZeroProbe(): callable
+    {
+        return static function (int $target): ?int {
+            if (!function_exists('posix_kill')) {
+                return null;
+            }
+            if (@posix_kill($target, 0)) {
+                return 0;
+            }
+
+            return posix_get_last_error();
+        };
+    }
+
+    /**
+     * The default liveness probe for one PID: `kill(pid, 0)` through {@see $signalZero}. Delivered and EPERM
+     * both mean the process exists, so both are alive. ESRCH means gone. Without posix it falls back to
+     * `/proc/<pid>` existing, but only while `/proc` is readable ({@see $procMounted}). With neither posix nor a
+     * readable `/proc` nothing can show the PID gone, so it is ALIVE.
+     *
      * @return callable(int): bool
      */
-    private static function defaultLivenessProbe(): callable
+    private function defaultLivenessProbe(): callable
     {
-        return static function (int $pid): bool {
+        return function (int $pid): bool {
             if ($pid <= 0) {
                 return false;
             }
-            if (function_exists('posix_kill')) {
-                return @posix_kill($pid, 0);
+            $result = ($this->signalZero)($pid);
+            if ($result === null) {
+                // No posix: /proc decides while it is readable. With neither posix nor /proc nothing shows the
+                // PID gone, so it is ALIVE (spec: posix missing = alive).
+                return ($this->procMounted)() ? is_dir('/proc/' . $pid) : true;
             }
-            return is_dir('/proc/' . $pid);
+
+            return self::errnoSaysAlive($result);
         };
+    }
+
+    /**
+     * Whether a signal-0 result (0 delivered, or an errno) says the target may still exist. Only ESRCH says
+     * it is gone. Delivered, EPERM and any other errno are alive, because nothing shows the target gone.
+     */
+    private static function errnoSaysAlive(int $result): bool
+    {
+        return $result !== self::ERRNO_ESRCH;
     }
 
     /**
@@ -1796,20 +2049,22 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * The default group-alive probe: true while any process still has `$pid` as its process group
-     * id (`posix_kill(-pid, 0)`). Without posix it returns false, so an unchecked group does not hold
-     * a record, and the record is dropped after the grace, as before this probe existed.
+     * The default group-alive probe: `kill(-pid, 0)` through {@see $signalZero}. A group is gone only when
+     * the call fails with ESRCH, meaning no process has that group id. EPERM means a member exists that
+     * this process may not signal, so the group is alive. Without posix nothing is observed, so the group
+     * is ALIVE: the record is held to the hold bound, and a settle is not confirmed.
      *
      * @return callable(int): bool
      */
-    private static function defaultGroupAliveProbe(): callable
+    private function defaultGroupAliveProbe(): callable
     {
-        return static function (int $pid): bool {
-            if ($pid <= 0 || !function_exists('posix_kill')) {
+        return function (int $pid): bool {
+            if ($pid <= 0) {
                 return false;
             }
+            $result = ($this->signalZero)(-$pid);
 
-            return @posix_kill(-$pid, 0);
+            return $result === null || self::errnoSaysAlive($result);
         };
     }
 

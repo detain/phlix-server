@@ -165,10 +165,16 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     // or non-numeric value passes 0.0, and the registry keeps its default.
                     $ffmpegCfg = \Phlix\Config\EffectiveConfig::file('ffmpeg');
                     $stallSeconds = $ffmpegCfg['segment_stall_seconds'] ?? null;
-                    $maxWallSeconds = $ffmpegCfg['segment_max_wall_seconds'] ?? null;
+                    // The wall bound is normalised once by EncodeSlotLedger::wallSecondsFrom(), the same
+                    // helper TranscodeManager's ledger lifetime reads, so both see the same int (600.0 and
+                    // '600' both mean 600 s, not 600 s here and 300 s there).
+                    $maxWallSeconds = \Phlix\Media\Transcoding\EncodeSlotLedger::wallSecondsFrom(
+                        $ffmpegCfg['segment_max_wall_seconds'] ?? null,
+                        (int) SegmentProcessRegistry::DEFAULT_MAX_WALL_SECONDS,
+                    );
                     $registry->configureWatchdog(
                         is_numeric($stallSeconds) ? (float) $stallSeconds : 0.0,
-                        is_numeric($maxWallSeconds) ? (float) $maxWallSeconds : 0.0,
+                        (float) $maxWallSeconds,
                     );
                     // Bound on holding an unverifiable encode's temp and cap slot after TERM
                     // (see SegmentProcessRegistry::sweep()). The wrapper timeout is the bound.

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Media\Transcoding;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Media\Transcoding\EncodeSlotLedger;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\SegmentProcessRegistry;
 use Phlix\Media\Transcoding\TranscodeManager;
@@ -123,6 +124,71 @@ final class TranscodeManagerRound2Test extends TestCase
         return $ref->invoke($m, ...$args);
     }
 
+    /**
+     * Live (non-blank) lines in the cache root's slot ledger: the admission count.
+     */
+    private function ledgerLines(string $root): int
+    {
+        $path = $root . '/' . EncodeSlotLedger::FILE_NAME;
+        if (!is_file($path)) {
+            return 0;
+        }
+        $lines = array_filter(explode("\n", (string) file_get_contents($path)), static fn (string $l): bool => $l !== '');
+
+        return count($lines);
+    }
+
+    /**
+     * Token column (first field) of every live ledger line, so a test can tell WHICH launch still holds a slot.
+     *
+     * @return list<string>
+     */
+    private function ledgerTokens(string $root): array
+    {
+        $path = $root . '/' . EncodeSlotLedger::FILE_NAME;
+        if (!is_file($path)) {
+            return [];
+        }
+        $tokens = [];
+        foreach (explode("\n", (string) file_get_contents($path)) as $line) {
+            if ($line !== '') {
+                $tokens[] = explode(' ', $line)[0];
+            }
+        }
+
+        return $tokens;
+    }
+
+    /**
+     * Writes $count fresh ledger lines as if other workers had admitted encodes.
+     */
+    private function seedLedger(string $root, int $count, string $prefix = 'd'): void
+    {
+        $text = '';
+        for ($i = 0; $i < $count; $i++) {
+            $text .= $prefix . bin2hex(random_bytes(8)) . ' ' . time() . " 0\n";
+        }
+        file_put_contents($root . '/' . EncodeSlotLedger::FILE_NAME, $text, FILE_APPEND);
+    }
+
+    /**
+     * Temps in the shared scan snapshot, both families. This is what the reaper and prune read.
+     * It is no longer the admission count.
+     */
+    private function liveTempCount(TranscodeManager $m): int
+    {
+        $families = $this->callPrivate($m, 'inFlightSnapshot');
+
+        return count($families['base']) + count($families['prewarm']);
+    }
+
+    private function prewarmTempCount(TranscodeManager $m): int
+    {
+        $families = $this->callPrivate($m, 'inFlightSnapshot');
+
+        return count($families['prewarm']);
+    }
+
     // ---------------------------------------------------------------- A: thread budget
 
     public function testSingleEncodeOnTwelveCoresGetsTheCeiling(): void
@@ -185,12 +251,9 @@ final class TranscodeManagerRound2Test extends TestCase
     public function testLaunchCountsSiblingEncodesWhenSizingTheBudget(): void
     {
         [$dir, $input] = $this->jobDir('seg-threads-four');
-        // Three other encodes are already in flight in another job (N becomes 4 with this one).
-        $other = $this->root . '/other-job';
-        mkdir($other, 0755, true);
-        file_put_contents("{$other}/seg-00000.ts.part-aaaaaaa1", 'p');
-        file_put_contents("{$other}/seg-00001.ts.part-aaaaaaa2", 'p');
-        file_put_contents("{$other}/seg-00002.ts.part-aaaaaaa3", 'p');
+        // Three other encodes are already admitted through the ledger by sibling workers
+        // (N becomes 4 with this one).
+        $this->seedLedger($this->root, 3);
         $seen = null;
         $ff = $this->createMock(FfmpegRunner::class);
         $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
@@ -222,7 +285,8 @@ final class TranscodeManagerRound2Test extends TestCase
         mkdir($jobA, 0755, true);
         file_put_contents("{$jobA}/seg-00000.ts.part-bbbbbbb1", 'p');
 
-        $this->assertSame(1, $this->callPrivate($m, 'countInFlightSegmentEncodes'));
+        $liveBefore = $this->liveTempCount($m);
+        $this->assertSame(1, $liveBefore);
 
         // A temp appears inside the same window: the shared snapshot has not been refreshed.
         $jobB = $this->root . '/job-b';
@@ -230,13 +294,14 @@ final class TranscodeManagerRound2Test extends TestCase
         file_put_contents("{$jobB}/seg-00000.ts.part-bbbbbbb2", 'p');
         $ns += (int) (0.5 * self::SECOND_NS);
 
-        $this->assertSame(1, $this->callPrivate($m, 'countInFlightSegmentEncodes'));
-        $this->assertSame(0, $this->callPrivate($m, 'countInFlightPrewarmEncodes'));
+        $liveAfter = $this->liveTempCount($m);
+        $this->assertSame(1, $liveAfter);
+        $this->assertSame(0, $this->prewarmTempCount($m));
 
         // Past the one-second window the next read rescans and sees both temps.
         $ns += (int) (1.5 * self::SECOND_NS);
 
-        $this->assertSame(2, $this->callPrivate($m, 'countInFlightSegmentEncodes'));
+        $this->assertSame(2, $this->liveTempCount($m));
     }
 
     public function testInFlightCountSeesATempWhenTheSegmentDirHasABracket(): void
@@ -258,7 +323,7 @@ final class TranscodeManagerRound2Test extends TestCase
             return $ns;
         });
 
-        $this->assertSame(1, $this->callPrivate($m, 'countInFlightSegmentEncodes'));
+        $this->assertSame(1, $this->liveTempCount($m));
     }
 
     public function testInFlightCountSeesATempWhenAJobDirNameHasABraceGroup(): void
@@ -282,8 +347,8 @@ final class TranscodeManagerRound2Test extends TestCase
         });
 
         // The total counts both families (base + prewarm); the prewarm budget counts only the prewarm one.
-        $this->assertSame(2, $this->callPrivate($m, 'countInFlightSegmentEncodes'));
-        $this->assertSame(1, $this->callPrivate($m, 'countInFlightPrewarmEncodes'));
+        $this->assertSame(2, $this->liveTempCount($m));
+        $this->assertSame(1, $this->prewarmTempCount($m));
     }
 
     /**
@@ -313,7 +378,7 @@ final class TranscodeManagerRound2Test extends TestCase
             return $ns;
         });
 
-        $this->assertSame(0, $this->callPrivate($m, 'countInFlightSegmentEncodes'));
+        $this->assertSame(0, $this->liveTempCount($m));
         $this->assertFileExists($external, 'a temp outside the cache root must survive the purge');
         $this->assertFileExists($external . '.i', 'a sidecar outside the cache root must survive the purge');
     }
@@ -380,7 +445,7 @@ final class TranscodeManagerRound2Test extends TestCase
             return $ns;
         });
 
-        $this->assertSame(0, $this->callPrivate($m, 'countInFlightSegmentEncodes'));
+        $this->assertSame(0, $this->liveTempCount($m));
         $this->assertFileDoesNotExist($inRoot, 'a dead temp inside the root must be unlinked through a symlinked root');
         $this->assertFileDoesNotExist($inRoot . '.i', 'a sidecar inside the root must be unlinked through a symlinked root');
         $this->assertTrue(is_link($linkedTemp), 'the scan must skip a linked temp, so it is still on disk');
@@ -390,82 +455,124 @@ final class TranscodeManagerRound2Test extends TestCase
         $this->assertFileExists($outsideTarget, 'the target of a file link outside the root must survive');
     }
 
-    public function testLaunchesInsideOneWindowStillCountAgainstTheCap(): void
+    // The admission count is the slot ledger now. A launch is counted from the moment it is
+    // admitted, with no scan window in between, and it stops counting when its encode publishes,
+    // is reaped, or ages out. The expiry clock is covered by EncodeSlotLedgerTest.
+
+    public function testAdmittedLaunchesCountAgainstTheCapBeforeAnyScan(): void
     {
-        $ns = 10 * self::SECOND_NS;
         $m = $this->manager($this->createMock(Connection::class), $this->createMock(FfmpegRunner::class));
-        $m->setMonotonicNsSource(static function () use (&$ns): int {
-            return $ns;
-        });
+        $cap = (int) (new \ReflectionClassConstant(TranscodeManager::class, 'SEGMENT_MAX_INFLIGHT_GLOBAL'))->getValue();
 
-        $this->assertSame(0, $this->callPrivate($m, 'countInFlightSegmentEncodes'));
+        $admitted = 0;
+        while ($this->callPrivate($m, 'admitSegmentLaunch', false) !== null) {
+            $admitted++;
+        }
 
-        // This worker launched two encodes; their temps are not on disk yet, so the scan
-        // cannot see them. They must still count, or a burst would slip past the cap.
-        $this->callPrivate($m, 'noteLaunch', $this->root . '/burst/seg-00000.ts', false);
-        $this->callPrivate($m, 'noteLaunch', $this->root . '/burst/seg-00001.ts', true);
-
-        $this->assertSame(2, $this->callPrivate($m, 'countInFlightSegmentEncodes'));
-        $this->assertSame(1, $this->callPrivate($m, 'countInFlightPrewarmEncodes'));
+        $this->assertSame($cap, $admitted, 'the ledger admits exactly the cap, with no scan in between');
+        $this->assertSame($cap, $this->ledgerLines($this->root));
     }
 
-    public function testAnUnpublishedLaunchStaysCountedAcrossAScanRefresh(): void
+    public function testPrewarmLaunchesStopAtTheBudgetAndTheReaderKeepsTheHeadroom(): void
     {
-        $ns = 10 * self::SECOND_NS;
         $m = $this->manager($this->createMock(Connection::class), $this->createMock(FfmpegRunner::class));
-        $m->setMonotonicNsSource(static function () use (&$ns): int {
-            return $ns;
-        });
+        $cap = (int) (new \ReflectionClassConstant(TranscodeManager::class, 'SEGMENT_MAX_INFLIGHT_GLOBAL'))->getValue();
+
+        // cap 8: prewarm may hold floor(8 / 2) = 4 slots, and it stops at cap - headroom(2) = 6 in total.
+        $prewarm = 0;
+        while ($this->callPrivate($m, 'admitSegmentLaunch', true) !== null) {
+            $prewarm++;
+        }
+        $this->assertSame(intdiv($cap, 2), $prewarm, 'prewarm stops at the prewarm budget');
+
+        // The reader keeps the full cap, so the headroom is still there for a seek.
+        $reader = 0;
+        while ($this->callPrivate($m, 'admitSegmentLaunch', false) !== null) {
+            $reader++;
+        }
+        $this->assertSame($cap - $prewarm, $reader, 'the reader fills the slots prewarm left');
+        $this->assertSame($cap, $this->ledgerLines($this->root));
+    }
+
+    public function testAPublishedLaunchStopsCountingOnTheNextReconcile(): void
+    {
+        $m = $this->manager($this->createMock(Connection::class), $this->createMock(FfmpegRunner::class));
+        $grant = $this->callPrivate($m, 'admitSegmentLaunch', false);
+        $this->assertIsArray($grant);
         $burst = $this->root . '/burst';
         mkdir($burst, 0755, true);
         $final = $burst . '/seg-00000.ts';
-        $this->callPrivate($m, 'noteLaunch', $final, false);
+        $this->assertTrue($this->callPrivate($m, 'settleLaunch', $final, $grant['token'], 4242));
+        $this->assertSame(1, $this->ledgerLines($this->root));
 
-        // A scan refresh happens (more than 1 s later) and sees no temp yet. The launch must
-        // still count: the refresh no longer clears the unseen launches.
-        $ns += (int) (1.5 * self::SECOND_NS);
-        $this->assertSame(1, $this->callPrivate($m, 'countInFlightSegmentEncodes'));
+        // Not published yet: the reconcile keeps the slot while the encode is still running.
+        $this->callPrivate($m, 'reconcileInFlightSegments');
+        $this->assertSame(1, $this->ledgerLines($this->root), 'an unpublished encode keeps its slot');
 
-        // Once its final is published the launch stops counting.
+        // Once the final is published, the next reconcile releases the slot.
         file_put_contents($final, 'segment');
-        $ns += (int) (1.5 * self::SECOND_NS);
-        $this->assertSame(0, $this->callPrivate($m, 'countInFlightSegmentEncodes'));
+        $this->setPropertyNull($m, 'lastInFlightReconcileMs');
+        $this->callPrivate($m, 'reconcileInFlightSegments');
+        $this->assertSame(0, $this->ledgerLines($this->root), 'a published encode frees its slot');
     }
 
-    public function testAnUnpublishedLaunchExpiresAfterTenSeconds(): void
+    public function testAReapedLaunchKeepsItsSlotUntilItsOwnSettleAndAConfirmedSettleFreesOnlyItsOwnReap(): void
     {
-        $ns = 10 * self::SECOND_NS;
         $m = $this->manager($this->createMock(Connection::class), $this->createMock(FfmpegRunner::class));
-        $m->setMonotonicNsSource(static function () use (&$ns): int {
-            return $ns;
-        });
-        $this->callPrivate($m, 'noteLaunch', $this->root . '/burst/seg-00001.ts', true);
+        $final = $this->root . '/burst/seg-00001.ts';
 
-        $ns += 9 * self::SECOND_NS;
-        $this->assertSame(1, $this->callPrivate($m, 'countInFlightPrewarmEncodes'), 'still inside 10 s');
-
-        $ns += 2 * self::SECOND_NS; // 11 s after the launch, and no final was ever published
-        $this->assertSame(0, $this->callPrivate($m, 'countInFlightPrewarmEncodes'), 'expired after 10 s');
-        $this->assertSame(0, $this->callPrivate($m, 'countInFlightSegmentEncodes'));
-    }
-
-    public function testALaunchWhoseTempIsVisibleIsCountedOnce(): void
-    {
-        $ns = 10 * self::SECOND_NS;
-        $m = $this->manager($this->createMock(Connection::class), $this->createMock(FfmpegRunner::class));
-        $m->setMonotonicNsSource(static function () use (&$ns): int {
-            return $ns;
-        });
-        $burst = $this->root . '/burst';
-        mkdir($burst, 0755, true);
-        file_put_contents($burst . '/seg-00002.ts.part-dddddddd', 'p');
-        $this->callPrivate($m, 'noteLaunch', $burst . '/seg-00002.ts', false);
-
+        // First reap: one launch of the key, then a kill reaps the key. The reap sends only a TERM,
+        // so the slot stays held until the registry settles that reap.
+        $first = $this->callPrivate($m, 'admitSegmentLaunch', false);
+        $this->assertIsArray($first);
+        $this->callPrivate($m, 'settleLaunch', $final, $first['token'], 4242);
+        $m->invalidateReservation($final);
         $this->assertSame(
-            1,
-            $this->callPrivate($m, 'countInFlightSegmentEncodes'),
-            'the scan and the launch record are one encode'
+            [$first['token']],
+            $this->ledgerTokens($this->root),
+            'a reaped encode keeps its slot until the registry settles it'
         );
+
+        // (a) An unconfirmed settle of that reap (the hold bound passed with a launch still running)
+        // keeps its slot held.
+        $m->onSegmentKeySettled($final, false);
+        $this->assertSame(
+            [$first['token']],
+            $this->ledgerTokens($this->root),
+            'an unconfirmed settle keeps the first reap\'s slot held'
+        );
+
+        // Second reap of the SAME key: a second real launch, admitted and then reaped by a second
+        // invalidateReservation. Its settle is the only one that may release slots this time.
+        $second = $this->callPrivate($m, 'admitSegmentLaunch', false);
+        $this->assertIsArray($second);
+        $this->callPrivate($m, 'settleLaunch', $final, $second['token'], 4243);
+        $m->invalidateReservation($final);
+        $this->assertEqualsCanonicalizing(
+            [$first['token'], $second['token']],
+            $this->ledgerTokens($this->root),
+            'the second reap holds its own slot alongside the unconfirmed first reap'
+        );
+
+        // (b) A confirmed settle frees only the second reap's token. The first reap, still unconfirmed,
+        // keeps its token held: a regression that frees every reap of the key fails here.
+        $m->onSegmentKeySettled($final, true);
+        $this->assertSame(
+            [$first['token']],
+            $this->ledgerTokens($this->root),
+            'a confirmed settle frees only its own reap; the earlier unconfirmed reap stays held'
+        );
+
+        // The freed token released again (the launcher's finally runs late) is a no-op, and the
+        // first reap's slot is still held.
+        $this->callPrivate($m, 'releaseSlot', $second['token']);
+        $this->assertSame([$first['token']], $this->ledgerTokens($this->root));
+    }
+
+    private function setPropertyNull(TranscodeManager $m, string $property): void
+    {
+        $prop = new \ReflectionProperty(TranscodeManager::class, $property);
+        $prop->setValue($m, null);
     }
 
     public function testAFailedLaunchIsNotCountedAsInFlight(): void
@@ -479,8 +586,8 @@ final class TranscodeManagerRound2Test extends TestCase
         $this->assertNull($m->ensureSegment('seg-job', null, 1));
         $this->assertSame(
             0,
-            $this->callPrivate($m, 'countInFlightSegmentEncodes'),
-            'a launch that never started must not count'
+            $this->ledgerLines($this->root),
+            'a launch that never started must release its ledger slot at once'
         );
     }
 
@@ -641,9 +748,11 @@ final class TranscodeManagerRound2Test extends TestCase
             return true;
         });
 
-        $this->assertSame(0, $m->sweepSegmentCache());
+        $firstSweep = $m->sweepSegmentCache();
+        $this->assertSame(0, $firstSweep);
         $ns += 5 * self::SECOND_NS;
-        $this->assertSame(0, $m->sweepSegmentCache());
+        $secondSweep = $m->sweepSegmentCache();
+        $this->assertSame(0, $secondSweep);
         $this->assertCount(1, $launches, 'two 503s inside 10 s launch one sweep');
 
         $ns += 6 * self::SECOND_NS; // 11 s after the first launch

@@ -2931,16 +2931,12 @@ class FfmpegRunner
      *                                         requests.
      * @param bool                 $prewarm    True for a launch-only (C6 head
      *                                         start) encode: its atomic-write temp
-     *                                         is tagged `.part-p<hex>` so the
-     *                                         manager's prewarm budget
-     *                                         ({@see TranscodeManager::countInFlightPrewarmEncodes()})
-     *                                         can count prewarm-occupied slots
-     *                                         across workers from the same live
-     *                                         glob as the total cap (playback-lag
-     *                                         wave A′). Untagged temps keep the
-     *                                         exact 8-hex shape; the two glob
-     *                                         families are disjoint by the leading
-     *                                         `p` (not a hex digit).
+     *                                         is tagged `.part-p<hex>`, so the temp
+     *                                         is visibly a prewarm one. The prewarm
+     *                                         budget is counted by the slot ledger's
+     *                                         `p` tokens ({@see TranscodeManager::admitSegmentLaunch()}),
+     *                                         not by a temp glob. Untagged temps keep
+     *                                         the exact 8-hex shape.
      *
      * @return int OS process id of the launched job (0 if launch failed).
      *
@@ -3216,14 +3212,14 @@ class FfmpegRunner
      *
      * Four things here are load-bearing:
      *
-     *  1. **`touch <tmp>` up front.** The global in-flight cap and the
-     *     cross-worker dedup are both a glob for `seg-*.part-<8 hex>` over the
-     *     shared segment tree ({@see TranscodeManager::countInFlightSegmentEncodes()}).
-     *     On this branch ffmpeg writes `<tmp>.s0`, never `<tmp>` — so without an
-     *     explicit marker file the cap would see ZERO encodes in flight and the
-     *     `SegmentBusyException`/503 backpressure that fixed the seek cascade
-     *     would silently become a no-op. The marker is removed by the trailing
-     *     `rm` exactly when the encode is over.
+     *  1. **`touch <tmp>` up front.** The `.part-<hex>` temp is the marker that
+     *     the encode is running, and the watchdog's progress and identity checks
+     *     read it ({@see SegmentProcessRegistry}). The global in-flight cap is not
+     *     a glob. It is the slot ledger ({@see TranscodeManager::admitSegmentLaunch()}),
+     *     so the cap does not depend on this file. On this branch ffmpeg writes
+     *     `<tmp>.s0`, never `<tmp>`, so the explicit marker keeps the temp present
+     *     while the encode runs. The marker is removed by the trailing `rm` exactly
+     *     when the encode is over.
      *  2. **The rebase runs BEFORE any `mv`.** Once a fragment is published a
      *     sibling worker may already be streaming it, so it must never be
      *     visible with the wrong `tfdt`. Non-zero exit from the rebaser breaks

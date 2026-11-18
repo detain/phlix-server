@@ -11,6 +11,7 @@ use Phlix\Admin\SettingsRepository;
 use Phlix\Media\Streaming\AbrLadder;
 use Phlix\Media\Streaming\SourceProfile;
 use Phlix\Media\Transcoding\EncodeSettings;
+use Phlix\Media\Transcoding\EncodeSlotLedger;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\SegmentBusyException;
 use Phlix\Media\Transcoding\SegmentCacheFullException;
@@ -2571,10 +2572,9 @@ class TranscodeManagerTest extends TestCase
         mkdir($dir, 0755, true);
         $input = $dir . '/in.mkv';
         file_put_contents($input, 'x');
-        // A different job already has an encode in flight, filling the ceiling (=1).
-        $otherDir = $this->segmentDir . '/other-job';
-        mkdir($otherDir, 0755, true);
-        file_put_contents("{$otherDir}/seg-00000.ts.part-aaaabbbb", 'p');
+        // A different job already has an encode in flight, filling the ceiling (=1). It is
+        // admitted through the cross-worker slot ledger.
+        file_put_contents($this->segmentDir . '/.encode-slots', 'd' . bin2hex(random_bytes(8)) . ' ' . time() . " 0\n");
         $captured = [];
         $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
         $ff = $this->createMock(FfmpegRunner::class);
@@ -2727,6 +2727,9 @@ class TranscodeManagerTest extends TestCase
 
         $bogusSegmentDir = $this->segmentDir . '/not-a-real-dir-' . uniqid();
         $manager = $this->diskGuardManager($db, $ff, PHP_INT_MAX, $bogusSegmentDir);
+        // The slot ledger lives in the segment root, and creating it would make the bogus
+        // root real, which would turn the probe on. Keep the ledger in the real test root.
+        $manager->setEncodeSlotLedger(new EncodeSlotLedger($this->segmentDir . '/.encode-slots', EncodeSlotLedger::lifetimeFor(300)));
 
         $path = $manager->ensureSegment('seg-job', null, 2);
 
@@ -5035,21 +5038,20 @@ class TranscodeManagerTest extends TestCase
         $this->assertNull($this->segManager($db, $ff)->ensureSegment('seg-job', '720p', 2));
     }
 
-    public function testCountInFlightSegmentEncodesCountsMixedVariants(): void
+    public function testSlotLedgerCountsMixedVariantLaunchesAgainstTheCap(): void
     {
-        // The global cap globs seg-*.ts.part-* — it must count variant-prefixed temps
-        // from DIFFERENT variants across DIFFERENT jobs. Two are in flight; with a
-        // ceiling of 2 a fresh (different-variant) encode fast-fails 503.
+        // The global cap is the slot ledger, and it counts every admitted encode whatever its
+        // variant or job. Two siblings are admitted, from DIFFERENT variants across DIFFERENT
+        // jobs. With a ceiling of 2 a fresh (different-variant) encode fast-fails 503.
         $dir = $this->segmentDir . '/audit-cap';
         mkdir($dir, 0755, true);
         $input = $dir . '/in.mkv';
         file_put_contents($input, 'x');
-        $otherA = $this->segmentDir . '/other-a';
-        $otherB = $this->segmentDir . '/other-b';
-        mkdir($otherA, 0755, true);
-        mkdir($otherB, 0755, true);
-        file_put_contents("{$otherA}/seg-v240p-00000.ts.part-aaaaaaaa", 'p');
-        file_put_contents("{$otherB}/seg-v1080p-00005.ts.part-bbbbbbbb", 'p');
+        file_put_contents(
+            $this->segmentDir . '/.encode-slots',
+            'd' . bin2hex(random_bytes(8)) . ' ' . time() . " 0\n"
+            . 'd' . bin2hex(random_bytes(8)) . ' ' . time() . " 0\n"
+        );
         $ladderJson = (string) json_encode(
             (new AbrLadder())->build(
                 new SourceProfile(width: 1280, height: 720, videoCodec: 'h264', audioCodec: 'aac'),
@@ -5442,9 +5444,8 @@ class TranscodeManagerTest extends TestCase
     public function testInFlightCounterKeyedPerJobVariantAndIndex(): void
     {
         // segmentEncodeInFlight() (DEDUP) is memory-based and keyed per exact
-        // (job, variant, index) path — this is unaffected by the review fix, which
-        // only changed countInFlightSegmentEncodes() (the CAP) to read the shared
-        // tree live instead of this in-worker set.
+        // (job, variant, index) path. The CAP is the slot ledger, not this set, so
+        // a per-variant key here never changes the admission count.
         $db = $this->createMock(Connection::class);
         $ff = $this->createMock(FfmpegRunner::class);
         $manager = $this->segManager($db, $ff);
@@ -5496,21 +5497,21 @@ class TranscodeManagerTest extends TestCase
         $this->assertNotNull($path);
     }
 
-    public function testGlobalCapEnforcedFromRealPartFilesOnDiskNotInWorkerState(): void
+    public function testGlobalCapEnforcedFromLedgerLinesOfSiblingWorkersNotInWorkerState(): void
     {
-        // Mirror of the above: the cap MUST fire from genuine `.part-*` files on
-        // disk even with an EMPTY in-worker set (e.g. a fresh worker, or one that
-        // never launched these particular encodes itself — a sibling process did).
+        // Mirror of the above: the cap MUST fire from the cross-worker slot ledger even
+        // with an EMPTY in-worker set (e.g. a fresh worker, or one that never launched
+        // these particular encodes itself — a sibling process did). The two sibling
+        // admissions are seeded as ledger lines, the same file every worker reads.
         $dir = $this->segmentDir . '/s2-cap-disk';
         mkdir($dir, 0755, true);
         $input = $dir . '/in.mkv';
         file_put_contents($input, 'x');
-        $otherA = $this->segmentDir . '/s2-cap-disk-a';
-        $otherB = $this->segmentDir . '/s2-cap-disk-b';
-        mkdir($otherA, 0755, true);
-        mkdir($otherB, 0755, true);
-        file_put_contents("{$otherA}/seg-00000.ts.part-aaaaaaaa", 'p');
-        file_put_contents("{$otherB}/seg-00000.ts.part-bbbbbbbb", 'p');
+        $ledger = '';
+        foreach (['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb'] as $hex) {
+            $ledger .= 'd' . $hex . ' ' . time() . " 0\n";
+        }
+        file_put_contents($this->segmentDir . '/.encode-slots', $ledger);
         $captured = [];
         $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
         $ff = $this->createMock(FfmpegRunner::class);
@@ -5518,7 +5519,7 @@ class TranscodeManagerTest extends TestCase
         $manager = $this->segManager($db, $ff, 2); // ceiling = 2
 
         // segmentEncodesInFlight is empty here — this worker launched nothing — yet
-        // the cap still trips because it reads the real files on disk directly.
+        // the cap still trips, because it reads the shared slot ledger.
         $this->assertSame([], $this->inFlightSet($manager));
 
         $this->expectException(SegmentBusyException::class);

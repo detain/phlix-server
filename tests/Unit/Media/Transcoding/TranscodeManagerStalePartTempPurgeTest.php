@@ -87,14 +87,14 @@ final class TranscodeManagerStalePartTempPurgeTest extends TestCase
         // Four planted, two provably dead → the count is the LIVE two, and
         // the dead files are GONE (this is what frees their slots forever,
         // not merely for this call).
-        $this->assertSame(2, $this->invoke($manager, 'countInFlightSegmentEncodes'));
+        $this->assertSame(2, $this->liveTempCount($manager));
         $this->assertFileDoesNotExist($dead);
         $this->assertFileDoesNotExist($deadPrewarm);
         $this->assertFileExists($young);
         $this->assertFileExists($youngPrewarm);
 
         // Idempotent: a second accounting sees the same stable world.
-        $this->assertSame(2, $this->invoke($manager, 'countInFlightSegmentEncodes'));
+        $this->assertSame(2, $this->liveTempCount($manager));
     }
 
     /**
@@ -109,7 +109,7 @@ final class TranscodeManagerStalePartTempPurgeTest extends TestCase
 
         $this->assertSame(
             1,
-            $this->invoke($this->manager(self::WRAPPER_TIMEOUT_SECONDS), 'countInFlightSegmentEncodes')
+            $this->liveTempCount($this->manager(self::WRAPPER_TIMEOUT_SECONDS))
         );
         $this->assertFileExists($young);
     }
@@ -125,7 +125,7 @@ final class TranscodeManagerStalePartTempPurgeTest extends TestCase
 
         $this->assertSame(
             1,
-            $this->invoke($this->manager(self::WRAPPER_TIMEOUT_SECONDS), 'countInFlightPrewarmEncodes')
+            $this->prewarmTempCount($this->manager(self::WRAPPER_TIMEOUT_SECONDS))
         );
         $this->assertFileDoesNotExist($dead);
         $this->assertFileExists($young);
@@ -180,7 +180,7 @@ final class TranscodeManagerStalePartTempPurgeTest extends TestCase
         $this->put($young, self::YOUNG_AGE_SECONDS);
         $this->put($young . '.i', self::YOUNG_AGE_SECONDS);
 
-        $total = $this->invoke($this->manager(self::WRAPPER_TIMEOUT_SECONDS), 'countInFlightSegmentEncodes');
+        $total = $this->liveTempCount($this->manager(self::WRAPPER_TIMEOUT_SECONDS));
         $this->assertSame(1, $total, 'only the young temp is live once the dead one is purged');
 
         $this->assertFileDoesNotExist($dead);
@@ -199,7 +199,7 @@ final class TranscodeManagerStalePartTempPurgeTest extends TestCase
 
         $this->assertSame(
             1,
-            $this->invoke($this->manager(0), 'countInFlightSegmentEncodes'),
+            $this->liveTempCount($this->manager(0)),
             'transcode_timeout=0 has no provable bound — the pre-fix behavior is byte-preserved'
         );
         $this->assertFileExists($dead);
@@ -248,14 +248,32 @@ final class TranscodeManagerStalePartTempPurgeTest extends TestCase
     }
 
     /**
-     * @return int|void Accounting methods return counts; reconcile returns void
-     *                   (the return is simply unread there).
+     * @return mixed The method's own return value: a count for the accounting methods, the
+     *               snapshot array for inFlightSnapshot, or null for a void method.
      */
     private function invoke(TranscodeManager $manager, string $method): mixed
     {
         $m = new ReflectionMethod(TranscodeManager::class, $method);
 
         return $m->invoke($manager);
+    }
+
+    /**
+     * Temps the shared scan snapshot holds after the purge, both families. The scan and the
+     * purge are unchanged. Only the admission count moved to the slot ledger.
+     */
+    private function liveTempCount(TranscodeManager $manager): int
+    {
+        $families = $this->invoke($manager, 'inFlightSnapshot');
+
+        return count($families['base']) + count($families['prewarm']);
+    }
+
+    private function prewarmTempCount(TranscodeManager $manager): int
+    {
+        $families = $this->invoke($manager, 'inFlightSnapshot');
+
+        return count($families['prewarm']);
     }
 
     private function rrmdir(string $dir): void

@@ -588,8 +588,11 @@ final class TranscodeManagerSegmentFormatTest extends TestCase
     public function test_the_global_cap_still_throws_segment_busy_on_the_fmp4_branch(): void
     {
         $dir = $this->jobDir('busy-fmp4');
-        $other = $this->jobDir('busy-other');
-        file_put_contents("{$other}/seg-v720p-00000.m4s.part-aaaabbbb", 'p');
+        // One sibling encode is admitted through the cross-worker slot ledger, filling the ceiling (=1).
+        file_put_contents(
+            $this->segmentDir . '/.encode-slots',
+            'd' . bin2hex(random_bytes(8)) . ' ' . time() . " 0\n"
+        );
         $ff = $this->createMock(FfmpegRunner::class);
         $ff->expects($this->never())->method('startSegmentEncode');
 

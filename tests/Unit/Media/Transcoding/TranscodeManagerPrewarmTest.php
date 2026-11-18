@@ -514,10 +514,13 @@ final class TranscodeManagerPrewarmTest extends TestCase
         $result = $manager->ensureHlsJob('media-1', 'web');
         $jobId = (string) $result['job_id'];
 
-        $dir = $this->segmentDir . '/' . $jobId;
+        // Four prewarm-tagged encodes are live. The cap counts them through the slot ledger,
+        // as prewarm-tagged (`p`) lines, so the global ceiling is full.
+        $text = '';
         for ($i = 0; $i < 4; $i++) {
-            file_put_contents(sprintf($dir . '/seg-voriginal-%05d.m4s.part-p%08x', $i, 0xa0 + $i), '');
+            $text .= 'p' . bin2hex(random_bytes(8)) . ' ' . time() . " 0\n";
         }
+        file_put_contents($this->segmentDir . '/.encode-slots', $text);
 
         $this->expectException(SegmentBusyException::class);
         $manager->ensureSegment($jobId, 'original', 4);
@@ -836,11 +839,13 @@ final class TranscodeManagerPrewarmTest extends TestCase
      */
     private function liveTemps(int $count): void
     {
+        // Other workers' admitted encodes. The cap counts the cross-worker slot ledger, so each
+        // live encode is one ledger line.
+        $text = '';
         for ($i = 1; $i <= $count; $i++) {
-            $dir = $this->segmentDir . '/other-job-' . $i;
-            mkdir($dir, 0755, true);
-            file_put_contents($dir . sprintf('/seg-voriginal-%05d.m4s.part-%08x', $i, $i), '');
+            $text .= 'd' . bin2hex(random_bytes(8)) . ' ' . time() . " 0\n";
         }
+        file_put_contents($this->segmentDir . '/.encode-slots', $text, FILE_APPEND);
     }
 
     /**
@@ -883,7 +888,7 @@ final class TranscodeManagerPrewarmTest extends TestCase
             $this->segmentDir . '/' . $jobId . '/seg-voriginal-00000.m4s.part-0000abcd',
             ''
         );
-        $this->liveTemps(7); // cap 8 is now full
+        $this->liveTemps(8); // cap 8 is now full
         $this->pinSnapshotStale($manager);
         $prop = new \ReflectionProperty(TranscodeManager::class, 'segmentMaxWaitMs');
         $prop->setValue($manager, 0); // join without polling for the file
@@ -949,7 +954,7 @@ final class TranscodeManagerPrewarmTest extends TestCase
         $corpse = $this->segmentDir . '/' . $jobId . '/seg-voriginal-00000.m4s.part-0000abcd';
         file_put_contents($corpse, '');
         touch($corpse, time() - 3600);
-        $this->liveTemps(7); // cap 8 is full, the corpse counted among them
+        $this->liveTemps(8); // cap 8 is full of live encodes; the corpse is not one of them
         $this->pinSnapshotStale($manager);
         $prop = new ReflectionProperty(TranscodeManager::class, 'segmentMaxWaitMs');
         $prop->setValue($manager, 0);
@@ -993,7 +998,7 @@ final class TranscodeManagerPrewarmTest extends TestCase
             posix_kill($pid, 9); // SIGKILL: no `|| rm`, the temp survives
             touch($corpse, time() - 3600);
 
-            $this->liveTemps(7);
+            $this->liveTemps(8);
             $this->pinSnapshotStale($manager);
             $prop = new ReflectionProperty(TranscodeManager::class, 'segmentMaxWaitMs');
             $prop->setValue($manager, 0);

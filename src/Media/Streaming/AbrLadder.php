@@ -61,12 +61,10 @@ namespace Phlix\Media\Streaming;
  *  - Ordering: highest-first (the HLS master lists highest-first).
  *
  * "Original" descriptor (D4, revised): ALWAYS a distinct, playable variant.
- *  - Source is 8-bit H.264 (h264/avc1/avc; not 10/12-bit or 4:2:2/4:4:4), has
- *    known dimensions, and fits the profile cap → a stream-copy passthrough
- *    (`isCopy = true`) at source resolution/bitrate, labelled "Original (<h>p)". The
- *    audio is copied when it is AAC (`audioCopy = true`) and re-encoded to AAC-LC
- *    otherwise (`audioCopy = false`). A5 emits it as an extra highest master
- *    variant; A4 serves it via `-c:v copy`.
+ *  - Source is H.264 (h264/avc1/avc) + AAC (aac/mp4a), has known dimensions, and
+ *    fits the profile cap → a stream-copy passthrough (`isCopy = true`) at source
+ *    resolution/bitrate, labelled "Original (<h>p)". A5 emits it as an extra
+ *    highest master variant; A4 serves it via `-c copy`.
  *  - Otherwise → a TRANSCODE at source resolution (clamped to the profile cap,
  *    aspect preserved; unknown dims fall back to the top rung's frame) with a
  *    source-ish video bitrate capped at the profile's video ceiling
@@ -329,9 +327,8 @@ final class AbrLadder
     /**
      * Decide the "Original" descriptor — ALWAYS a genuine, playable variant.
      *
-     * Stream-copy passthrough when the source video is HLS-safe (8-bit H.264, known
-     * dims, fits the profile cap; the audio is copied if AAC and re-encoded
-     * otherwise); otherwise a TRANSCODE at the source resolution
+     * Stream-copy passthrough when the source is HLS-safe (H.264 + AAC, known
+     * dims, fits the profile cap); otherwise a TRANSCODE at the source resolution
      * (clamped to the profile cap, aspect preserved) with a source-ish video
      * bitrate (the source's own bitrate when known, else the canonical tier
      * target, capped at the profile's video ceiling). Either way the descriptor
@@ -351,13 +348,9 @@ final class AbrLadder
         $sh = $source->height;
         $sw = $source->width;
 
-        // Video is copied when it is 8-bit 4:2:0-class H.264 (see
-        // isBrowserSafePixelFormat()) within the profile cap. Audio is copied only
-        // when it is already AAC; any other codec is re-encoded to AAC-LC by the
-        // encoder, so the video copy does not depend on the audio codec.
         if (
             $sh !== null && $sh > 0 && $sw !== null && $sw > 0
-            && $source->isH264() && self::isBrowserSafePixelFormat($source->pixFmt)
+            && $source->isH264() && $source->isAac()
             && $sh <= $maxHeight && $sw <= $maxWidth
         ) {
             $height = self::evenFloor((float) $sh);
@@ -365,11 +358,7 @@ final class AbrLadder
             $videoBitrate = ($source->videoBitrate !== null && $source->videoBitrate > 0)
                 ? $source->videoBitrate
                 : self::canonicalTargetKbps($height) * 1000;
-            $audioCopy = $source->isAac();
-            // A copied AAC track keeps its source bitrate; a re-encoded track is
-            // written at the AAC allowance, so advertise that rather than the source's
-            // (possibly much higher) codec bitrate.
-            $audioBitrate = ($audioCopy && $source->audioBitrate !== null && $source->audioBitrate > 0)
+            $audioBitrate = ($source->audioBitrate !== null && $source->audioBitrate > 0)
                 ? $source->audioBitrate
                 : Rendition::AUDIO_BANDWIDTH;
             // For stream copy, bandwidth is the actual source bitrate without
@@ -386,7 +375,6 @@ final class AbrLadder
                 codecs: self::h264Codecs($sw, $sh),
                 isOriginal: true,
                 isCopy: true,
-                audioCopy: $audioCopy,
             );
         }
 
@@ -505,27 +493,6 @@ final class AbrLadder
         }
 
         return $video . ',' . Rendition::AUDIO_CODEC;
-    }
-
-    /**
-     * True when a source pixel format is one a browser decodes from H.264, i.e. an
-     * 8-bit 4:2:0-class layout. A 10/12-bit (High 10) or 4:2:2/4:4:4 H.264 source
-     * loads but fails to decode in MSE/hls.js, so it must be re-encoded, not copied.
-     * An unknown (null/empty) format is accepted, matching the legacy HLS decision in
-     * TranscodeManager::isBrowserSafeH264() so the two stay in agreement.
-     */
-    private static function isBrowserSafePixelFormat(?string $pixFmt): bool
-    {
-        if ($pixFmt === null || $pixFmt === '') {
-            return true;
-        }
-
-        $pix = strtolower($pixFmt);
-        if (str_contains($pix, '10') || str_contains($pix, '12')) {
-            return false;
-        }
-
-        return !str_starts_with($pix, 'yuv422') && !str_starts_with($pix, 'yuv444');
     }
 
     /**

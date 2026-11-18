@@ -86,12 +86,6 @@ final readonly class Rendition
      * @param string $codecs       HLS `CODECS` string (avc1.* + mp4a.40.2).
      * @param bool   $isOriginal   True for the "Original" descriptor.
      * @param bool   $isCopy       True when served via `-c copy` (source passthrough).
-     * @param bool   $audioCopy    For a copy rendition: true when the source AAC audio
-     *                             is copied (`-c:a copy`), false when the audio is
-     *                             re-encoded to AAC-LC. Meaningless for a transcode
-     *                             rendition (its audio is always re-encoded). Defaults
-     *                             to true so persisted rows without the key keep the
-     *                             copy-audio behaviour they were built with.
      */
     public function __construct(
         public string $id,
@@ -103,7 +97,6 @@ final readonly class Rendition
         public string $codecs,
         public bool $isOriginal,
         public bool $isCopy,
-        public bool $audioCopy = true,
     ) {
     }
 
@@ -178,7 +171,6 @@ final readonly class Rendition
      *     url: null,
      *     is_original: bool,
      *     is_copy: bool,
-     *     audio_copy: bool,
      *     video_bitrate: int
      * }
      */
@@ -194,8 +186,6 @@ final readonly class Rendition
             'url' => null,
             'is_original' => $this->isOriginal,
             'is_copy' => $this->isCopy,
-            // Only a copy rendition can copy its audio; a transcode never does.
-            'audio_copy' => $this->isCopy && $this->audioCopy,
             'video_bitrate' => $this->videoBitrate,
         ];
     }

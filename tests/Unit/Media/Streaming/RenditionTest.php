@@ -112,31 +112,10 @@ final class RenditionTest extends TestCase
                 'url' => null,
                 'is_original' => false,
                 'is_copy' => false,
-                'audio_copy' => false,
                 'video_bitrate' => 5_000_000,
             ],
             $this->fullHd()->toArray(),
         );
-    }
-
-    /**
-     * `audio_copy` is only ever true on a copy rendition whose audio is copied; a
-     * transcode rendition reports false even if the flag was set on it.
-     */
-    public function testAudioCopyIsOnlyTrueForACopyRenditionWithCopiedAudio(): void
-    {
-        $base = ['id' => 'original', 'label' => 'Original (1080p)', 'width' => 1920, 'height' => 1080,
-            'bitrate' => 8_192_000, 'videoBitrate' => 8_000_000, 'codecs' => 'avc1.640029,mp4a.40.2',
-            'isOriginal' => true];
-
-        $copyAac = new Rendition(...$base, isCopy: true, audioCopy: true);
-        $copyAacReencoded = new Rendition(...$base, isCopy: true, audioCopy: false);
-        $transcode = new Rendition(...$base, isCopy: false, audioCopy: true);
-
-        self::assertTrue($copyAac->toArray()['audio_copy']);
-        self::assertFalse($copyAacReencoded->toArray()['audio_copy']);
-        self::assertFalse($transcode->toArray()['audio_copy']);
-        self::assertTrue((new Rendition(...$base, isCopy: true))->audioCopy, 'audioCopy defaults to true');
     }
 
     public function testToArrayReflectsOriginalCopyFlags(): void

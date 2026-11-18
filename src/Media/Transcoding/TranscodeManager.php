@@ -2192,20 +2192,8 @@ class TranscodeManager
     private function segmentParamsForRendition(array $rendition): array
     {
         if (($rendition['is_copy'] ?? false) === true) {
-            // Video is a genuine passthrough (`-c:v copy`, no encoder flags). Audio is
-            // copied only when the source audio is AAC; any other codec is re-encoded
-            // to AAC-LC so a non-AAC source can still take the copy video path. The
-            // AAC re-encode mirrors the transcode rung contract below (stereo, 48 kHz).
-            if (($rendition['audio_copy'] ?? true) === false) {
-                return [
-                    'video_codec' => 'copy',
-                    'audio_codec' => 'aac',
-                    'audio_bitrate' => $this->encodeSettings->audioBitrate(),
-                    'audio_sample_rate' => 48000,
-                    'audio_channels' => 2,
-                ];
-            }
-
+            // Genuine passthrough: A4 emits only `-c:v copy` / `-c:a copy` and skips
+            // every other flag on the copy path, so nothing else belongs here.
             return ['video_codec' => 'copy', 'audio_codec' => 'copy'];
         }
 
@@ -2300,7 +2288,6 @@ class TranscodeManager
             codecs: is_string($rendition['codecs'] ?? null) ? $rendition['codecs'] : '',
             isOriginal: ($rendition['is_original'] ?? false) === true,
             isCopy: ($rendition['is_copy'] ?? false) === true,
-            audioCopy: ($rendition['audio_copy'] ?? true) !== false,
         );
     }
 

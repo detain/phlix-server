@@ -56,6 +56,13 @@ final class ProbeCache
     /** Writes since the last directory scan. Per-instance, never static. */
     private int $writesSinceScan = 0;
 
+    /** stat() mode bits: the file-type field and the directory type. */
+    private const S_IFMT = 0170000;
+    private const S_IFDIR = 0040000;
+
+    /** The uid the directory must be owned by, resolved once per instance; null = untrusted. */
+    private ?int $expectedUid;
+
     /**
      * @param string               $directory  Cache directory (created on first write, mode 0700).
      * @param int                  $maxEntries Entry cap that {@see prune()} enforces.
@@ -65,7 +72,42 @@ final class ProbeCache
         private readonly string $directory,
         private readonly int $maxEntries = self::MAX_ENTRIES,
         private readonly ?LoggerInterface $logger = null,
+        ?int $expectedUid = null,
     ) {
+        $this->expectedUid = $expectedUid ?? (function_exists('posix_getuid') ? posix_getuid() : null);
+    }
+
+    /**
+     * Build the cache only when its directory passes the trust check. Called once per
+     * worker by the container, never per probe. Returns null when the disk cache must be
+     * disabled: the path is a symlink or not a directory, it is not owned by the process
+     * uid, or it has a group or other write bit. Logs one warning when it refuses.
+     */
+    public static function createIfSecure(
+        string $directory,
+        int $maxEntries = self::MAX_ENTRIES,
+        ?LoggerInterface $logger = null,
+        ?int $expectedUid = null,
+    ): ?self {
+        try {
+            if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) {
+                $logger?->warning('ffprobe disk cache disabled: directory is not creatable', ['directory' => $directory]);
+                return null;
+            }
+            $cache = new self($directory, $maxEntries, $logger, $expectedUid);
+            if (!$cache->directoryIsTrusted()) {
+                $logger?->warning(
+                    'ffprobe disk cache disabled: directory must be a real directory owned by this user with no group or other write bit',
+                    ['directory' => $directory]
+                );
+                return null;
+            }
+
+            return $cache;
+        } catch (\Throwable $e) {
+            $logger?->warning('ffprobe disk cache disabled: ' . $e::class, ['directory' => $directory]);
+            return null;
+        }
     }
 
     /**
@@ -76,6 +118,9 @@ final class ProbeCache
     public function read(string $realPath, int $size, int $mtime): ?array
     {
         try {
+            if (!$this->directoryIsTrusted()) {
+                return null;
+            }
             $file = $this->fileFor($realPath);
             if (!is_file($file)) {
                 return null;
@@ -150,6 +195,10 @@ final class ProbeCache
                 $this->skip('probe cache directory is not creatable', $realPath);
                 return;
             }
+            if (!$this->directoryIsTrusted()) {
+                $this->skip('probe cache directory is not trusted', $realPath);
+                return;
+            }
 
             $payload = json_encode(
                 [
@@ -217,6 +266,25 @@ final class ProbeCache
         foreach (array_slice(array_keys($ages), 0, $excess) as $oldest) {
             @unlink($oldest);
         }
+    }
+
+    /**
+     * True when the directory is a real directory (lstat, so a symlink is refused), owned
+     * by the expected uid, and free of group and other write bits.
+     */
+    private function directoryIsTrusted(): bool
+    {
+        if ($this->expectedUid === null) {
+            return false;
+        }
+        $st = @lstat($this->directory);
+        if ($st === false) {
+            return false;
+        }
+
+        return ($st['mode'] & self::S_IFMT) === self::S_IFDIR
+            && ($st['mode'] & 0022) === 0
+            && $st['uid'] === $this->expectedUid;
     }
 
     /** Absolute path of the entry for a realpath. */

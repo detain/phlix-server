@@ -203,9 +203,12 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     // this constructor's documented "signature unchanged" law).
                     $runner->setSegmentEncodeThreads($segmentEncodeThreads);
                     $runner->setSegmentDecodeThreads($segmentDecodeThreads);
+                    // The directory trust check (owner, no symlink, no group/other write)
+                    // runs once here, at build, not per probe. A refused directory yields
+                    // null, which leaves the runner memo-only, and logs one warning.
                     $runner->setProbeCache(
                         $probeCacheDir !== null
-                            ? new ProbeCache($probeCacheDir, ProbeCache::MAX_ENTRIES, $logger)
+                            ? ProbeCache::createIfSecure($probeCacheDir, ProbeCache::MAX_ENTRIES, $logger)
                             : null
                     );
 

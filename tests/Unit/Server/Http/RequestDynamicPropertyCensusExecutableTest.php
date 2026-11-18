@@ -1393,11 +1393,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // +7 481→488 (fix-program tail): seven more reads, all on declared members;
     // 488 measured from the CI phpunit red; the undeclared-read leg still guards.
     // +1 488→489 (minors round): one more read on a declared member; measured.
-    // +18 489→507 (perf/C round 5): the branch's net declared-member reads on Request roots,
-    // measured from the phpunit red at 507 on the branch tip. The census's own root inference is
-    // the authority. The read sites are the gate, the artwork and avatar fast paths, the
-    // quick-connect mint, and the new and updated tests. A textual count of them does not
-    // reconcile exactly, so the per-site list is not pinned here.
+    // +18 489→507 (perf/C round 5): the branch's net declared-member reads on Request roots.
+    // Measurement basis: the census's own root inference, read off the phpunit failure message
+    // at 507 on the branch tip. It is not re-derived per site here, and the pin is not reconciled
+    // against an enumerated list. Reason: the census tracks Request roots through assignments and
+    // closures, and a loose textual match over the 6cc6cd6f..HEAD diff gives 30 added and 2 removed
+    // matching lines. That match also catches non-Request roots and assignments, so it cannot yield
+    // the 18 net reads. The read sites on the branch are the gate, the artwork and avatar fast
+    // paths, the quick-connect mint, and the new and updated tests. Only the census number is
+    // pinned, and the undeclared-read test guards the declared-member licence.
     private const EXPECTED_DECLARED_READS = 507;
 
     /**

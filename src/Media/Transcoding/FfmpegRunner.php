@@ -3270,10 +3270,16 @@ class FfmpegRunner
         // double-quoted -filter_complex argument, where the single quotes
         // escapeshellarg() adds would reach ffmpeg verbatim. filterSeconds() and
         // filterOffset() have already restricted them to digits and one dot.
+        // `eof_action=pass` on both `fps` samplers: with the default `round`, a
+        // Matroska input whose last frame sits a fraction early loses its final
+        // grid slot (measured on a 120 s clip: 59 of 60 sprite cells, 11 of 12 BIF
+        // frames, exit 0), and the sprite's last cell comes out black. `pass`
+        // emits every slot; the byte content of the slots that MP4 already
+        // produced is unchanged (identical PTS list, checked).
         $spriteChain = null;
         if ($wantSprite) {
             $spriteChain = sprintf(
-                'trim=start=%s,setpts=PTS-%s/TB,fps=1/%s,scale=%d:%d,tile=%dx%d:margin=%d:padding=%d[sprite]',
+                'trim=start=%s,setpts=PTS-%s/TB,fps=1/%s:eof_action=pass,scale=%d:%d,tile=%dx%d:margin=%d:padding=%d[sprite]',
                 $spriteTrimArg,
                 $spriteTrimArg,
                 $spriteIntervalArg,
@@ -3288,7 +3294,7 @@ class FfmpegRunner
         $bifChain = null;
         if ($wantBif) {
             $bifChain = sprintf(
-                'trim=start=%s,setpts=PTS-%s/TB,fps=1/%s,scale=%d:-2[bif]',
+                'trim=start=%s,setpts=PTS-%s/TB,fps=1/%s:eof_action=pass,scale=%d:-2[bif]',
                 $bifTrimArg,
                 $bifTrimArg,
                 $bifIntervalArg,

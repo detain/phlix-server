@@ -12,7 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\MediaAsset;
 
 use Phlix\Media\Library\ItemRepository;
-use Phlix\Media\Streaming\Trickplay\BifWriter;
+use Phlix\Media\Streaming\Trickplay\TrickplayArtefacts;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -213,8 +213,9 @@ class MediaAssetBackfill
     {
         $dir = $this->ffmpeg->getTranscodeDir() . '/trickplay/' . $itemId;
 
-        return is_file($dir . '/' . FfmpegRunner::SPRITE_FILENAME)
-            && is_file($dir . '/' . BifWriter::FILENAME);
+        // The same completeness rule the trickplay job and the backfill script use,
+        // so this skip never disagrees with them about what "done" means.
+        return TrickplayArtefacts::isComplete($dir);
     }
 
     /**

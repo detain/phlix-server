@@ -64,6 +64,28 @@ final class AccessScheduleMiddleware
     private const WINDOW_MESSAGE = "This profile can't be used right now. Allowed hours are set by your account.";
 
     /**
+     * Staleness bound, in nanoseconds, for a memoised no-profile verdict. Equal to the
+     * schedule memo's TTL in {@see AccessScheduleService}. Relayed traffic with no
+     * profile id otherwise costs one account-profile read per request, all to reach the
+     * same 403.
+     */
+    private const NO_PROFILE_MEMO_TTL_NS = 30_000_000_000;
+
+    /** Upper bound on the no-profile memo; aged-out entries are pruned past it. */
+    private const NO_PROFILE_MEMO_MAX_ENTRIES = 512;
+
+    /**
+     * User ids whose account had no resolvable active profile, each with the hrtime the
+     * verdict was read at. Only the refusal is memoised, never a profile. This object
+     * writes no profiles, so nothing in this process can clear it early: a profile
+     * created for the user is therefore refused for at most the TTL. That is fail-closed
+     * and bounded, which is the trade made here.
+     *
+     * @var array<string, int|float>
+     */
+    private array $noProfileMemo = [];
+
+    /**
      * Create a new AccessScheduleMiddleware instance.
      *
      * @param AccessScheduleService $accessScheduleService Service for checking schedules.
@@ -112,14 +134,20 @@ final class AccessScheduleMiddleware
             // No session profile (a token minted before S80, or an account with no
             // resolvable profile). Fall back to the account-wide active profile,
             // which is exactly the pre-S80 behaviour.
+            $readAt = hrtime(true);
+            if ($this->noProfileMemoHit($userId, $readAt)) {
+                return $this->noProfileRefusal();
+            }
+
             $profile = $this->profileManager->getActiveProfile($userId);
             if ($profile === null) {
                 // P5: No profile exists for an authenticated user — fail closed (deny
                 // access) rather than allowing an unprofiled user through. The user
-                // should set up a profile before access schedules apply.
-                return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
-                    'message' => self::NO_PROFILE_MESSAGE,
-                ]);
+                // should set up a profile before access schedules apply. The verdict is
+                // memoised for the TTL, so repeat requests do not re-read the profile.
+                $this->rememberNoProfile($userId, $readAt);
+
+                return $this->noProfileRefusal();
             }
 
             // P5: Profile IDs are CHAR(36) UUID strings. If we cannot resolve
@@ -127,9 +155,7 @@ final class AccessScheduleMiddleware
             // unauthenticated or unprofiled users through the schedule check.
             $profileId = $this->resolveProfileId($profile);
             if ($profileId === null) {
-                return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
-                    'message' => self::NO_PROFILE_MESSAGE,
-                ]);
+                return $this->noProfileRefusal();
             }
         }
 
@@ -197,6 +223,54 @@ final class AccessScheduleMiddleware
         }
 
         return $this->denyForProfile($profileId);
+    }
+
+    /**
+     * The 403 for a request whose account has no resolvable profile. One builder, so the
+     * fresh and the memoised refusals are byte-identical.
+     */
+    private function noProfileRefusal(): Response
+    {
+        return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
+            'message' => self::NO_PROFILE_MESSAGE,
+        ]);
+    }
+
+    /**
+     * True when this user's no-profile verdict was read less than the TTL ago.
+     *
+     * @param string    $userId The account whose verdict is looked up.
+     * @param int|float $now    The current hrtime.
+     */
+    private function noProfileMemoHit(string $userId, int|float $now): bool
+    {
+        $readAt = $this->noProfileMemo[$userId] ?? null;
+
+        return $readAt !== null && $now - $readAt < self::NO_PROFILE_MEMO_TTL_NS;
+    }
+
+    /**
+     * Memoise a no-profile verdict. Past the entry bound, aged-out entries are pruned
+     * first; if the map is still over the bound it is reset, so memory stays bounded.
+     *
+     * @param string    $userId The account that has no resolvable profile.
+     * @param int|float $readAt The hrtime captured before the profile read.
+     */
+    private function rememberNoProfile(string $userId, int|float $readAt): void
+    {
+        $this->noProfileMemo[$userId] = $readAt;
+        if (count($this->noProfileMemo) <= self::NO_PROFILE_MEMO_MAX_ENTRIES) {
+            return;
+        }
+
+        foreach ($this->noProfileMemo as $id => $at) {
+            if ($readAt - $at >= self::NO_PROFILE_MEMO_TTL_NS) {
+                unset($this->noProfileMemo[$id]);
+            }
+        }
+        if (count($this->noProfileMemo) > self::NO_PROFILE_MEMO_MAX_ENTRIES) {
+            $this->noProfileMemo = [];
+        }
     }
 
     /**

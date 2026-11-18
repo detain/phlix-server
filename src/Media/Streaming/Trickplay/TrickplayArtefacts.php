@@ -68,23 +68,126 @@ final class TrickplayArtefacts
     }
 
     /**
-     * Whether an item's directory already holds all three artefacts, each non-empty.
+     * Whether an item's directory holds all three artefacts, each whole.
      *
-     * A half-finished run leaves a zero-byte or missing file, which counts as not
-     * complete, so the item is regenerated rather than advertised broken.
+     * "Whole" is checked per format, not by size alone:
+     * - the sprite is non-empty;
+     * - the timeline parses to exactly {@see self::SPRITE_COUNT} entries, each with
+     *   a numeric time and position;
+     * - the BIF has the magic, at least two frames, and an index terminator whose
+     *   end offset is the file size. A truncated archive fails that offset check.
+     *
+     * A half-finished run therefore counts as not complete, and the item is
+     * regenerated rather than advertised broken.
      *
      * @param string $dir The item's trickplay directory.
      */
     public static function isComplete(string $dir): bool
     {
-        foreach ([FfmpegRunner::SPRITE_FILENAME, FfmpegRunner::TIMELINE_FILENAME, BifWriter::FILENAME] as $name) {
-            $path = $dir . '/' . $name;
-            if (!is_file($path) || filesize($path) === 0) {
+        $sprite = $dir . '/' . FfmpegRunner::SPRITE_FILENAME;
+        if (!is_file($sprite) || filesize($sprite) === 0) {
+            return false;
+        }
+
+        return self::timelineIsWhole($dir . '/' . FfmpegRunner::TIMELINE_FILENAME)
+            && self::bifIsWhole($dir . '/' . BifWriter::FILENAME);
+    }
+
+    /**
+     * Whether a timeline file parses to the full sprite grid.
+     *
+     * @param string $path Absolute path to timeline.json.
+     */
+    private static function timelineIsWhole(string $path): bool
+    {
+        if (!is_file($path)) {
+            return false;
+        }
+        $raw = @file_get_contents($path);
+        if (!is_string($raw)) {
+            return false;
+        }
+
+        $entries = json_decode($raw, true);
+        if (!is_array($entries) || !array_is_list($entries) || count($entries) !== self::SPRITE_COUNT) {
+            return false;
+        }
+
+        foreach ($entries as $entry) {
+            if (
+                !is_array($entry)
+                || !isset($entry['time'], $entry['x'], $entry['y'])
+                || !is_numeric($entry['time']) || !is_numeric($entry['x']) || !is_numeric($entry['y'])
+            ) {
                 return false;
             }
         }
 
         return true;
+    }
+
+    /**
+     * Whether a BIF file is a whole archive, judged from its header and terminator.
+     *
+     * The terminator entry sits at {@see BifWriter::HEADER_LENGTH} plus eight bytes
+     * per frame. Its timestamp field is 0xFFFFFFFF and its offset field is the
+     * one-past-the-last byte of the data, so it equals the file size only when no
+     * payload was cut off.
+     *
+     * @param string $path Absolute path to thumbs.bif.
+     */
+    private static function bifIsWhole(string $path): bool
+    {
+        $size = is_file($path) ? @filesize($path) : false;
+        $minimum = BifWriter::HEADER_LENGTH + BifWriter::INDEX_ENTRY_LENGTH;
+        if ($size === false || $size < $minimum) {
+            return false;
+        }
+
+        $handle = @fopen($path, 'rb');
+        if ($handle === false) {
+            return false;
+        }
+
+        try {
+            $header = fread($handle, BifWriter::HEADER_LENGTH);
+            if (!is_string($header) || strlen($header) !== BifWriter::HEADER_LENGTH) {
+                return false;
+            }
+            if (substr($header, 0, 8) !== BifWriter::MAGIC) {
+                return false;
+            }
+
+            $count = self::uint32At($header, 12);
+            if ($count < 2) {
+                return false;
+            }
+
+            $terminatorAt = BifWriter::HEADER_LENGTH + BifWriter::INDEX_ENTRY_LENGTH * $count;
+            if (fseek($handle, $terminatorAt) !== 0) {
+                return false;
+            }
+            $entry = fread($handle, BifWriter::INDEX_ENTRY_LENGTH);
+            if (!is_string($entry) || strlen($entry) !== BifWriter::INDEX_ENTRY_LENGTH) {
+                return false;
+            }
+
+            return self::uint32At($entry, 0) === BifWriter::INDEX_TERMINATOR
+                && self::uint32At($entry, 4) === $size;
+        } finally {
+            fclose($handle);
+        }
+    }
+
+    /**
+     * Reads a little-endian uint32 from a byte string at an offset.
+     */
+    private static function uint32At(string $bytes, int $offset): int
+    {
+        /** @var array{1: int} $unpacked */
+        $unpacked = unpack('V', substr($bytes, $offset, 4));
+
+        return $unpacked[1];
     }
 
     /**

@@ -63,19 +63,66 @@ final class TrickplayArtefactsTest extends TestCase
         $this->assertSame($expected, TrickplayArtefacts::bifFrameCount($duration));
     }
 
-    public function testAnItemIsCompleteOnlyWhenAllThreeArtefactsAreNonEmpty(): void
+    /** Writes a sprite, a timeline with $entries entries and a 12-frame BIF. */
+    private function writeSet(int $entries = 60, ?string $bif = null): void
+    {
+        $timeline = [];
+        for ($i = 0; $i < $entries; $i++) {
+            $timeline[] = ['time' => $i * 2.0, 'x' => 2, 'y' => 2];
+        }
+        file_put_contents($this->dir . '/' . FfmpegRunner::SPRITE_FILENAME, self::JPEG);
+        file_put_contents($this->dir . '/' . FfmpegRunner::TIMELINE_FILENAME, json_encode($timeline, JSON_THROW_ON_ERROR));
+        file_put_contents(
+            $this->dir . '/' . BifWriter::FILENAME,
+            $bif ?? BifWriter::build(array_fill(0, 12, self::JPEG), 10000)
+        );
+    }
+
+    public function testAnItemIsCompleteOnlyWhenEveryArtefactIsWhole(): void
     {
         $this->assertFalse(TrickplayArtefacts::isComplete($this->dir), 'An empty directory is not complete.');
 
         file_put_contents($this->dir . '/' . FfmpegRunner::SPRITE_FILENAME, self::JPEG);
-        file_put_contents($this->dir . '/' . FfmpegRunner::TIMELINE_FILENAME, '[]');
-        $this->assertFalse(TrickplayArtefacts::isComplete($this->dir), 'A sprite without its BIF is not complete.');
+        $this->assertFalse(TrickplayArtefacts::isComplete($this->dir), 'A sprite alone is not complete.');
+
+        $this->writeSet();
+        $this->assertTrue(TrickplayArtefacts::isComplete($this->dir));
 
         file_put_contents($this->dir . '/' . BifWriter::FILENAME, '');
         $this->assertFalse(TrickplayArtefacts::isComplete($this->dir), 'A zero-byte archive is a half-finished run.');
+    }
 
-        file_put_contents($this->dir . '/' . BifWriter::FILENAME, BifWriter::build([self::JPEG, self::JPEG], 10000));
-        $this->assertTrue(TrickplayArtefacts::isComplete($this->dir));
+    public function testATruncatedBifIsNotComplete(): void
+    {
+        $whole = BifWriter::build(array_fill(0, 12, self::JPEG), 10000);
+        // Cut one byte off the last frame: the terminator's end offset no longer
+        // equals the file size, so the archive must not be advertised.
+        $this->writeSet(60, substr($whole, 0, -1));
+        $this->assertFalse(TrickplayArtefacts::isComplete($this->dir));
+
+        // Cut inside the index: the header claims frames the file does not hold.
+        $this->writeSet(60, substr($whole, 0, 100));
+        $this->assertFalse(TrickplayArtefacts::isComplete($this->dir));
+    }
+
+    public function testABifWithoutTheRokuMagicIsNotComplete(): void
+    {
+        $bif = BifWriter::build(array_fill(0, 12, self::JPEG), 10000);
+        $this->writeSet(60, 'XXXXXXXX' . substr($bif, 8));
+
+        $this->assertFalse(TrickplayArtefacts::isComplete($this->dir));
+    }
+
+    public function testAShortOrLongTimelineIsNotComplete(): void
+    {
+        $this->writeSet(59);
+        $this->assertFalse(TrickplayArtefacts::isComplete($this->dir), 'A 59-entry timeline is a short sprite grid.');
+
+        $this->writeSet(61);
+        $this->assertFalse(TrickplayArtefacts::isComplete($this->dir), 'A 61-entry timeline does not match the grid.');
+
+        file_put_contents($this->dir . '/' . FfmpegRunner::TIMELINE_FILENAME, 'not json');
+        $this->assertFalse(TrickplayArtefacts::isComplete($this->dir), 'An unparseable timeline is not complete.');
     }
 
     public function testWriteBifNeedsAtLeastTwoFrames(): void

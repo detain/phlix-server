@@ -3374,6 +3374,12 @@ class FfmpegRunner
             $slotsTemp
         );
 
+        // Nothing a previous pass left may count towards this one. A crash leaves temporaries
+        // and BIF frames behind, and an exit-0 run that writes nothing would otherwise
+        // publish them. Callers hold the item's trickplay lock for the whole pass, so no
+        // other pass is writing the directory while this one clears it.
+        $this->clearStaleTrickplayFiles($outputDir, $bifPattern, $bifCount);
+
         $outputLines = [];
         $exitCode = 0;
         $slotCount = null;
@@ -3661,6 +3667,28 @@ class FfmpegRunner
             if (is_file($framePath)) {
                 @unlink($framePath);
             }
+        }
+    }
+
+    /**
+     * Deletes what an earlier pass left in an item directory: every temporary and
+     * every BIF frame, including frames numbered past this pass's count from a larger
+     * earlier run. Published artefacts under their final names are not touched.
+     *
+     * The directory sweep covers the pass's own frame range too; {@see removeBifFrames()}
+     * is kept for that range so it is still cleared if the listing fails.
+     */
+    private function clearStaleTrickplayFiles(string $outputDir, ?string $bifPattern, int $bifCount): void
+    {
+        $names = scandir($outputDir);
+        foreach ($names === false ? [] : $names as $name) {
+            if (str_starts_with($name, self::TEMP_FILE_PREFIX) || str_starts_with($name, 'bifframe_')) {
+                self::removeTrickplayFile($outputDir . '/' . $name);
+            }
+        }
+
+        if ($bifPattern !== null) {
+            $this->removeBifFrames($bifPattern, $bifCount);
         }
     }
 

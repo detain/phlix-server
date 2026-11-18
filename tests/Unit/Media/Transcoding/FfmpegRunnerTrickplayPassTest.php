@@ -301,11 +301,11 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
             $this->markTestSkipped('/dev/full is needed to force a real ENOSPC on write.');
         }
         // The timeline's temporary is a link to /dev/full, so its write fails with
-        // ENOSPC the way a full disk does. The old code wrote in place and
-        // ignored the result, so a truncated timeline was published.
-        mkdir($this->dir . '/out', 0755, true);
-        symlink('/dev/full', $this->dir . '/out/.tmp-timeline.json');
+        // ENOSPC the way a full disk does. The link appears during the run, after the
+        // pre-pass sweep, so the sweep cannot remove it first. The old code wrote in
+        // place and ignored the result, so a truncated timeline was published.
         $runner = $this->scripted(6000.0);
+        $runner->devFullLinkAt = $this->dir . '/out/.tmp-timeline.json';
 
         $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
 
@@ -327,6 +327,49 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         }
 
         return $names;
+    }
+
+    public function testAStaleTemporarySpriteFromACrashIsNotPublishedByAPassThatWroteNothing(): void
+    {
+        // A crashed earlier pass left a sprite temporary behind. This pass exits 0 and
+        // writes no sprite (the case where -loglevel error hides the reason). The stale
+        // temporary must not be renamed into place, and the previous complete sprite must
+        // survive the failed pass.
+        mkdir($this->dir . '/out', 0755, true);
+        file_put_contents($this->dir . '/out/.tmp-sprite.jpg', 'STALE-SPRITE');
+        file_put_contents($this->dir . '/out/sprite.jpg', 'PREVIOUS-SPRITE');
+        $runner = $this->scripted(6000.0);
+        $runner->writeSprite = false;
+        $runner->bifFramesToWrite = 0;
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 0, 320);
+
+        $this->assertNull($result);
+        $this->assertSame('PREVIOUS-SPRITE', file_get_contents($this->dir . '/out/sprite.jpg'));
+        $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
+    }
+
+    public function testStaleBifFramesFromACrashCannotCompleteAShortPass(): void
+    {
+        // Ten frames were left by a crashed run that wanted ten, plus one beyond the
+        // count from a larger earlier run. This pass writes no frame, so its BIF is
+        // short and the pass must fail. None of the stale frames may be counted.
+        mkdir($this->dir . '/out', 0755, true);
+        for ($i = 1; $i <= 11; $i++) {
+            file_put_contents(sprintf($this->dir . '/out/bifframe_%05d.jpg', $i), 'STALE-FRAME');
+        }
+        $runner = $this->scripted(6000.0);
+        $runner->bifFramesToWrite = 0;
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 10, 320);
+
+        $this->assertNull($result);
+        $this->assertFileDoesNotExist($this->dir . '/out/sprite.jpg');
+        $this->assertFileDoesNotExist($this->dir . '/out/timeline.json');
+        for ($i = 1; $i <= 11; $i++) {
+            $this->assertFileDoesNotExist(sprintf($this->dir . '/out/bifframe_%05d.jpg', $i));
+        }
+        $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
     }
 
     public function testACleanRunWithEmptyOutputStillPublishes(): void
@@ -459,6 +502,9 @@ final class ScriptedTrickplayRunner extends FfmpegRunner
     /** Whether the launch throws after writing its outputs. */
     public bool $throwOnRun = false;
 
+    /** Path to replace with a symlink to /dev/full during the run, or null for none. */
+    public ?string $devFullLinkAt = null;
+
     public function __construct(string $ffmpeg, string $ffprobe, string $transcodeDir, private float $duration)
     {
         parent::__construct($ffmpeg, $ffprobe, $transcodeDir);
@@ -484,6 +530,11 @@ final class ScriptedTrickplayRunner extends FfmpegRunner
         $this->commands[] = $cmd;
         $output = $this->ffmpegMessage === null ? [] : [$this->ffmpegMessage];
         $exitCode = $this->exitCodeToReturn;
+
+        if ($this->devFullLinkAt !== null) {
+            @unlink($this->devFullLinkAt);
+            symlink('/dev/full', $this->devFullLinkAt);
+        }
 
         // The sprite is written under its temporary name and renamed afterwards.
         if ($this->writeSprite && preg_match("#'([^']*/\\.tmp-sprite\\.jpg)'#", $cmd, $m) === 1) {

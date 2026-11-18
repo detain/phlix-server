@@ -97,7 +97,6 @@ final class WebPortalRouterTmdbKeyTest extends TestCase
     private function resolvedKey(WebPortalRouter $router): string
     {
         $method = new \ReflectionMethod($router, 'tmdbApiKey');
-        $method->setAccessible(true);
 
         /** @var string $key */
         $key = $method->invoke($router);

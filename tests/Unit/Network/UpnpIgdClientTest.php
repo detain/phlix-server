@@ -75,7 +75,6 @@ class UpnpIgdClientTest extends TestCase
             . "LOCATION: http://169.254.169.254/latest/meta-data/\r\n\r\n";
 
         $method = new ReflectionMethod(UpnpIgdClient::class, 'parseSsdpResponse');
-        $method->setAccessible(true);
 
         // Reply arrives from the gateway, but the LOCATION points at metadata.
         $this->assertNull($method->invoke($this->client, $notify, '192.168.1.1'));
@@ -99,7 +98,6 @@ class UpnpIgdClientTest extends TestCase
     public function testResolveUrlRejectsCrossHostControlUrl(): void
     {
         $method = new ReflectionMethod(UpnpIgdClient::class, 'resolveUrl');
-        $method->setAccessible(true);
 
         $base = 'http://192.168.1.1:1900/gateway.xml';
 
@@ -131,7 +129,6 @@ class UpnpIgdClientTest extends TestCase
     public function testReadResponseBoundedAbortsOversizedReply(): void
     {
         $method = new ReflectionMethod(UpnpIgdClient::class, 'readResponseBounded');
-        $method->setAccessible(true);
 
         $stream = fopen('php://memory', 'r+b');
         $this->assertIsResource($stream);
@@ -157,7 +154,6 @@ class UpnpIgdClientTest extends TestCase
     public function testReadResponseBoundedReturnsCompleteShortReply(): void
     {
         $method = new ReflectionMethod(UpnpIgdClient::class, 'readResponseBounded');
-        $method->setAccessible(true);
 
         $payload = "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\n\r\n<xml>ok</xml>";
         $stream = fopen('php://memory', 'r+b');
@@ -184,7 +180,6 @@ class UpnpIgdClientTest extends TestCase
         $this->assertNotFalse(fwrite($mine, "HTTP/1.1 200 OK\r\n"));
 
         $method = new ReflectionMethod(UpnpIgdClient::class, 'readResponseBounded');
-        $method->setAccessible(true);
 
         $start = hrtime(true);
         $result = $method->invoke($this->client, $mine, 1);

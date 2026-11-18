@@ -36,7 +36,6 @@ class ApplicationStorageSnapshotTest extends TestCase
         $app = $ref->newInstanceWithoutConstructor();
 
         $method = $ref->getMethod('recordStorageSnapshots');
-        $method->setAccessible(true);
         $method->invoke($app, $collector, $db, $logger);
     }
 

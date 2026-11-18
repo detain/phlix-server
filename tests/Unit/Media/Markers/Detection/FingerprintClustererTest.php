@@ -60,7 +60,6 @@ class FingerprintClustererTest extends TestCase
 
         $reflection = new \ReflectionClass($clusterer);
         $method = $reflection->getMethod('similarity');
-        $method->setAccessible(true);
 
         $result1 = $method->invoke($clusterer, 'abc123', 'abc123');
         $this->assertEquals(1.0, $result1);
@@ -139,7 +138,6 @@ class FingerprintClustererTest extends TestCase
 
         $reflection = new \ReflectionClass($clusterer);
         $method = $reflection->getMethod('similarity');
-        $method->setAccessible(true);
 
         $result = $method->invoke($clusterer, 'identical', 'identical');
         $this->assertEquals(1.0, $result);
@@ -151,7 +149,6 @@ class FingerprintClustererTest extends TestCase
 
         $reflection = new \ReflectionClass($clusterer);
         $method = $reflection->getMethod('similarity');
-        $method->setAccessible(true);
 
         $result = $method->invoke($clusterer, 'abc', 'xyz');
         $this->assertGreaterThanOrEqual(0.0, $result);

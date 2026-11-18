@@ -66,7 +66,6 @@ final class LibraryManagerMusicScanTest extends TestCase
         ?callable $onProgress
     ): ScanResult {
         $method = new \ReflectionMethod(LibraryManager::class, 'scanMusicLibrary');
-        $method->setAccessible(true);
         $result = $method->invoke($manager, $library->id, $library, $onProgress);
         self::assertInstanceOf(ScanResult::class, $result);
 

@@ -60,7 +60,6 @@ final class LiveTvServicesProviderTest extends TestCase
     {
         $ref = new \ReflectionObject($obj);
         $p = $ref->getProperty($prop);
-        $p->setAccessible(true);
         return $p->getValue($obj);
     }
 

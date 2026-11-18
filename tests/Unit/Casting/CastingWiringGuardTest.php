@@ -76,7 +76,6 @@ final class CastingWiringGuardTest extends TestCase
         $this->assertInstanceOf($managerClass, $manager);
 
         $reflected = (new ReflectionClass($managerClass))->getProperty('store');
-        $reflected->setAccessible(true);
         $store = $reflected->getValue($manager);
 
         $this->assertNotNull(
@@ -102,7 +101,6 @@ final class CastingWiringGuardTest extends TestCase
         $stores = [];
         foreach (self::managerProvider() as [$managerClass]) {
             $reflected = (new ReflectionClass($managerClass))->getProperty('store');
-            $reflected->setAccessible(true);
 
             /** @var CastingSessionStore|null $store */
             $store = $reflected->getValue($container->get($managerClass));

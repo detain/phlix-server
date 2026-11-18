@@ -58,7 +58,6 @@ final class AuthManagerProfileClaimWiringGuardTest extends TestCase
         $this->assertInstanceOf(AuthManager::class, $authManager);
 
         $reflected = (new ReflectionClass(AuthManager::class))->getProperty('profileManager');
-        $reflected->setAccessible(true);
         $profileManager = $reflected->getValue($authManager);
 
         $this->assertNotNull(

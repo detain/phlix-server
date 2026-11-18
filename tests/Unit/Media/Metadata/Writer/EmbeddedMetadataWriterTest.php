@@ -703,7 +703,6 @@ final class EmbeddedMetadataWriterTest extends TestCase
 
         try {
             $method = new \ReflectionMethod(EmbeddedMetadataWriter::class, 'createStage');
-            $method->setAccessible(true);
             $method->invoke($this->writer(new S89ScriptedRunner()), $this->item($media), $media);
             $this->fail('stage creation must fail loudly when it cannot create exclusively');
         } catch (EmbeddedWriteFailedException $e) {

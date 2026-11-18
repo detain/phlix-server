@@ -33,7 +33,6 @@ final class LibraryMetadataMatcherPluginRatingsTest extends TestCase
     private function invokePersist(LibraryMetadataMatcher $matcher, string $id, array $resolved): void
     {
         $method = new ReflectionMethod($matcher, 'persistPluginRatings');
-        $method->setAccessible(true);
         $method->invoke($matcher, $id, $resolved);
     }
 

@@ -179,7 +179,6 @@ class NatPmpClientTest extends TestCase
     private function invokeWireMethod(string $name, int|string ...$args): mixed
     {
         $method = new ReflectionMethod(NatPmpClient::class, $name);
-        $method->setAccessible(true);
         return $method->invoke($this->client, ...$args);
     }
 

@@ -40,7 +40,6 @@ final class AuthManagerSignupGateTest extends TestCase
         parent::setUp();
         $ref = new ReflectionClass(AuthManager::class);
         $prop = $ref->getProperty('rateLimitStore');
-        $prop->setAccessible(true);
         $prop->setValue(null, []);
         $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
     }

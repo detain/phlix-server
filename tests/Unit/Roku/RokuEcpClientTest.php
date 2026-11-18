@@ -63,9 +63,7 @@ class RokuEcpClientTest extends TestCase
         // Using reflection to verify private properties
         $reflection = new \ReflectionClass($client);
         $hostProperty = $reflection->getProperty('deviceHost');
-        $hostProperty->setAccessible(true);
         $portProperty = $reflection->getProperty('devicePort');
-        $portProperty->setAccessible(true);
 
         $this->assertEquals('192.168.1.200', $hostProperty->getValue($client));
         $this->assertEquals(8080, $portProperty->getValue($client));
@@ -103,7 +101,6 @@ class RokuEcpClientTest extends TestCase
         $client = new RokuEcpClient('192.168.1.100', 8060);
 
         $method = new \ReflectionMethod($client, 'preferAsyncHttp');
-        $method->setAccessible(true);
 
         $this->assertFalse(
             $method->invoke($client),
@@ -162,7 +159,6 @@ class RokuEcpClientTest extends TestCase
 
         $client = new RokuEcpClient('192.168.1.100', 8060);
         $sleep = new \ReflectionMethod($client, 'coroutineAwareSleep');
-        $sleep->setAccessible(true);
 
         $order = [];
         \Swoole\Coroutine\run(function () use (&$order, $sleep, $client): void {

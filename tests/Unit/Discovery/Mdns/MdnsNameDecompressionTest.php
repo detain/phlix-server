@@ -39,7 +39,6 @@ final class MdnsNameDecompressionTest extends TestCase
     private function decode(string $data, int $offset): array
     {
         $method = new \ReflectionMethod(MdnsSocket::class, 'decodeDnsName');
-        $method->setAccessible(true);
 
         /** @var array{string, int} $result */
         $result = $method->invoke($this->socket, $data, $offset);

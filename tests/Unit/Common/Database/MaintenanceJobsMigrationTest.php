@@ -56,7 +56,6 @@ final class MaintenanceJobsMigrationTest extends TestCase
     private static function statements(): array
     {
         $split = new ReflectionMethod(MigrationRunner::class, 'splitStatements');
-        $split->setAccessible(true);
 
         /** @var list<string> $statements */
         $statements = $split->invoke(null, self::sql());

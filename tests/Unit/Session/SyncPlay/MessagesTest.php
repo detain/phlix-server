@@ -387,7 +387,6 @@ class MessagesTest extends TestCase
         // Use reflection to test the private hashPassword method
         $reflection = new \ReflectionClass(Messages::class);
         $method = $reflection->getMethod('hashPassword');
-        $method->setAccessible(true);
 
         $hash1 = $method->invoke(null, 'password123');
         $hash2 = $method->invoke(null, 'password123');

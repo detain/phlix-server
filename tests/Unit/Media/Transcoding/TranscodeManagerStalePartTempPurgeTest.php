@@ -149,7 +149,6 @@ final class TranscodeManagerStalePartTempPurgeTest extends TestCase
         $this->invoke($manager, 'reconcileInFlightSegments');
 
         $prop = new ReflectionProperty(TranscodeManager::class, 'globalInFlightSnapshot');
-        $prop->setAccessible(true);
         $snapshot = $prop->getValue($manager);
         $this->assertIsArray($snapshot);
         $this->assertArrayNotHasKey($deadFinal, $snapshot, 'a dead orphan must not key dedup forever');
@@ -255,7 +254,6 @@ final class TranscodeManagerStalePartTempPurgeTest extends TestCase
     private function invoke(TranscodeManager $manager, string $method): mixed
     {
         $m = new ReflectionMethod(TranscodeManager::class, $method);
-        $m->setAccessible(true);
 
         return $m->invoke($manager);
     }

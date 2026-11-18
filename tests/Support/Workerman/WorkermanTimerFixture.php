@@ -74,7 +74,6 @@ trait WorkermanTimerFixture
     private static function readTimerEventStatic(): ?EventInterface
     {
         $property = new ReflectionProperty(Timer::class, 'event');
-        $property->setAccessible(true);
         /** @var EventInterface|null $event */
         $event = $property->getValue();
 
@@ -84,7 +83,6 @@ trait WorkermanTimerFixture
     private static function writeTimerEventStatic(?EventInterface $event): void
     {
         $property = new ReflectionProperty(Timer::class, 'event');
-        $property->setAccessible(true);
         $property->setValue(null, $event);
     }
 }

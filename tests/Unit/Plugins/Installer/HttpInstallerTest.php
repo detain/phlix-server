@@ -457,7 +457,6 @@ final class HttpInstallerTest extends TestCase
         $installer = $this->installer();
         $ref = new \ReflectionClass(HttpInstaller::class);
         $method = $ref->getMethod('guardPluginName');
-        $method->setAccessible(true);
 
         // Wrong prefix -> 245-249.
         $this->expectException(PluginInstallException::class);
@@ -474,7 +473,6 @@ final class HttpInstallerTest extends TestCase
         $installer = $this->installer();
         $ref = new \ReflectionClass(HttpInstaller::class);
         $method = $ref->getMethod('guardPluginName');
-        $method->setAccessible(true);
 
         // This name fails the kebab regex (uppercase chars) -> first guard catches it.
         try {
@@ -711,7 +709,6 @@ final class HttpInstallerTest extends TestCase
         file_put_contents($fileTarget, 'x');
 
         $ref = new \ReflectionMethod(HttpInstaller::class, 'extractTarGz');
-        $ref->setAccessible(true);
 
         try {
             $ref->invoke($this->installer(), $gzPath, $fileTarget);
@@ -789,7 +786,6 @@ final class HttpInstallerTest extends TestCase
     public function test_redirect_header_chain_is_rejected(): void
     {
         $method = new \ReflectionMethod(HttpInstaller::class, 'assertNoRedirectResponses');
-        $method->setAccessible(true);
 
         try {
             $method->invoke($this->installer(), ['HTTP/1.1 302 Found', 'Location: http://169.254.169.254/'], 'https://plugin.test/pkg.zip');
@@ -812,7 +808,6 @@ final class HttpInstallerTest extends TestCase
     public function test_non_redirect_header_chains_pass_the_gate(): void
     {
         $method = new \ReflectionMethod(HttpInstaller::class, 'assertNoRedirectResponses');
-        $method->setAccessible(true);
         $installer = $this->installer();
 
         $passed = 0;
@@ -836,7 +831,6 @@ final class HttpInstallerTest extends TestCase
     public function test_terminal_status_reads_the_last_http_status_line(): void
     {
         $method = new \ReflectionMethod(HttpInstaller::class, 'terminalResponseStatus');
-        $method->setAccessible(true);
 
         $this->assertNull($method->invoke($this->installer(), []));
         $this->assertSame(200, $method->invoke($this->installer(), ['HTTP/1.1 200 OK']));
@@ -848,7 +842,6 @@ final class HttpInstallerTest extends TestCase
     public function test_http_error_status_arm(): void
     {
         $method = new \ReflectionMethod(HttpInstaller::class, 'isHttpErrorStatus');
-        $method->setAccessible(true);
 
         $this->assertFalse($method->invoke($this->installer(), null), 'non-HTTP transport is judged by the false-bytes arm');
         $this->assertFalse($method->invoke($this->installer(), 200));

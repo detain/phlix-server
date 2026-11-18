@@ -45,11 +45,9 @@ class DefaultSubtitleLanguageTest extends TestCase
         $router = $ref->newInstanceWithoutConstructor();
 
         $prop = $ref->getProperty('settings');
-        $prop->setAccessible(true);
         $prop->setValue($router, $settings);
 
         $method = $ref->getMethod('defaultSubtitleLanguage');
-        $method->setAccessible(true);
 
         /** @var string $result */
         $result = $method->invoke($router);

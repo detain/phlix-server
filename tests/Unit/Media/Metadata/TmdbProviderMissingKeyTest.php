@@ -78,7 +78,6 @@ final class TmdbProviderMissingKeyTest extends TestCase
     private function keyOf(TmdbProvider $provider): string
     {
         $prop = new \ReflectionProperty(TmdbProvider::class, 'apiKey');
-        $prop->setAccessible(true);
 
         /** @var string $key */
         $key = $prop->getValue($provider);

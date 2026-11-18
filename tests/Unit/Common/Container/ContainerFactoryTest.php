@@ -856,7 +856,6 @@ final class ContainerFactoryTest extends TestCase
     {
         $ref  = new ReflectionClass($target);
         $prop = $ref->getProperty($property);
-        $prop->setAccessible(true);
         return $prop->getValue($target);
     }
 }

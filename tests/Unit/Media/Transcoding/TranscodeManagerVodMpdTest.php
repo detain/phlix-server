@@ -1047,7 +1047,6 @@ final class TranscodeManagerVodMpdTest extends TestCase
         mkdir($dir, 0755, true);
 
         $method = new ReflectionMethod(TranscodeManager::class, 'writeVodPlaylists');
-        $method->setAccessible(true);
         $method->invokeArgs($this->manager(), [
             $dir, $duration, $segSeconds, $width, $height, $bandwidth, $variants, $audioTracks, $format,
         ]);

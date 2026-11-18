@@ -238,7 +238,6 @@ final class OpenapiSpecCurrencyTest extends TestCase
     private function routerOf(object $owner): array
     {
         $property = (new ReflectionClass($owner))->getProperty('router');
-        $property->setAccessible(true);
         $router = $property->getValue($owner);
 
         if (!$router instanceof Router) {

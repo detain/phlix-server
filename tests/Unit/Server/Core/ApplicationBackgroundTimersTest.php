@@ -50,7 +50,6 @@ class ApplicationBackgroundTimersTest extends TestCase
 
         foreach (['config' => $config, 'connectionPool' => $pool, 'container' => $container] as $prop => $value) {
             $p = $ref->getProperty($prop);
-            $p->setAccessible(true);
             $p->setValue($app, $value);
         }
 

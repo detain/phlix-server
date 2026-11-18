@@ -114,7 +114,6 @@ final class MediaAssetChapterBatchTest extends TestCase
 
         $job = new ScriptedChaptersJob($ffmpeg, $this->createMock(ItemRepository::class), $db, $chapters);
         $method = (new \ReflectionClass(MediaAssetGenerationJob::class))->getMethod('generateChapterThumbnails');
-        $method->setAccessible(true);
 
         /** @var bool $result */
         $result = $method->invoke($job, new MediaAssetJob('item-1', '/media/movie.mkv', 3600));

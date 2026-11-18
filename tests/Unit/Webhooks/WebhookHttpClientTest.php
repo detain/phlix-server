@@ -47,20 +47,17 @@ class WebhookHttpClientTest extends TestCase
         $client = new WebhookHttpClient(timeout: 12, connectTimeout: 4);
 
         $getAsyncClient = new ReflectionMethod(WebhookHttpClient::class, 'getAsyncClient');
-        $getAsyncClient->setAccessible(true);
         /** @var Client $asyncClient */
         $asyncClient = $getAsyncClient->invoke($client);
 
         $this->assertInstanceOf(Client::class, $asyncClient);
 
         $connectionPoolProp = new ReflectionProperty(Client::class, '_connectionPool');
-        $connectionPoolProp->setAccessible(true);
         /** @var ConnectionPool $connectionPool */
         $connectionPool = $connectionPoolProp->getValue($asyncClient);
         $this->assertInstanceOf(ConnectionPool::class, $connectionPool);
 
         $optionsProp = new ReflectionProperty(ConnectionPool::class, 'options');
-        $optionsProp->setAccessible(true);
         /** @var array<string, mixed> $options */
         $options = $optionsProp->getValue($connectionPool);
 
@@ -77,7 +74,6 @@ class WebhookHttpClientTest extends TestCase
         $client = new WebhookHttpClient(timeout: 10, connectTimeout: 5);
 
         $getAsyncClient = new ReflectionMethod(WebhookHttpClient::class, 'getAsyncClient');
-        $getAsyncClient->setAccessible(true);
 
         $first = $getAsyncClient->invoke($client);
         $second = $getAsyncClient->invoke($client);

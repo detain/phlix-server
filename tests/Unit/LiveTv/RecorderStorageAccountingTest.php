@@ -87,7 +87,6 @@ final class RecorderStorageAccountingTest extends TestCase
     private function invokePrivate(Recorder $recorder, string $method, array $args): mixed
     {
         $ref = new \ReflectionMethod(Recorder::class, $method);
-        $ref->setAccessible(true);
         return $ref->invokeArgs($recorder, $args);
     }
 

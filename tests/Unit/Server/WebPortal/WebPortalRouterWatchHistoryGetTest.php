@@ -62,7 +62,6 @@ final class WebPortalRouterWatchHistoryGetTest extends TestCase
     private function routeTable(WebPortalRouter $webPortalRouter): array
     {
         $property = (new ReflectionClass($webPortalRouter))->getProperty('router');
-        $property->setAccessible(true);
         $router = $property->getValue($webPortalRouter);
         $this->assertInstanceOf(Router::class, $router);
 

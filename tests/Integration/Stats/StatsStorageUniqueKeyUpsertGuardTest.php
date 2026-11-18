@@ -574,7 +574,6 @@ final class StatsStorageUniqueKeyUpsertGuardTest extends TestCase
         }
 
         $split = new ReflectionMethod(MigrationRunner::class, 'splitStatements');
-        $split->setAccessible(true);
         /** @var list<string> $statements */
         $statements = $split->invoke(null, $this->migrationSql(self::MIGRATION_105));
 
@@ -759,7 +758,6 @@ final class StatsStorageUniqueKeyUpsertGuardTest extends TestCase
     private function runnerChecksum(string $sql): string
     {
         $checksum = new ReflectionMethod(MigrationRunner::class, 'checksum');
-        $checksum->setAccessible(true);
 
         return (string) $checksum->invoke(null, $sql);
     }

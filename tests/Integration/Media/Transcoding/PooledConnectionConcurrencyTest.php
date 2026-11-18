@@ -434,9 +434,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
         mkdir($hlsDir, 0755, true);
 
         $entry = new ReflectionMethod(TranscodeManager::class, 'jobRowEntry');
-        $entry->setAccessible(true);
         $invalidate = new ReflectionMethod(TranscodeManager::class, 'invalidateJobRowCache');
-        $invalidate->setAccessible(true);
 
         // Seed the row (outside any coroutine → the pool's CLI connection). The
         // transcode_job FK-references a media_item, which FK-references a library,

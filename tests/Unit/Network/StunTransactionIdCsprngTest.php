@@ -17,7 +17,6 @@ final class StunTransactionIdCsprngTest extends TestCase
     private function generate(StunClient $c): string
     {
         $m = new ReflectionMethod(StunClient::class, 'generateTransactionId');
-        $m->setAccessible(true);
         $id = $m->invoke($c);
         self::assertIsString($id);
         return $id;

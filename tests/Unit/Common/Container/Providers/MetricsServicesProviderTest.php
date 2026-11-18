@@ -206,7 +206,6 @@ final class MetricsServicesProviderTest extends TestCase
     {
         $ref  = new ReflectionClass($target);
         $prop = $ref->getProperty($property);
-        $prop->setAccessible(true);
         return $prop->getValue($target);
     }
 }

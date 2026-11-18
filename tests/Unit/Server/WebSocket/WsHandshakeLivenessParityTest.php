@@ -61,7 +61,6 @@ final class WsHandshakeLivenessParityTest extends TestCase
     protected function tearDown(): void
     {
         $workers = new \ReflectionProperty(\Workerman\Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
         foreach ($this->pooledIds as $id) {
             ConnectionPool::getInstance()->remove($id);

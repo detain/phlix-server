@@ -46,7 +46,6 @@ final class AuthMethodPolicyWiringGuardTest extends TestCase
         $this->assertInstanceOf(AuthMethodPolicy::class, $policy);
 
         $logger = (new ReflectionClass(AuthMethodPolicy::class))->getProperty('logger');
-        $logger->setAccessible(true);
         $this->assertNotNull(
             $logger->getValue($policy),
             'AuthMethodPolicy::$logger is null — the all-disabled fallback event would be '
@@ -77,7 +76,6 @@ final class AuthMethodPolicyWiringGuardTest extends TestCase
         $this->assertInstanceOf($consumer, $instance);
 
         $reflected = (new ReflectionClass($consumer))->getProperty($property);
-        $reflected->setAccessible(true);
 
         $this->assertNotNull(
             $reflected->getValue($instance),
@@ -108,7 +106,6 @@ final class AuthMethodPolicyWiringGuardTest extends TestCase
 
         $extract = static function (object $instance): SettingsRepository {
             $property = (new ReflectionClass($instance))->getProperty('settings');
-            $property->setAccessible(true);
 
             /** @var SettingsRepository */
             return $property->getValue($instance);

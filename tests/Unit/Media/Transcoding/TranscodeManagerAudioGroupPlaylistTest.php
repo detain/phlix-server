@@ -739,7 +739,6 @@ final class TranscodeManagerAudioGroupPlaylistTest extends TestCase
     private function build(string $method, array $args): string
     {
         $m = new ReflectionMethod(TranscodeManager::class, $method);
-        $m->setAccessible(true);
         $result = $m->invokeArgs($this->manager(), $args);
         $this->assertIsString($result);
 
@@ -763,7 +762,6 @@ final class TranscodeManagerAudioGroupPlaylistTest extends TestCase
         ?int $sourceAudioStreamCount = null
     ): void {
         $m = new ReflectionMethod(TranscodeManager::class, 'writeVodPlaylists');
-        $m->setAccessible(true);
         $m->invokeArgs(
             $this->manager(),
             [$dir, 25.0, 6, 1920, 1080, 5000000, $variants, $audioTracks, $format, $sourceAudioStreamCount]
@@ -780,7 +778,6 @@ final class TranscodeManagerAudioGroupPlaylistTest extends TestCase
     private function buildSets(?int $sourceAudioStreamCount, ?array $audioTracks = null): array
     {
         $m = new ReflectionMethod(TranscodeManager::class, 'buildMpdAdaptationSets');
-        $m->setAccessible(true);
         $sets = $m->invokeArgs(
             $this->manager(),
             [6, 1920, 1080, 5000000, $this->ladder(), $audioTracks, $sourceAudioStreamCount]

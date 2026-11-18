@@ -80,7 +80,6 @@ final class NatPmpAnnouncementWireTest extends TestCase
         mkdir($this->tmpDir . '/config', 0700, true);
 
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         /** @var array<string,Worker> $current */
         $current = $workers->getValue();
         $this->savedWorkers = $current;
@@ -96,7 +95,6 @@ final class NatPmpAnnouncementWireTest extends TestCase
         $this->setTimerEvent($this->savedTimerEvent);
 
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
 
         $this->rrmdir($this->tmpDir);
@@ -574,7 +572,6 @@ final class NatPmpAnnouncementWireTest extends TestCase
     private function timerEvent(): ?EventInterface
     {
         $property = new ReflectionProperty(Timer::class, 'event');
-        $property->setAccessible(true);
         $value = $property->getValue();
         return $value instanceof EventInterface ? $value : null;
     }
@@ -582,7 +579,6 @@ final class NatPmpAnnouncementWireTest extends TestCase
     private function setTimerEvent(?EventInterface $event): void
     {
         $property = new ReflectionProperty(Timer::class, 'event');
-        $property->setAccessible(true);
         $property->setValue(null, $event);
     }
 

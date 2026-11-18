@@ -762,7 +762,6 @@ final class TranscodeManagerPrewarmTest extends TestCase
     private function driveLaunchOnly(TranscodeManager $manager, string $jobId, ?string $variant, int $index): mixed
     {
         $method = new ReflectionMethod(TranscodeManager::class, 'ensureSegmentInternal');
-        $method->setAccessible(true);
 
         return $method->invokeArgs($manager, [$jobId, $variant, $index, null, false]);
     }
@@ -777,7 +776,6 @@ final class TranscodeManagerPrewarmTest extends TestCase
     private function segmentReservation(TranscodeManager $manager, string $final): ?array
     {
         $property = new ReflectionProperty(TranscodeManager::class, 'segmentEncodesInFlight');
-        $property->setAccessible(true);
         /** @var array<string, array{at: int, gen: int}> $map */
         $map = $property->getValue($manager);
 

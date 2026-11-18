@@ -50,7 +50,6 @@ final class CookiePolicyWiringGuardTest extends TestCase
         $this->assertInstanceOf(AuthController::class, $controller);
 
         $reflected = (new ReflectionClass(AuthController::class))->getProperty('cookiePolicy');
-        $reflected->setAccessible(true);
         $policy = $reflected->getValue($controller);
 
         $this->assertInstanceOf(
@@ -73,7 +72,6 @@ final class CookiePolicyWiringGuardTest extends TestCase
         $policy = $this->container()->get(CookiePolicy::class);
 
         $reflected = (new ReflectionClass(CookiePolicy::class))->getProperty('settings');
-        $reflected->setAccessible(true);
 
         $this->assertNotNull(
             $reflected->getValue($policy),
@@ -103,7 +101,6 @@ final class CookiePolicyWiringGuardTest extends TestCase
         $this->assertInstanceOf($controllerClass, $controller);
 
         $reflected = (new ReflectionClass($controllerClass))->getProperty('cookiePolicy');
-        $reflected->setAccessible(true);
         $policy = $reflected->getValue($controller);
 
         $this->assertInstanceOf(

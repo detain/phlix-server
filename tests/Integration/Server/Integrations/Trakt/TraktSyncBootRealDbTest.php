@@ -259,7 +259,6 @@ final class TraktSyncBootRealDbTest extends TestCase
     private function timerEvent(): ?EventInterface
     {
         $prop = new ReflectionProperty(Timer::class, 'event');
-        $prop->setAccessible(true);
         /** @var EventInterface|null $value */
         $value = $prop->getValue();
 
@@ -269,7 +268,6 @@ final class TraktSyncBootRealDbTest extends TestCase
     private function setTimerEvent(?EventInterface $event): void
     {
         $prop = new ReflectionProperty(Timer::class, 'event');
-        $prop->setAccessible(true);
         $prop->setValue(null, $event);
     }
 }

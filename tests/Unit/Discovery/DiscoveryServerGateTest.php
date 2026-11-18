@@ -44,7 +44,6 @@ final class DiscoveryServerGateTest extends TestCase
         parent::setUp();
 
         $workers = new \ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         /** @var array<int, Worker> $existing */
         $existing = $workers->getValue();
         $this->savedWorkers = $existing;
@@ -65,7 +64,6 @@ final class DiscoveryServerGateTest extends TestCase
         Timer::delAll();
 
         $workers = new \ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
 
         parent::tearDown();
@@ -205,7 +203,6 @@ final class DiscoveryServerGateTest extends TestCase
     private function armedIntervals(): array
     {
         $tasksProp = new \ReflectionProperty(Timer::class, 'tasks');
-        $tasksProp->setAccessible(true);
         /** @var array<int, array<int, array{0: callable, 1: array<mixed>, 2: bool, 3: float}>> $tasks */
         $tasks = $tasksProp->getValue();
 
@@ -222,7 +219,6 @@ final class DiscoveryServerGateTest extends TestCase
     private function fireTick(float $interval): void
     {
         $tasksProp = new \ReflectionProperty(Timer::class, 'tasks');
-        $tasksProp->setAccessible(true);
         /** @var array<int, array<int, array{0: callable, 1: array<mixed>, 2: bool, 3: float}>> $tasks */
         $tasks = $tasksProp->getValue();
 

@@ -1912,7 +1912,6 @@ class TranscodeManagerTest extends TestCase
     private function readEpoch(TranscodeManager $m, string $jobId): int
     {
         $prop = new \ReflectionProperty(TranscodeManager::class, 'jobRowEpoch');
-        $prop->setAccessible(true);
         $epochs = $prop->getValue($m);
         $this->assertIsArray($epochs);
         return is_numeric($epochs[$jobId] ?? null) ? (int) $epochs[$jobId] : 0;
@@ -1921,7 +1920,6 @@ class TranscodeManagerTest extends TestCase
     private function cacheHas(TranscodeManager $m, string $jobId): bool
     {
         $prop = new \ReflectionProperty(TranscodeManager::class, 'jobRowCache');
-        $prop->setAccessible(true);
         $cache = $prop->getValue($m);
         $this->assertIsArray($cache);
         return array_key_exists($jobId, $cache);
@@ -3244,7 +3242,6 @@ class TranscodeManagerTest extends TestCase
         $captured = [];
         $manager = $this->manager($this->mockDb([], 0, [], [], $captured), $this->createMock(FfmpegRunner::class));
         $apply = new ReflectionMethod(TranscodeManager::class, 'applyToneMap');
-        $apply->setAccessible(true);
         $seg = ['video_codec' => 'libx264'];
 
         // No base segment_params on the row → returned unchanged.
@@ -3273,7 +3270,6 @@ class TranscodeManagerTest extends TestCase
 
         // The genuine per-rendition encode contract for a 480p transcode rung.
         $forRendition = new ReflectionMethod(TranscodeManager::class, 'segmentParamsForRendition');
-        $forRendition->setAccessible(true);
         /** @var array<string, mixed> $segParams */
         $segParams = $forRendition->invoke(self::bareTranscodeManagerForRendition(), [
             'is_copy' => false,
@@ -4207,7 +4203,6 @@ class TranscodeManagerTest extends TestCase
     public function testSegmentParamsForRenditionContract(): void
     {
         $method = new ReflectionMethod(TranscodeManager::class, 'segmentParamsForRendition');
-        $method->setAccessible(true);
 
         // Copy rendition → minimal -c copy contract (A4 skips everything else).
         $copy = $method->invoke(self::bareTranscodeManagerForRendition(), ['is_copy' => true, 'width' => 1920, 'height' => 1080,
@@ -4239,7 +4234,6 @@ class TranscodeManagerTest extends TestCase
     public function testFfmpegLevelFromCodecsCoversAllKnownStrings(): void
     {
         $method = new ReflectionMethod(TranscodeManager::class, 'ffmpegLevelFromCodecs');
-        $method->setAccessible(true);
 
         $cases = [
             'avc1.64001E,mp4a.40.2' => '3.0',
@@ -5291,7 +5285,6 @@ class TranscodeManagerTest extends TestCase
     private function inFlightSet(TranscodeManager $m): array
     {
         $p = new \ReflectionProperty(TranscodeManager::class, 'segmentEncodesInFlight');
-        $p->setAccessible(true);
         /** @var array<string, array{at: int, gen: int}> $value */
         $value = $p->getValue($m);
 
@@ -5306,7 +5299,6 @@ class TranscodeManagerTest extends TestCase
     private function inFlightSnapshot(TranscodeManager $m): array
     {
         $p = new \ReflectionProperty(TranscodeManager::class, 'globalInFlightSnapshot');
-        $p->setAccessible(true);
         /** @var array<string, true> $value */
         $value = $p->getValue($m);
 
@@ -5316,14 +5308,12 @@ class TranscodeManagerTest extends TestCase
     private function setPrivate(TranscodeManager $m, string $prop, mixed $value): void
     {
         $p = new \ReflectionProperty(TranscodeManager::class, $prop);
-        $p->setAccessible(true);
         $p->setValue($m, $value);
     }
 
     private function callPrivate(TranscodeManager $m, string $method, mixed ...$args): mixed
     {
         $r = new ReflectionMethod(TranscodeManager::class, $method);
-        $r->setAccessible(true);
 
         return $r->invoke($m, ...$args);
     }
@@ -5701,7 +5691,6 @@ class TranscodeManagerTest extends TestCase
         $manager = $ref->newInstanceWithoutConstructor();
 
         $prop = $ref->getProperty('encodeSettings');
-        $prop->setAccessible(true);
         $prop->setValue($manager, new \Phlix\Media\Transcoding\EncodeSettings());
 
         return $manager;
@@ -5780,7 +5769,6 @@ class TranscodeManagerTest extends TestCase
     {
         $ref = new \ReflectionClass(TranscodeManager::class);
         $method = $ref->getMethod('readFailureReason');
-        $method->setAccessible(true);
 
         $this->assertSame(
             'Transcode failed',
@@ -5800,7 +5788,6 @@ class TranscodeManagerTest extends TestCase
 
         $ref = new \ReflectionClass(TranscodeManager::class);
         $method = $ref->getMethod('readFailureReason');
-        $method->setAccessible(true);
 
         $result = $method->invoke($ref->newInstanceWithoutConstructor(), $dir);
 

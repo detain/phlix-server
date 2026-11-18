@@ -232,7 +232,6 @@ class SyncPlay extends Module
 
         // Use reflection to call the private handleHostTransfer
         $reflection = new \ReflectionMethod($this->manager, 'handleHostTransfer');
-        $reflection->setAccessible(true);
 
         $payload = ['new_host_id' => $newHostMemberId];
         $reflection->invoke($this->manager, $connection, $payload);
@@ -250,7 +249,6 @@ class SyncPlay extends Module
         $connection = $this->getConnection($connectionId);
 
         $reflection = new \ReflectionMethod($this->manager, 'handlePlaybackPlay');
-        $reflection->setAccessible(true);
 
         $reflection->invoke($this->manager, $connection, [
             'position' => $position,
@@ -270,7 +268,6 @@ class SyncPlay extends Module
         $connection = $this->getConnection($connectionId);
 
         $reflection = new \ReflectionMethod($this->manager, 'handlePlaybackPause');
-        $reflection->setAccessible(true);
 
         $reflection->invoke($this->manager, $connection, [
             'position' => $position,

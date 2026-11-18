@@ -124,7 +124,6 @@ final class MetadataPoliciesWiringGuardTest extends TestCase
     private static function property(object $subject, string $name): mixed
     {
         $reflected = (new ReflectionClass($subject))->getProperty($name);
-        $reflected->setAccessible(true);
 
         return $reflected->getValue($subject);
     }

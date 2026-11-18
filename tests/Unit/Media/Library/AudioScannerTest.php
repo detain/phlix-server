@@ -495,7 +495,6 @@ class AudioScannerTest extends TestCase
 
         try {
             $reflection = new \ReflectionMethod($this->scanner, 'getFlacDurationFromHandle');
-            $reflection->setAccessible(true);
             $result = $reflection->invoke($this->scanner, $handle);
             return is_int($result) ? $result : null;
         } finally {
@@ -516,7 +515,6 @@ class AudioScannerTest extends TestCase
     private function invokeFindCoverArtFile(string $directoryPath): ?string
     {
         $method = new \ReflectionMethod(AudioScanner::class, 'findCoverArtFile');
-        $method->setAccessible(true);
 
         // Create a SplFileInfo for a dummy file in the directory
         // SplFileInfo can wrap a path to a non-existent file

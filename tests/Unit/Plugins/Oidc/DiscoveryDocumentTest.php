@@ -199,7 +199,6 @@ final class DiscoveryDocumentTest extends TestCase
     {
         DiscoveryDocument::clearMemoryCache();
         $cacheProperty = new \ReflectionProperty(DiscoveryDocument::class, 'memoryCache');
-        $cacheProperty->setAccessible(true);
         $this->assertNull($cacheProperty->getValue());
     }
 

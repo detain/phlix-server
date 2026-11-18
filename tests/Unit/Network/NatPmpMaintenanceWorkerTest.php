@@ -59,13 +59,11 @@ final class NatPmpMaintenanceWorkerTest extends TestCase
         // constructing a worker below registers it. Snapshot so a leaked
         // instance can never pollute a sibling test.
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         /** @var array<string,Worker> $current */
         $current = $workers->getValue();
         $this->savedWorkers = $current;
 
         $pidMap = new ReflectionProperty(Worker::class, 'pidMap');
-        $pidMap->setAccessible(true);
         /** @var array<string, array<int, int>> $pids */
         $pids = $pidMap->getValue();
         $this->savedPidMap = $pids;
@@ -78,11 +76,9 @@ final class NatPmpMaintenanceWorkerTest extends TestCase
         Timer::delAll();
 
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
 
         $pidMap = new ReflectionProperty(Worker::class, 'pidMap');
-        $pidMap->setAccessible(true);
         $pidMap->setValue(null, $this->savedPidMap);
 
         $this->rrmdir($this->tmpDir);
@@ -197,7 +193,6 @@ final class NatPmpMaintenanceWorkerTest extends TestCase
     private function timerTasks(): array
     {
         $tasks = new ReflectionProperty(Timer::class, 'tasks');
-        $tasks->setAccessible(true);
         /** @var array<int, array<int, array{0: callable, 1: array<mixed>, 2: bool, 3: float}>> $buckets */
         $buckets = $tasks->getValue();
 

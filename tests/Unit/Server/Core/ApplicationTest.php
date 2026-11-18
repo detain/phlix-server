@@ -203,7 +203,6 @@ class ApplicationTest extends TestCase
                 continue;
             }
             $p = $ref->getProperty($prop);
-            $p->setAccessible(true);
             $p->setValue(null, $value);
         }
     }

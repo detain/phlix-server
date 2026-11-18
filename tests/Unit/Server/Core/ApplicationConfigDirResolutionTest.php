@@ -62,7 +62,6 @@ final class ApplicationConfigDirResolutionTest extends TestCase
         /** @var Application $app */
         $app = $ref->newInstanceWithoutConstructor();
         $p = $ref->getProperty('config');
-        $p->setAccessible(true);
         $p->setValue($app, $config);
 
         return $app;
@@ -311,7 +310,6 @@ final class ApplicationConfigDirResolutionTest extends TestCase
     public function test_admin_hub_controller_default_is_absolute_and_relative_refused(): void
     {
         $prop = new \ReflectionProperty(AdminHubController::class, 'configDir');
-        $prop->setAccessible(true);
         $default = $prop->getValue(new AdminHubController());
 
         self::assertIsString($default);

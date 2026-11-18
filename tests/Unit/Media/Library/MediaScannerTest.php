@@ -2310,7 +2310,6 @@ class MediaScannerTest extends TestCase
     private function summarize(array $probe): array
     {
         $method = new \ReflectionMethod(MediaScanner::class, 'summarizeProbe');
-        $method->setAccessible(true);
         /** @var array{duration_seconds: int|null, source: array<string, mixed>|null, streams: array<int, array<string, mixed>>} $result */
         $result = $method->invoke(null, $probe);
         return $result;
@@ -2322,7 +2321,6 @@ class MediaScannerTest extends TestCase
     private function invokeIsAttachedPic(mixed $stream): bool
     {
         $method = new \ReflectionMethod(MediaScanner::class, 'isAttachedPic');
-        $method->setAccessible(true);
         return (bool) $method->invoke(null, $stream);
     }
 
@@ -2332,7 +2330,6 @@ class MediaScannerTest extends TestCase
     private function invokeStreamLanguage(mixed $stream): ?string
     {
         $method = new \ReflectionMethod(MediaScanner::class, 'streamLanguage');
-        $method->setAccessible(true);
         $result = $method->invoke(null, $stream);
         return is_string($result) ? $result : null;
     }
@@ -2421,7 +2418,6 @@ class MediaScannerTest extends TestCase
         $paths = array_map(fn (int $i): string => "/movies/movie-{$i}.mkv", range(1, 10));
 
         $method = new \ReflectionMethod(MediaScanner::class, 'probeManyConcurrently');
-        $method->setAccessible(true);
 
         $results = null;
         \Swoole\Coroutine\run(function () use ($method, $scanner, $paths, &$results): void {
@@ -2481,7 +2477,6 @@ class MediaScannerTest extends TestCase
         $paths = ['/movies/A.mkv', '/movies/B.mkv'];
 
         $method = new \ReflectionMethod(MediaScanner::class, 'probeManyConcurrently');
-        $method->setAccessible(true);
 
         $results = null;
         $cid = null;
@@ -2531,7 +2526,6 @@ class MediaScannerTest extends TestCase
         $paths = ['/movies/good1.mkv', '/movies/bad.mkv', '/movies/good2.mkv'];
 
         $method = new \ReflectionMethod(MediaScanner::class, 'probeManyConcurrently');
-        $method->setAccessible(true);
 
         $results = null;
         \Swoole\Coroutine\run(function () use ($method, $scanner, $paths, &$results): void {
@@ -2606,7 +2600,6 @@ class MediaScannerTest extends TestCase
         $paths = ['/movies/a.mkv', '/movies/b.mkv', '/movies/c.mkv'];
 
         $method = new \ReflectionMethod(MediaScanner::class, 'probeManyConcurrently');
-        $method->setAccessible(true);
 
         $previousHandler = set_error_handler(
             function (int $errno, string $errstr): bool {
@@ -2655,7 +2648,6 @@ class MediaScannerTest extends TestCase
         $file = new \SplFileInfo($this->tmpDir . '/Inception (2010).mkv');
 
         $method = new \ReflectionMethod(MediaScanner::class, 'processFile');
-        $method->setAccessible(true);
 
         // Baseline: processFile() computes its own probe (precomputed = false,
         // the "not supplied" sentinel — today's unmodified behaviour).
@@ -2703,7 +2695,6 @@ class MediaScannerTest extends TestCase
         $file = new \SplFileInfo($this->tmpDir . '/Movie One (2020).mkv');
 
         $method = new \ReflectionMethod(MediaScanner::class, 'processFile');
-        $method->setAccessible(true);
         $added = $method->invoke($scanner, 'lib-1', $file, 'movie', null, null, null);
 
         $this->assertTrue($added);
@@ -2735,7 +2726,6 @@ class MediaScannerTest extends TestCase
         $scanner = new MediaScanner($this->createMock(Connection::class), $repo, null, null, null, $ffmpeg);
 
         $method = new \ReflectionMethod(MediaScanner::class, 'processScanBatch');
-        $method->setAccessible(true);
         $added = $method->invoke($scanner, 'lib-1', [], 'movie', null, null, null);
 
         $this->assertSame(0, $added);
@@ -2760,7 +2750,6 @@ class MediaScannerTest extends TestCase
         $scanner = new MediaScanner($this->createMock(Connection::class), $this->makeFakeRepo());
 
         $method = new \ReflectionMethod(MediaScanner::class, 'isProbeEligibleLibraryType');
-        $method->setAccessible(true);
 
         foreach (['video', 'series', 'movie', 'audio', 'audiobook'] as $type) {
             $this->assertTrue($method->invoke($scanner, $type), "'{$type}' must be probe-eligible");
@@ -2785,9 +2774,7 @@ class MediaScannerTest extends TestCase
         $scanner = new MediaScanner($this->createMock(Connection::class), $this->makeFakeRepo());
 
         $gate = new \ReflectionMethod(MediaScanner::class, 'isProbeEligibleLibraryType');
-        $gate->setAccessible(true);
         $determine = new \ReflectionMethod(MediaScanner::class, 'determineMediaType');
-        $determine->setAccessible(true);
 
         /** @var list<string> $probeTypes */
         $probeTypes = (new \ReflectionClass(MediaScanner::class))->getConstant('DURATION_PROBE_TYPES');
@@ -2823,7 +2810,6 @@ class MediaScannerTest extends TestCase
         $scanner = new MediaScanner($this->createMock(Connection::class), $this->makeFakeRepo());
 
         $determine = new \ReflectionMethod(MediaScanner::class, 'determineMediaType');
-        $determine->setAccessible(true);
 
         /** @var list<string> $probeTypes */
         $probeTypes = (new \ReflectionClass(MediaScanner::class))->getConstant('DURATION_PROBE_TYPES');
@@ -2848,7 +2834,6 @@ class MediaScannerTest extends TestCase
 
         $scanner = new MediaScanner($this->createMock(Connection::class), $this->makeFakeRepo());
         $determine = new \ReflectionMethod(MediaScanner::class, 'determineMediaType');
-        $determine->setAccessible(true);
 
         $file = new \SplFileInfo(__FILE__);
         foreach (['video', 'series', 'movie', 'audio', 'audiobook', 'image', 'book', 'music'] as $libraryType) {

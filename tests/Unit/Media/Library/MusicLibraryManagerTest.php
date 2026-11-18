@@ -107,7 +107,6 @@ class MusicLibraryManagerTest extends TestCase
         );
 
         $property = new \ReflectionProperty(MusicLibraryManager::class, 'logger');
-        $property->setAccessible(true);
 
         $this->assertSame(
             LoggerFactory::get(LogChannels::MEDIA),
@@ -172,7 +171,6 @@ class MusicLibraryManagerTest extends TestCase
         );
 
         $property = new \ReflectionProperty(MusicLibraryManager::class, 'logger');
-        $property->setAccessible(true);
 
         $this->assertSame(
             $logger,

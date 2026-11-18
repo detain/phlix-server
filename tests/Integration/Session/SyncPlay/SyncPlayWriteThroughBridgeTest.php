@@ -340,7 +340,6 @@ final class SyncPlayWriteThroughBridgeTest extends TestCase
         $connection = $this->mockConnection('ws-served-probe', 'jwt-probe');
 
         $handleMessage = new ReflectionMethod(SyncPlayManager::class, 'handleMessage');
-        $handleMessage->setAccessible(true);
         $handleMessage->invoke($wsManager, $connection, ['type' => Messages::TYPE_GROUP_LIST]);
 
         // NEWEST captured frame wins: the probe's send log accumulates across

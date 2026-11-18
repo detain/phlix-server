@@ -118,7 +118,6 @@ final class HttpHandlerDirectCancelHookTest extends TestCase
     private function arm(HttpHandler $handler, TcpConnection $conn): string
     {
         $m = new ReflectionMethod(HttpHandler::class, 'armDirectCancelHook');
-        $m->setAccessible(true);
         $id = $m->invoke($handler, $conn);
         self::assertIsString($id);
 
@@ -128,7 +127,6 @@ final class HttpHandlerDirectCancelHookTest extends TestCase
     private function disarm(HttpHandler $handler, TcpConnection $conn, mixed $armed = null): void
     {
         $m = new ReflectionMethod(HttpHandler::class, 'disarmDirectCancelHook');
-        $m->setAccessible(true);
         $m->invoke($handler, $conn, $armed);
     }
 
@@ -412,13 +410,11 @@ final class HttpHandlerDirectCancelHookTest extends TestCase
         // the manager + a tracked PID under the request's cancel group.
         $final = $segmentDir . '/job/seg-v720p-00012.ts';
         $resv = new ReflectionProperty(TranscodeManager::class, 'segmentEncodesInFlight');
-        $resv->setAccessible(true);
         $resv->setValue($manager, [$final => ['at' => 1, 'gen' => 1]]);
         $registry->register($final, 9999, $id);
 
         // Sanity: a fresh requester would currently dedup onto this in-flight encode.
         $inFlight = new ReflectionMethod(TranscodeManager::class, 'segmentEncodeInFlight');
-        $inFlight->setAccessible(true);
         self::assertTrue($inFlight->invoke($manager, $final));
 
         // The socket FINs/RSTs mid-encode → Workerman fires onClose.

@@ -258,7 +258,6 @@ $worker->onWorkerStart = static function () use (
         $registry = HwaccelRegistry::getInstance();
         $ref = new \ReflectionObject($registry);
         $capabilities = $ref->getProperty('capabilities');
-        $capabilities->setAccessible(true);
         $capabilities->setValue($registry, [
             'software' => new HwaccelCapability(
                 vendor: 'software',
@@ -273,7 +272,6 @@ $worker->onWorkerStart = static function () use (
             ),
         ]);
         $initialized = $ref->getProperty('initialized');
-        $initialized->setAccessible(true);
         $initialized->setValue($registry, true);
         $runner->probeHardwareAcceleration($registry);
     }

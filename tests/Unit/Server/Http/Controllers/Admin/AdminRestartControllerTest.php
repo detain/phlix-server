@@ -346,11 +346,9 @@ final class AdminRestartControllerTest extends TestCase
         // Worker, in which case Timer::add() succeeds and this path is never
         // reached. Both statics are restored afterwards.
         $timerEvent = new \ReflectionProperty(\Workerman\Timer::class, 'event');
-        $timerEvent->setAccessible(true);
         $previousEvent = $timerEvent->getValue();
 
         $workers = new \ReflectionProperty(\Workerman\Worker::class, 'workers');
-        $workers->setAccessible(true);
         /** @var array<mixed> $previousWorkers */
         $previousWorkers = $workers->getValue();
 
@@ -361,7 +359,6 @@ final class AdminRestartControllerTest extends TestCase
             $controller = new RecordingSendRestartController($this->pidFile);
 
             $method = new \ReflectionMethod(AdminRestartController::class, 'scheduleSignal');
-            $method->setAccessible(true);
 
             self::assertTrue($method->invoke($controller, 4242, SIGUSR2));
             self::assertSame([[4242, SIGUSR2]], $controller->sent);

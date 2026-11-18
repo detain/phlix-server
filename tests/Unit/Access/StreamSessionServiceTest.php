@@ -42,7 +42,6 @@ class StreamSessionServiceTest extends TestCase
     protected function tearDown(): void
     {
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
         parent::tearDown();
     }

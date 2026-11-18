@@ -77,7 +77,6 @@ final class RatingGateFilterMemoTest extends TestCase
 
         // Age the entry past the 30 s window.
         $memo = new ReflectionProperty(RatingGate::class, 'filterMemo');
-        $memo->setAccessible(true);
         /** @var array<string, array{at: int, filter: mixed}> $entries */
         $entries = $memo->getValue($gate);
         foreach ($entries as $key => $entry) {
@@ -97,7 +96,6 @@ final class RatingGateFilterMemoTest extends TestCase
         $gate = new RatingGate($this->createMock(ItemRepository::class), $profiles, $users);
 
         $memo = new ReflectionProperty(RatingGate::class, 'filterMemo');
-        $memo->setAccessible(true);
         $aged = [];
         for ($i = 0; $i < 600; $i++) {
             $aged['old-' . $i] = ['at' => hrtime(true) - 60_000_000_000, 'filter' => null];

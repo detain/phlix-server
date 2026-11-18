@@ -55,7 +55,6 @@ final class AsyncVersionMarkerFetcherTest extends TestCase
         $this->savedWorkers = Worker::getAllWorkers();
 
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $stub = new Worker();
         $workers->setValue(null, [spl_object_id($stub) => $stub]);
 
@@ -67,7 +66,6 @@ final class AsyncVersionMarkerFetcherTest extends TestCase
         Timer::delAll();
 
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
 
         parent::tearDown();
@@ -298,7 +296,6 @@ final class AsyncVersionMarkerFetcherTest extends TestCase
         $fetcher = new AsyncVersionMarkerFetcher(10);
 
         $prop = new ReflectionProperty(AsyncVersionMarkerFetcher::class, 'client');
-        $prop->setAccessible(true);
 
         self::assertNull($prop->getValue($fetcher), 'Constructing the fetcher must not build an HTTP client.');
     }
@@ -312,7 +309,6 @@ final class AsyncVersionMarkerFetcherTest extends TestCase
     public function testReadBodyReturnsAnExactlyTwoElementPair(): void
     {
         $method = new ReflectionMethod(AsyncVersionMarkerFetcher::class, 'readBody');
-        $method->setAccessible(true);
 
         /** @var array<int, string|null> $pair */
         $pair = $method->invoke(null, new StubMarkerResponse('1.2.2'));

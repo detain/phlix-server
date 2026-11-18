@@ -159,7 +159,6 @@ class LiveTvManagerTest extends TestCase
     private function seedTunerCache(array $entry): void
     {
         $cache = new \ReflectionProperty($this->manager, 'tuners');
-        $cache->setAccessible(true);
         $cache->setValue($this->manager, [$entry['id'] => $entry]);
     }
 

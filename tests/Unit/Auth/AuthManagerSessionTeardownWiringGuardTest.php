@@ -54,7 +54,6 @@ final class AuthManagerSessionTeardownWiringGuardTest extends TestCase
         $this->assertInstanceOf(AuthManager::class, $authManager);
 
         $reflected = (new ReflectionClass(AuthManager::class))->getProperty('sessionManager');
-        $reflected->setAccessible(true);
         $sessionManager = $reflected->getValue($authManager);
 
         $this->assertNotNull(

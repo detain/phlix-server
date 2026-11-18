@@ -210,7 +210,6 @@ final class ApplicationDlnaAdminWiringGuardTest extends TestCase
     private function routeTable(): array
     {
         $property = (new ReflectionClass(Application::class))->getProperty('router');
-        $property->setAccessible(true);
         $router = $property->getValue($this->application());
 
         if (!$router instanceof Router) {
@@ -282,7 +281,6 @@ final class ApplicationDlnaAdminWiringGuardTest extends TestCase
     private function collaborator(AdminDlnaServerController $controller, string $property): mixed
     {
         $reflected = (new ReflectionClass(AdminDlnaServerController::class))->getProperty($property);
-        $reflected->setAccessible(true);
 
         return $reflected->getValue($controller);
     }

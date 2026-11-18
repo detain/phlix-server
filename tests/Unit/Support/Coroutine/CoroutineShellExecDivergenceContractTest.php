@@ -101,7 +101,6 @@ final class CoroutineShellExecDivergenceContractTest extends TestCase
     {
         $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
         $method = new \ReflectionMethod(FfmpegRunner::class, 'runCoroutineAwareShellExec');
-        $method->setAccessible(true);
 
         $output = $this->runInCoroutine(
             static fn (): mixed => $method->invoke($runner, self::UNEXECUTABLE)
@@ -118,7 +117,6 @@ final class CoroutineShellExecDivergenceContractTest extends TestCase
     {
         $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
         $method = new \ReflectionMethod(FfmpegRunner::class, 'runCoroutineAwareShellExec');
-        $method->setAccessible(true);
 
         $output = $method->invoke($runner, self::UNEXECUTABLE);
 
@@ -133,7 +131,6 @@ final class CoroutineShellExecDivergenceContractTest extends TestCase
     {
         $service = new ChapterMarkerService($this->createMock(FfmpegRunner::class));
         $method = new \ReflectionMethod(ChapterMarkerService::class, 'runCommand');
-        $method->setAccessible(true);
 
         $output = $this->runInCoroutine(
             static fn (): mixed => $method->invoke($service, self::UNEXECUTABLE)
@@ -149,7 +146,6 @@ final class CoroutineShellExecDivergenceContractTest extends TestCase
     {
         $service = new ChapterMarkerService($this->createMock(FfmpegRunner::class));
         $method = new \ReflectionMethod(ChapterMarkerService::class, 'runCommand');
-        $method->setAccessible(true);
 
         $output = $method->invoke($service, self::UNEXECUTABLE);
 
@@ -165,7 +161,6 @@ final class CoroutineShellExecDivergenceContractTest extends TestCase
     {
         $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
         $method = new \ReflectionMethod(FfmpegRunner::class, 'runProbeCommand');
-        $method->setAccessible(true);
 
         $output = $this->runInCoroutine(
             static fn (): mixed => $method->invoke($runner, self::UNEXECUTABLE)
@@ -181,7 +176,6 @@ final class CoroutineShellExecDivergenceContractTest extends TestCase
     {
         $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
         $method = new \ReflectionMethod(FfmpegRunner::class, 'runProbeCommand');
-        $method->setAccessible(true);
 
         $output = $method->invoke($runner, self::UNEXECUTABLE);
 

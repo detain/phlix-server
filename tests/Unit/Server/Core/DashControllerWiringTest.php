@@ -174,7 +174,6 @@ final class DashControllerWiringTest extends TestCase
     {
         $application ??= $this->application();
         $property = new ReflectionProperty(Application::class, 'router');
-        $property->setAccessible(true);
         $router = $property->getValue($application);
         $this->assertInstanceOf(\Phlix\Server\Http\Router::class, $router);
 
@@ -195,7 +194,6 @@ final class DashControllerWiringTest extends TestCase
     private function dependency(object $controller, string $property): ?object
     {
         $reflected = new ReflectionProperty($controller, $property);
-        $reflected->setAccessible(true);
         $value = $reflected->getValue($controller);
         $this->assertTrue($value === null || is_object($value));
 

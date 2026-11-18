@@ -75,7 +75,6 @@ final class RecorderSpawnLogTest extends TestCase
         };
 
         $method = new \ReflectionMethod(Recorder::class, 'spawnRecording');
-        $method->setAccessible(true);
         $pid = $method->invoke(
             $recorder,
             'http://example.com/live/1.ts',

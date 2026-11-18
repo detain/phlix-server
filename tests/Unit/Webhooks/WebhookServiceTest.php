@@ -52,7 +52,6 @@ class WebhookServiceTest extends TestCase
     protected function tearDown(): void
     {
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
         parent::tearDown();
     }
@@ -82,7 +81,6 @@ class WebhookServiceTest extends TestCase
         array $httpResponse,
     ): void {
         $method = new ReflectionMethod(WebhookService::class, 'handleFailedDelivery');
-        $method->setAccessible(true);
         $method->invoke($service, $delivery, $httpResponse);
     }
 
@@ -94,7 +92,6 @@ class WebhookServiceTest extends TestCase
     private function currentTimerId(): int
     {
         $prop = new ReflectionProperty(Timer::class, 'timerId');
-        $prop->setAccessible(true);
         /** @var int $value */
         $value = $prop->getValue();
         return $value;
@@ -110,7 +107,6 @@ class WebhookServiceTest extends TestCase
     private function persistentFlagFor(int $timerId): ?bool
     {
         $tasksProp = new ReflectionProperty(Timer::class, 'tasks');
-        $tasksProp->setAccessible(true);
         /** @var array<int, array<int, array{0: callable, 1: array<mixed>, 2: bool, 3: float}>> $tasks */
         $tasks = $tasksProp->getValue();
 
@@ -135,7 +131,6 @@ class WebhookServiceTest extends TestCase
     private function scheduledIntervalFor(int $timerId): ?float
     {
         $tasksProp = new ReflectionProperty(Timer::class, 'tasks');
-        $tasksProp->setAccessible(true);
         /** @var array<int, array<int, array{0: callable, 1: array<mixed>, 2: bool, 3: float}>> $tasks */
         $tasks = $tasksProp->getValue();
 

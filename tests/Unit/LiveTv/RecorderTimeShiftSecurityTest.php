@@ -148,7 +148,6 @@ final class RecorderTimeShiftSecurityTest extends TestCase
         );
 
         $remove = new ReflectionMethod(Recorder::class, 'removeBufferDir');
-        $remove->setAccessible(true);
 
         // Case A — a plain out-of-jail absolute path (caught by the string-prefix
         // guard: it does not start with "<storage>/timeshift/").

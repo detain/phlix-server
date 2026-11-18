@@ -109,7 +109,6 @@ final class DlnaContentDirectorySoapTest extends TestCase
     {
         $controller = $this->controller();
         $method = new \ReflectionMethod($controller, 'parseSoapBody');
-        $method->setAccessible(true);
 
         /** @var array{action: string, arguments: array<string, mixed>}|null $parsed */
         $parsed = $method->invoke($controller, $this->browseEnvelope('42'));
@@ -197,7 +196,6 @@ final class DlnaContentDirectorySoapTest extends TestCase
 
         $controller = $this->controller();
         $method = new \ReflectionMethod($controller, 'parseSoapBody');
-        $method->setAccessible(true);
 
         /** @var array{action: string, arguments: array<string, mixed>}|null $parsed */
         $parsed = $method->invoke($controller, $envelope);

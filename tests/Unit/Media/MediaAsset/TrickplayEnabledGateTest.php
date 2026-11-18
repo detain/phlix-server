@@ -66,7 +66,6 @@ class TrickplayEnabledGateTest extends TestCase
     {
         $ref = new \ReflectionClass(MediaAssetGenerationJob::class);
         $method = $ref->getMethod('generateTrickplaySprites');
-        $method->setAccessible(true);
 
         /** @var bool $result */
         $result = $method->invoke($job, $assetJob);

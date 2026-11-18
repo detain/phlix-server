@@ -191,7 +191,6 @@ final class RokuManagerSharedStoreTest extends TestCase
         self::assertInstanceOf(RokuSession::class, $session);
 
         $poll = new ReflectionMethod($session, 'pollPlayerStateOnce');
-        $poll->setAccessible(true);
 
         // The unroutable ECP endpoint makes getPlayerState() answer [] — the
         // strike signal. Device-M1 added the counter: 3 strikes must tear the

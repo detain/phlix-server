@@ -148,7 +148,6 @@ final class MediaScannerDegenerateVideoStreamTest extends TestCase
     private function defects(mixed $stream): array
     {
         $method = new ReflectionMethod(MediaScanner::class, 'videoStreamDefects');
-        $method->setAccessible(true);
         /** @var list<string> $defects */
         $defects = $method->invoke(null, $stream);
 
@@ -163,7 +162,6 @@ final class MediaScannerDegenerateVideoStreamTest extends TestCase
     private function includesGeometry(array $defects): bool
     {
         $method = new ReflectionMethod(MediaScanner::class, 'defectsIncludeGeometry');
-        $method->setAccessible(true);
 
         return (bool) $method->invoke(null, $defects);
     }
@@ -172,7 +170,6 @@ final class MediaScannerDegenerateVideoStreamTest extends TestCase
     private function videoCodecMissing(array $streams): bool
     {
         $method = new ReflectionMethod(StreamProbeBackfill::class, 'videoCodecMissing');
-        $method->setAccessible(true);
 
         return (bool) $method->invoke(null, $streams);
     }

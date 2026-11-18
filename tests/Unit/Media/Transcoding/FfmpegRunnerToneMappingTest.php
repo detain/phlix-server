@@ -55,7 +55,6 @@ final class FfmpegRunnerToneMappingTest extends TestCase
     private function invokeZscale(FfmpegRunner $runner, array $colorMeta = []): string
     {
         $method = new ReflectionMethod(FfmpegRunner::class, 'buildZscaleToneMapFilter');
-        $method->setAccessible(true);
         /** @var string $result */
         $result = $method->invoke($runner, $colorMeta);
         return $result;
@@ -67,7 +66,6 @@ final class FfmpegRunnerToneMappingTest extends TestCase
     private function invokeLibplacebo(FfmpegRunner $runner, array $colorMeta = []): string
     {
         $method = new ReflectionMethod(FfmpegRunner::class, 'buildLibplaceboToneMapFilter');
-        $method->setAccessible(true);
         /** @var string $result */
         $result = $method->invoke($runner, $colorMeta);
         return $result;
@@ -80,7 +78,6 @@ final class FfmpegRunnerToneMappingTest extends TestCase
     private function forceLibplaceboDetected(FfmpegRunner $runner, bool $available): void
     {
         $prop = new ReflectionProperty(FfmpegRunner::class, 'hasLibplacebo');
-        $prop->setAccessible(true);
         $prop->setValue($runner, $available);
     }
 

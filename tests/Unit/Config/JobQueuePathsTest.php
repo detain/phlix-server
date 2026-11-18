@@ -186,7 +186,6 @@ final class JobQueuePathsTest extends TestCase
             );
 
             $property = new ReflectionProperty($pair['store'], 'queueDir');
-            $property->setAccessible(true);
 
             $this->assertSame(
                 JobQueuePaths::dir($name),

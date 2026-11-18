@@ -175,7 +175,6 @@ final class UserItemDataProfileScopeWiringGuardTest extends TestCase
     private function collaborator(object $instance, string $property): ?object
     {
         $reflected = (new ReflectionClass($instance))->getProperty($property);
-        $reflected->setAccessible(true);
 
         $value = $reflected->getValue($instance);
 

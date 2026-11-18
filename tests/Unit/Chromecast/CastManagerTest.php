@@ -183,11 +183,9 @@ class CastManagerTest extends TestCase
         $reflection = new \ReflectionClass($this->manager);
 
         $discoveryProperty = $reflection->getProperty('discovery');
-        $discoveryProperty->setAccessible(true);
         $this->assertSame($this->discoveryMock, $discoveryProperty->getValue($this->manager));
 
         $playbackProperty = $reflection->getProperty('playbackController');
-        $playbackProperty->setAccessible(true);
         $this->assertSame($this->playbackControllerMock, $playbackProperty->getValue($this->manager));
     }
 }

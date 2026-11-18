@@ -86,7 +86,6 @@ final class PreRouterFastPathsSyntheticSessionBucketTest extends TestCase
         }
         SignedUrl::resetSharedForTesting();
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
         parent::tearDown();
     }

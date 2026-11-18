@@ -44,7 +44,6 @@ final class SecurityHeadersPolicyWiringGuardTest extends TestCase
         self::assertInstanceOf(SecurityHeadersPolicy::class, $policy);
 
         $settings = (new ReflectionClass(SecurityHeadersPolicy::class))->getProperty('settings');
-        $settings->setAccessible(true);
 
         self::assertInstanceOf(
             SettingsRepository::class,

@@ -301,7 +301,6 @@ final class RescanEnumCommentGuardTest extends TestCase
     private function runnerStatements(string $sql): array
     {
         $split = new ReflectionMethod(MigrationRunner::class, 'splitStatements');
-        $split->setAccessible(true);
         /** @var list<string> $statements */
         $statements = $split->invoke(null, $sql);
 
@@ -311,7 +310,6 @@ final class RescanEnumCommentGuardTest extends TestCase
     private function runnerChecksum(string $sql): string
     {
         $checksum = new ReflectionMethod(MigrationRunner::class, 'checksum');
-        $checksum->setAccessible(true);
 
         return (string) $checksum->invoke(null, $sql);
     }

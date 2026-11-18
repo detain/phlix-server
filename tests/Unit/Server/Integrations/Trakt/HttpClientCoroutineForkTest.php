@@ -33,7 +33,6 @@ final class HttpClientCoroutineForkTest extends TestCase
     private function injectAsyncClient(HttpClient $client, Client $fake): void
     {
         $prop = new \ReflectionProperty(HttpClient::class, 'asyncClient');
-        $prop->setAccessible(true);
         $prop->setValue($client, $fake);
     }
 

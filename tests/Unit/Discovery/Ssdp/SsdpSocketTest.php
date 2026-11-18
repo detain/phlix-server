@@ -25,7 +25,6 @@ class SsdpSocketTest extends TestCase
     public function test_only_http_response_shaped_datagrams_are_search_results(): void
     {
         $isResponse = new \ReflectionMethod(SsdpSocket::class, 'isResponseDatagram');
-        $isResponse->setAccessible(true);
 
         $cases = [
             "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\n"

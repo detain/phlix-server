@@ -84,7 +84,6 @@ final class RendererControlClientLanGateTest extends TestCase
         $client = new RendererControlClient('http://192.168.1.50:8200/avtransport/', $this->logger());
 
         $property = new ReflectionProperty(RendererControlClient::class, 'rendererUrl');
-        $property->setAccessible(true);
 
         $this->assertSame('http://192.168.1.50:8200/avtransport', $property->getValue($client));
 

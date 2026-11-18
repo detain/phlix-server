@@ -2279,7 +2279,6 @@ final class MusicLibraryScannerTest extends TestCase
         );
 
         $property = new \ReflectionProperty(MusicLibraryScanner::class, 'logger');
-        $property->setAccessible(true);
         $logger = $property->getValue($scanner);
 
         $this->assertSame(

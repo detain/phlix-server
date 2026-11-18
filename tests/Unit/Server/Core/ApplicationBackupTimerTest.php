@@ -51,7 +51,6 @@ class ApplicationBackupTimerTest extends TestCase
         parent::setUp();
 
         $workers = new \ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         /** @var array<int, Worker> $existing */
         $existing = $workers->getValue();
         $this->savedWorkers = $existing;
@@ -67,7 +66,6 @@ class ApplicationBackupTimerTest extends TestCase
         Timer::delAll();
 
         $workers = new \ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
 
         parent::tearDown();
@@ -85,13 +83,11 @@ class ApplicationBackupTimerTest extends TestCase
         $app = $ref->newInstanceWithoutConstructor();
 
         $register = $ref->getMethod('registerBackupTimer');
-        $register->setAccessible(true);
 
         $before = time();
         $register->invoke($app, $manager, $intervalDays);
 
         $tasksProp = new \ReflectionProperty(Timer::class, 'tasks');
-        $tasksProp->setAccessible(true);
         /** @var array<int, array<int, array{0: callable, 1: array<mixed>, 2: bool, 3: float}>> $tasks */
         $tasks = $tasksProp->getValue();
 

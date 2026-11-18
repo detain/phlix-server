@@ -659,7 +659,6 @@ class TmdbProviderTest extends TestCase
     public function testMergeCastDedupIsCaseAndWhitespaceInsensitive(): void
     {
         $ref = new \ReflectionMethod(TmdbProvider::class, 'mergeCast');
-        $ref->setAccessible(true);
 
         $base = [
             ['name' => 'John Smith', 'role' => 'Lead', 'profile_url' => null],

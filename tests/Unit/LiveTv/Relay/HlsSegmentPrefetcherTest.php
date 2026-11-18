@@ -202,7 +202,6 @@ segment2.ts
         // Use reflection to test private method
         $reflection = new \ReflectionClass($this->prefetcher);
         $method = $reflection->getMethod('parsePlaylistSegments');
-        $method->setAccessible(true);
 
         /** @var list<string> $result */
         $result = $method->invoke($this->prefetcher, $playlist, 'http://example.com/live/stream.m3u8');
@@ -227,7 +226,6 @@ segment1.ts
 
         $reflection = new \ReflectionClass($this->prefetcher);
         $method = $reflection->getMethod('parsePlaylistSegments');
-        $method->setAccessible(true);
 
         /** @var list<string> $result */
         $result = $method->invoke($this->prefetcher, $playlist, 'http://example.com/live.m3u8');
@@ -239,7 +237,6 @@ segment1.ts
     {
         $reflection = new \ReflectionClass($this->prefetcher);
         $method = $reflection->getMethod('getCacheKey');
-        $method->setAccessible(true);
 
         $url = 'http://example.com/segment.ts';
         /** @var string $key1 */
@@ -254,7 +251,6 @@ segment1.ts
     {
         $reflection = new \ReflectionClass($this->prefetcher);
         $method = $reflection->getMethod('getCacheKey');
-        $method->setAccessible(true);
 
         $key1 = $method->invoke($this->prefetcher, 'http://example.com/segment1.ts');
         $key2 = $method->invoke($this->prefetcher, 'http://example.com/segment2.ts');

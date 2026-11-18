@@ -47,7 +47,6 @@ final class SdEpgServiceFactoryTokenCacheTest extends TestCase
     private function invokeSave(string $token): bool
     {
         $m = new \ReflectionMethod(SdEpgServiceFactory::class, 'saveCachedToken');
-        $m->setAccessible(true);
 
         /** @var bool $ok */
         $ok = $m->invoke(null, $this->cachePath, $token);
@@ -57,7 +56,6 @@ final class SdEpgServiceFactoryTokenCacheTest extends TestCase
     private function invokeLoad(): ?string
     {
         $m = new \ReflectionMethod(SdEpgServiceFactory::class, 'loadCachedToken');
-        $m->setAccessible(true);
 
         /** @var string|null $token */
         $token = $m->invoke(null, $this->cachePath);

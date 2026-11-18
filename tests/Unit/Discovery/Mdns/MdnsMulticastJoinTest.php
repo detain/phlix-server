@@ -104,7 +104,6 @@ class MdnsMulticastJoinTest extends TestCase
         [$newStyle, $portC] = $this->bindEphemeral();
         $mdns = new MdnsSocket(null, 1);
         $join = new \ReflectionMethod(MdnsSocket::class, 'joinMulticastGroup');
-        $join->setAccessible(true);
         $armCJoined = $join->invoke($mdns, $newStyle, $ifIndex);
         $armC = $this->multicastRoundTrip($newStyle, $group, $portC, $ifIndex);
         socket_close($newStyle);
@@ -160,7 +159,6 @@ class MdnsMulticastJoinTest extends TestCase
 
         $mdns = new MdnsSocket($logger, 1);
         $join = new \ReflectionMethod(MdnsSocket::class, 'joinMulticastGroup');
-        $join->setAccessible(true);
 
         // Failure mode 1: setsockopt returns false (nonexistent interface
         // index → ENODEV, measured). The method must say so, loudly.

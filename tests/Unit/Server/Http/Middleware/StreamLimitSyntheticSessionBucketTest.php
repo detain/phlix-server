@@ -67,7 +67,6 @@ final class StreamLimitSyntheticSessionBucketTest extends TestCase
         RequestContext::setUserId(null);
         RequestContext::setProfileId(null);
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
         parent::tearDown();
     }

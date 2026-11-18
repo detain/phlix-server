@@ -53,7 +53,6 @@ class NewsletterEmailCompositionTest extends TestCase
         string $boundary
     ): array {
         $method = new ReflectionMethod(NewsletterSender::class, 'composeEmail');
-        $method->setAccessible(true);
 
         /** @var array{envelope_to: string, subject: string, body: string, headers: string} $wire */
         $wire = $method->invoke(null, $content, $userEmail, $userName, $fromName, $fromEmail, $boundary);
@@ -268,7 +267,6 @@ class NewsletterEmailCompositionTest extends TestCase
     public function testTheGeneratedBoundaryIsTokenSafePerRfc2045(): void
     {
         $method = new ReflectionMethod(NewsletterSender::class, 'generateMimeBoundary');
-        $method->setAccessible(true);
 
         $first = (string) $method->invoke(null);
         $second = (string) $method->invoke(null);

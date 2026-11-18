@@ -636,7 +636,6 @@ final class RecorderTimeShiftBufferTest extends TestCase
     private function injectInMemory(Recorder $recorder, string $sessionId, array $entry): void
     {
         $ref = new \ReflectionProperty(Recorder::class, 'activeTimeShifts');
-        $ref->setAccessible(true);
         /** @var array<string, array<string, mixed>> $current */
         $current = $ref->getValue($recorder);
         $current[$sessionId] = $entry;

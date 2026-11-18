@@ -199,7 +199,6 @@ class NewsletterGeneratorTest extends TestCase
         // zero new items reads as prose, not "New Items Added: 0".
         $generator = new NewsletterGenerator($this->stats, $this->library, $this->db, $this->templateDir);
         $method = new \ReflectionMethod($generator, 'generatePlainText');
-        $method->setAccessible(true);
 
         $singular = (string) $method->invoke($generator, 60, 1, [
             ['name' => 'Solo Film', 'play_count' => 1],
@@ -308,7 +307,6 @@ class NewsletterGeneratorTest extends TestCase
         // "1" decline singular even though the raw minutes differ.
         $generator = new NewsletterGenerator($this->stats, $this->library, $this->db, $this->templateDir);
         $method = new \ReflectionMethod($generator, 'generatePlainText');
-        $method->setAccessible(true);
 
         $atOne = (string) $method->invoke($generator, 60, 0, []);
         $this->assertStringContainsString('Watch Time: 1 hour', $atOne);

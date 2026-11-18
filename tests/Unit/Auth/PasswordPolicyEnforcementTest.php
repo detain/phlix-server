@@ -287,7 +287,6 @@ class PasswordPolicyEnforcementTest extends TestCase
         $controller = new AdminUserController($this->createMock(UserRepository::class), $manager);
 
         $accessor = new \ReflectionMethod($controller, 'passwordPolicy');
-        $accessor->setAccessible(true);
         /** @var PasswordPolicy $policy */
         $policy = $accessor->invoke($controller);
 

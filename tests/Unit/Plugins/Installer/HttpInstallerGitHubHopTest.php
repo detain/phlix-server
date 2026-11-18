@@ -52,7 +52,6 @@ final class HttpInstallerGitHubHopTest extends TestCase
     {
         $installer = new HttpInstaller(sys_get_temp_dir() . '/phlix_hop_' . uniqid('', true));
         $method = new \ReflectionMethod(HttpInstaller::class, 'vettedGitHubArtifactRedirect');
-        $method->setAccessible(true);
 
         /** @var string|null $result */
         $result = $method->invoke($installer, $responseHeaders, $sourceUrl);

@@ -255,7 +255,6 @@ final class SyncPlayEnvelopePinHarness
     public static function seedConnectionPool(Connection $connection): void
     {
         $property = (new ReflectionClass(ConnectionPool::class))->getProperty('connections');
-        $property->setAccessible(true);
         /** @var array<string, Connection> $existing */
         $existing = $property->getValue(null) ?? [];
         $existing['mysql'] = $connection;
@@ -271,7 +270,6 @@ final class SyncPlayEnvelopePinHarness
                 continue;
             }
             $p = $ref->getProperty($prop);
-            $p->setAccessible(true);
             $p->setValue(null, $value);
         }
     }

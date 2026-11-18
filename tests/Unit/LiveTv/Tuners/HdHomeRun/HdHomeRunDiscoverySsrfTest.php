@@ -38,7 +38,6 @@ class HdHomeRunDiscoverySsrfTest extends TestCase
     private function callFetch(HdHomeRunDiscovery $discovery, string $location, string $source): ?array
     {
         $method = new \ReflectionMethod($discovery, 'fetchDeviceDescription');
-        $method->setAccessible(true);
 
         /** @var array<string, mixed>|null $result */
         $result = $method->invoke($discovery, $location, $source);

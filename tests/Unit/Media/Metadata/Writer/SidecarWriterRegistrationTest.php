@@ -136,7 +136,6 @@ final class SidecarWriterRegistrationTest extends TestCase
         $writer = $this->buildContainer()->get(SidecarWriter::class);
 
         $property = new \ReflectionProperty(SidecarWriter::class, 'artworkStorage');
-        $property->setAccessible(true);
         $storage = $property->getValue($writer);
 
         $this->assertInstanceOf(
@@ -158,7 +157,6 @@ final class SidecarWriterRegistrationTest extends TestCase
         $writer = $container->get(EmbeddedMetadataWriter::class);
 
         $logger = new \ReflectionProperty(EmbeddedMetadataWriter::class, 'logger');
-        $logger->setAccessible(true);
         $this->assertInstanceOf(
             \Psr\Log\LoggerInterface::class,
             $logger->getValue($writer),
@@ -176,14 +174,12 @@ final class SidecarWriterRegistrationTest extends TestCase
         // by construction (a destructive default-off setting silently always-on
         // is the precise defect the MediaOverwritePolicy DI caveat warns about).
         $optIn = new \ReflectionProperty(EmbeddedMetadataWriter::class, 'optIn');
-        $optIn->setAccessible(true);
         $this->assertSame(
             $container->get(\Phlix\Media\Metadata\EmbeddedWritePolicy::class),
             $optIn->getValue($writer),
             'the embedded writer must hold the container-singleton opt-in policy',
         );
         $overwrite = new \ReflectionProperty(EmbeddedMetadataWriter::class, 'overwritePolicy');
-        $overwrite->setAccessible(true);
         $this->assertSame(
             $container->get(\Phlix\Media\Metadata\MetadataOverwritePolicy::class),
             $overwrite->getValue($writer),
@@ -191,7 +187,6 @@ final class SidecarWriterRegistrationTest extends TestCase
         );
 
         $runner = new \ReflectionProperty(EmbeddedMetadataWriter::class, 'runner');
-        $runner->setAccessible(true);
         $this->assertInstanceOf(
             \Phlix\Media\Metadata\Writer\ExecExternalCommandRunner::class,
             $runner->getValue($writer),
@@ -213,7 +208,6 @@ final class SidecarWriterRegistrationTest extends TestCase
             ->get(EmbeddedMetadataWriter::class);
 
         $ffmpegPath = new \ReflectionProperty(EmbeddedMetadataWriter::class, 'ffmpegPath');
-        $ffmpegPath->setAccessible(true);
         $this->assertSame('/opt/custom/ffmpeg', $ffmpegPath->getValue($writer));
 
         // And a malformed/absent config entry must resolve to the shipped

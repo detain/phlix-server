@@ -25,7 +25,6 @@ final class RemoteRokuClientTest extends TestCase
         $client = (new \ReflectionClass(RemoteRokuClient::class))->newInstanceWithoutConstructor();
 
         $method = new \ReflectionMethod($client, 'preferAsyncHttp');
-        $method->setAccessible(true);
 
         $this->assertFalse(
             $method->invoke($client),
@@ -38,7 +37,6 @@ final class RemoteRokuClientTest extends TestCase
         $client = (new \ReflectionClass(RemoteRokuClientAsyncSeamStub::class))->newInstanceWithoutConstructor();
 
         $httpPost = new \ReflectionMethod($client, 'httpPost');
-        $httpPost->setAccessible(true);
         $result = $httpPost->invoke($client, 'http://192.168.1.100:8060/input', 'key=Play');
 
         $this->assertSame('ok', $result);
@@ -55,7 +53,6 @@ final class RemoteRokuClientTest extends TestCase
 
         $client = (new \ReflectionClass(RemoteRokuClient::class))->newInstanceWithoutConstructor();
         $sleep = new \ReflectionMethod($client, 'coroutineAwareSleep');
-        $sleep->setAccessible(true);
 
         $order = [];
         \Swoole\Coroutine\run(function () use (&$order, $sleep, $client): void {

@@ -39,6 +39,8 @@ final class PreRouterFastPathsAccessScheduleTest extends TestCase
 
     private string $mediaPath = '';
 
+    private string $avatarDir = '';
+
     /** @var list<string> Every SQL statement the scripted connection was asked to run. */
     private array $queries = [];
 
@@ -55,6 +57,12 @@ final class PreRouterFastPathsAccessScheduleTest extends TestCase
     {
         if ($this->mediaPath !== '' && is_file($this->mediaPath)) {
             @unlink($this->mediaPath);
+        }
+        if ($this->avatarDir !== '' && is_dir($this->avatarDir)) {
+            foreach (glob($this->avatarDir . '/*') ?: [] as $file) {
+                @unlink($file);
+            }
+            @rmdir($this->avatarDir);
         }
         RequestContext::setUserId(null);
         RequestContext::setProfileId(null);
@@ -107,11 +115,44 @@ final class PreRouterFastPathsAccessScheduleTest extends TestCase
     }
 
     /**
+     * A real avatar on disk for user u1, so the avatar route has bytes to serve or refuse.
+     */
+    private function avatarStorage(): AvatarStorage
+    {
+        $this->avatarDir = sys_get_temp_dir() . '/phlix-sched-avatar-' . bin2hex(random_bytes(6));
+        mkdir($this->avatarDir, 0755, true);
+
+        $source = $this->avatarDir . '/source.jpg';
+        imagejpeg(imagecreatetruecolor(16, 16), $source, 85);
+
+        $storage = new AvatarStorage($this->avatarDir);
+        $storage->store('u1', $source);
+        unlink($source);
+
+        return $storage;
+    }
+
+    /**
+     * An authenticated avatar request. A session with no profile publishes no profile id.
+     */
+    private function avatarRequest(?string $profileId): Request
+    {
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/users/u1/avatar';
+        $request->userId = 'u1';
+        $request->profileId = $profileId;
+
+        return $request;
+    }
+
+    /**
      * @param list<array<string, mixed>>  $scheduleRows access_schedules rows the DB holds
      *                                                 (filtered by profile, as the real query is).
      * @param array<string, mixed>|null   $profile      UserProfileManager::getActiveProfile() result.
+     * @param AvatarStorage|null          $avatars      Avatar store; a mock when null.
      */
-    private function makeFastPaths(array $scheduleRows, ?array $profile): PreRouterFastPaths
+    private function makeFastPaths(array $scheduleRows, ?array $profile, ?AvatarStorage $avatars = null): PreRouterFastPaths
     {
         $repo = $this->createMock(ItemRepository::class);
         $repo->method('findById')->willReturn([
@@ -175,7 +216,7 @@ final class PreRouterFastPathsAccessScheduleTest extends TestCase
 
         return new PreRouterFastPaths(
             $this->createMock(ArtworkStorage::class),
-            $this->createMock(AvatarStorage::class),
+            $avatars ?? $this->createMock(AvatarStorage::class),
             $container,
         );
     }
@@ -436,5 +477,66 @@ final class PreRouterFastPathsAccessScheduleTest extends TestCase
         self::assertNotNull($response);
         self::assertSame(401, $response->statusCode);
         self::assertNull($response->filePath);
+    }
+
+    public function test_schedule_window_refuses_an_authenticated_avatar_get(): void
+    {
+        // GET /api/v1/users/{id}/avatar runs before the global gate, so a locked-out
+        // profile's session must get no avatar bytes from it.
+        $fastPaths = $this->makeFastPaths($this->lockedOutNow(), ['id' => 'p1'], $this->avatarStorage());
+
+        $response = $fastPaths->dispatch($this->avatarRequest('p1'));
+
+        self::assertNotNull($response);
+        self::assertSame(403, $response->statusCode);
+        self::assertNull($response->filePath, 'no avatar bytes may be served to a locked-out profile');
+        self::assertSame('access.scheduled', $this->decodedBody($response)['code']);
+    }
+
+    public function test_a_schedule_on_another_day_still_serves_the_avatar(): void
+    {
+        $avatars = $this->avatarStorage();
+        $fastPaths = $this->makeFastPaths($this->lockedOutOnAnotherDay(), ['id' => 'p1'], $avatars);
+
+        $response = $fastPaths->dispatch($this->avatarRequest('p1'));
+
+        self::assertNotNull($response);
+        self::assertSame(200, $response->statusCode);
+        self::assertSame($avatars->path('u1'), $response->filePath);
+    }
+
+    public function test_an_avatar_session_with_no_profile_of_its_own_is_tested_on_the_account_profile(): void
+    {
+        // A relayed session publishes no profile id. Its avatar is tested on the account's
+        // active profile, which is locked here, so the bytes are refused.
+        $fastPaths = $this->makeFastPaths($this->lockedOutNow(), ['id' => 'p1'], $this->avatarStorage());
+
+        $response = $fastPaths->dispatch($this->avatarRequest(null));
+
+        self::assertNotNull($response);
+        self::assertSame(403, $response->statusCode);
+        self::assertNull($response->filePath);
+    }
+
+    public function test_a_signed_avatar_url_is_served_as_before_because_it_carries_no_profile(): void
+    {
+        // Avatar URLs are minted without a profile binding, so a signed request has no
+        // window to test and is served exactly as it was before this gate existed.
+        $avatars = $this->avatarStorage();
+        $fastPaths = $this->makeFastPaths($this->lockedOutNow(), ['id' => 'p1'], $avatars);
+
+        $minted = SignedUrl::fromEnv()->mint('/api/v1/users/u1/avatar');
+        parse_str((string) parse_url($minted, PHP_URL_QUERY), $query);
+
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/users/u1/avatar';
+        $request->query = $query;
+
+        $response = $fastPaths->dispatch($request);
+
+        self::assertNotNull($response);
+        self::assertSame(200, $response->statusCode);
+        self::assertSame($avatars->path('u1'), $response->filePath);
     }
 }

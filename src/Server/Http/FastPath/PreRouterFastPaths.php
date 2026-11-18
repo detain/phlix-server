@@ -208,6 +208,12 @@ final class PreRouterFastPaths
      * user) OR a valid signed-URL token (so `<img src="...">` works without an
      * Authorization header).
      *
+     * A resolved session is also held to its profile's schedule window, as the artwork
+     * path holds it. This route runs before the global gate, so the window is tested
+     * here. A signed request carries no session and is served as before: avatar URLs are
+     * minted without a profile binding ({@see AvatarStorage}), so there is no window to
+     * test on that path.
+     *
      * @param Request $request The request to match and serve.
      *
      * @return Response|null Null when this is not an avatar request.
@@ -231,6 +237,15 @@ final class PreRouterFastPaths
         $unauthorized = $this->rejectUnlessSigned($request, $request->path);
         if ($unauthorized !== null) {
             return $unauthorized;
+        }
+
+        // A session (not a signed URL) is held to its profile's window before any bytes
+        // are read, the same denial the artwork bytes get.
+        if ($request->userId !== null && $request->userId !== '') {
+            $scheduleDenial = $this->scheduleDenial($request);
+            if ($scheduleDenial !== null) {
+                return $scheduleDenial;
+            }
         }
 
         $avatarPath = $this->avatarStorage->path($targetUserId);
@@ -327,7 +342,7 @@ final class PreRouterFastPaths
         // This fast path runs before Application::dispatch(), so the global schedule gate
         // never sees the request. Apply the profile's window here, as the direct-play path
         // does, so a schedule-locked profile is refused the same way the gate refuses it.
-        $scheduleDenial = $this->artworkScheduleDenial($request);
+        $scheduleDenial = $this->scheduleDenial($request);
         if ($scheduleDenial !== null) {
             return $scheduleDenial;
         }
@@ -371,25 +386,32 @@ final class PreRouterFastPaths
     }
 
     /**
-     * The schedule window test for an authorised artwork request.
+     * The schedule window test for an authorised artwork or avatar request.
      *
      * A resolved session (a non-empty userId) is tested through
      * {@see AccessScheduleMiddleware::denyForSession()}, which is the same resolution the
-     * global gate runs. A session with its own profile is tested on that profile. A
-     * profile-less session (a token minted before S80) is tested on the account's active
-     * profile, and an account with no resolvable profile is refused with the gate's 403. So
-     * the artwork bytes and the JSON routes agree for every bearer session.
+     * global gate runs. A session with its own profile is tested on that profile.
+     *
+     * A session with no profile of its own is NOT a pre-S80 bearer. Every local bearer is
+     * resolved to a profile by {@see \Phlix\Auth\AuthManager::validateAccessToken()}: the
+     * token's claim if the account still owns it, else the account default (the resolver
+     * creates one when missing). The only exception is a profile lookup that fails outright,
+     * which that method logs and degrades to null. A null profile here is therefore a
+     * RELAYED request, which the relay consumer stamps with a userId and never a profileId.
+     * For that case the account's active profile is tested, and an account with no resolvable
+     * profile is refused with the gate's 403. So the bytes and the JSON routes agree for every
+     * session.
      *
      * A request with no session is tested only on the `pid` its signed URL has just verified
      * (see {@see ArtworkByteResponder::rejectUnlessSigned()}). With no `pid` it is not refused
      * here; the signed URL's expiry is the only bound on that case, as the signed-URL design
      * states.
      *
-     * @param Request $request The authorised artwork request.
+     * @param Request $request The authorised artwork or avatar request.
      *
      * @return Response|null The AccessScheduled 403 when the window refuses the request now, else null.
      */
-    private function artworkScheduleDenial(Request $request): ?Response
+    private function scheduleDenial(Request $request): ?Response
     {
         if ($request->userId !== null && $request->userId !== '') {
             /** @var AccessScheduleMiddleware $middleware */

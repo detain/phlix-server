@@ -4,12 +4,17 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Server\Http\FastPath;
 
+use Phlix\Access\AccessScheduleService;
 use Phlix\Auth\SignedUrl;
+use Phlix\Auth\UserProfileManager;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Server\Http\FastPath\PreRouterFastPaths;
+use Phlix\Server\Http\Middleware\AccessScheduleMiddleware;
 use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;
+use Psr\Container\ContainerInterface;
+use Workerman\MySQL\Connection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
 /**
@@ -38,6 +43,7 @@ final class PreRouterFastPathsAvatarTest extends TestCase
         $this->fastPaths = new PreRouterFastPaths(
             $this->createMock(ArtworkStorage::class),
             $this->avatarStorage,
+            $this->openScheduleContainer(),
         );
 
         putenv('JWT_SECRET=test-secret-for-avatar-url-test-32bytes!');
@@ -50,6 +56,26 @@ final class PreRouterFastPathsAvatarTest extends TestCase
 
         SignedUrl::resetSharedForTesting();
         putenv('JWT_SECRET');
+    }
+
+    /**
+     * A container whose schedule gate has no rows, so every profile is inside its window. A
+     * session's avatar request is then served the bytes, as it was before the gate existed.
+     */
+    private function openScheduleContainer(): ContainerInterface
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]);
+
+        $profiles = $this->createMock(UserProfileManager::class);
+        $profiles->method('getActiveProfile')->willReturn(['id' => 'profile-1']);
+
+        $schedule = new AccessScheduleMiddleware(new AccessScheduleService($db), $profiles);
+
+        $container = $this->createMock(ContainerInterface::class);
+        $container->method('get')->willReturn($schedule);
+
+        return $container;
     }
 
     /**

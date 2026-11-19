@@ -668,4 +668,55 @@ class MediaUserDataControllerTest extends TestCase
         $this->assertArrayHasKey('message', $body);
         $this->assertSame('Item marked as unwatched', $body['message']);
     }
+
+
+    public function testListFavoritesRowDecodeLegsAreByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['item_id' => 'f1', 'added_at' => '2026-01-01 00:00:00'],
+            ['item_id' => '', 'added_at' => null],
+            ['item_id' => 9, 'added_at' => null],
+            ['item_id' => null, 'added_at' => null],
+            ['added_at' => null],
+        ];
+
+        foreach ($vectors as $row) {
+            $userData = $this->createMock(UserItemDataRepository::class);
+            $userData->method('getFavorites')->willReturn([$row, $row]);
+
+            $requestedIds = null;
+            $items = $this->createMock(ItemRepository::class);
+            $items->method('findByIds')->willReturnCallback(
+                static function (array $ids) use (&$requestedIds): array {
+                    $requestedIds = $ids;
+                    return array_map(
+                        static fn (string $id): array => [
+                            'id' => $id, 'name' => 'X', 'type' => 'movie',
+                            'path' => '/p', 'metadata_json' => '{}',
+                        ],
+                        $ids
+                    );
+                }
+            );
+
+            $controller = new MediaUserDataController($items, $userData);
+            $response = $controller->listFavorites($this->authedRequest(), []);
+            $this->assertSame(200, $response->statusCode);
+            $body = json_decode($response->body, true);
+
+            // Transcribed pre-fold loops, feed [row,row] verbatim: the collect
+            // leg has NO dedupe and the shape leg repeats per row, so the
+            // duplicate feed pins both arms honestly.
+            $legacyIds = [];
+            foreach ([$row, $row] as $r) {
+                $legacyItemId = is_string($r['item_id'] ?? null) ? $r['item_id'] : '';
+                if ($legacyItemId !== '') {
+                    $legacyIds[] = $legacyItemId;
+                }
+            }
+            $this->assertSame($legacyIds, $requestedIds ?? []);
+            $this->assertSame($legacyIds, array_column($body['items'], 'id'));
+        }
+    }
 }

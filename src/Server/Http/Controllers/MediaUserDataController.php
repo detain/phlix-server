@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Common\Util\RowMap;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\Library\RatingGate;
@@ -351,7 +352,11 @@ class MediaUserDataController
         // blocked-item skips (a skipped row's id is simply absent from the map).
         $ids = [];
         foreach ($rows as $row) {
-            $itemId = is_string($row['item_id'] ?? null) ? $row['item_id'] : '';
+            // E-09 cohort 5a: RowMap fold (str default '' transcribed; the
+            // non-empty skip arms are pre-fold shapes kept as-is). Pinned by
+            // the legacy-oracle vectors in
+            // tests/Unit/Server/Http/Controllers/MediaUserDataControllerTest.php.
+            $itemId = RowMap::str($row, 'item_id', '');
             if ($itemId !== '') {
                 $ids[] = $itemId;
             }
@@ -370,7 +375,7 @@ class MediaUserDataController
 
         $items = [];
         foreach ($rows as $row) {
-            $itemId = is_string($row['item_id'] ?? null) ? $row['item_id'] : '';
+            $itemId = RowMap::str($row, 'item_id', '');
             if ($itemId === '') {
                 continue;
             }

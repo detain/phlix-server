@@ -51,6 +51,39 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Two corrections to this wave's own delegation disclosures (review r1;
+  nothing here changed behavior any deployment has ever run — the whole
+  adoption wave is local unreleased master).** First, the WebAuthn attestation
+  parser's strict base64url decode briefly rode the shared `Base64Url` strict
+  arm (commit b93d73a2); an executed 234k-vector malformed-shape corpus proved
+  that arm moves the parse policy at this security seam in BOTH directions —
+  truncated-padding forms like `'PQ='` that the ratified body accepted would
+  have been rejected (6,646 vectors), and forms with embedded whitespace like
+  `"p0\n"` that the ratified body rejected would have been accepted (2,264
+  vectors). Canonical authenticator output (padded or unpadded) was and is
+  identical across all three implementations (450k-vector controls, zero
+  diffs), so no realistic wire byte was ever at stake — but the "no wire byte
+  changed … byte-parity-proven" headline of the entry below was false as
+  measured for the malformed class, and the seam is now restored to the
+  ratified pad-before-strict body byte-identically, pinned both directions by
+  `tests/Unit/Security/WebAuthnLegacyDecodeParityTest.php`. Strictness
+  modernization at this seam (rejecting truncation, refusing embedded
+  whitespace) is banked as a v0.57 proposal, not shipped. Second, the E-04
+  entry below claims real-word spellings of `LASTFM_SUBMIT_NOW_PLAYING`
+  "answer identically" — false for `'0'`, the common OFF spelling: the legacy
+  `?: '1'` coalesce swallowed the literal `'0'` (PHP falsy) so scrobbling
+  stayed ON; `EnvConfig::boolOptOut` now RESPECTS `'0'` as OFF (flip table:
+  unset → silent ON default; unrecognized junk (e.g. `'banana'`) → ON with an
+  `EnvConfig` announce; `'1'/'true'/'on'` → ON; `'0'/'false'/'off'` → OFF;
+  previously `'0'` → ON via the falsy-coalesce swallow, junk/whitespace →
+  silent OFF). Measured over ten spellings on the real config loader. The new
+  behavior matches the documented opt-out intent — the same newly-respected
+  `'0'` class review SRV-ENVBOOL-r2 ratified for `PHLIX_RELAY_TLS_VERIFY` —
+  and is now disclosed truthfully in-product and in the config comment. The
+  shipped-config audit found no deployment artifact setting the knob to `'0'`
+  (the README env table documents the default only). [S1-ADOPT r1 fixes,
+  CRITICAL-1 / MAJOR-1]
+
 - **Shared primitives now come from phlix-shared v0.56.0.** The dependency pin
   moved `^0.55.0` → `^0.56.0` and the server's duplicated crypto/encoding/
   policy code became thin delegates: base64url, Ed25519 PEM build/parse and key

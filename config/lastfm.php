@@ -66,14 +66,19 @@ return [
      * Whether to send `track.updateNowPlaying` on playback start in
      * addition to the scrobble on stop.
      */
-    // E-04 grammar (Wave-S1 residual sweep): opt-out shape. Real-word spellings
-    // ('0'/'1'/'true'/'false'/'on'/'off', padded) answer identically to the old
-    // `?: '1'` line; JUNK ('banana') and whitespace used to be silently OFF on
-    // a knob whose comment promises it defaults ON — under the estate boolOptOut
-    // law (same convergence SRV-ENVBOOL-r1/r2 ratified for PHLIX_RELAY_TLS_VERIFY)
-    // junk now answers the documented default ON and announces itself. Disclosed
-    // deliberately: an operator typing junk into an opt-out can no longer
-    // accidentally turn the feature OFF.
+    // E-04 grammar (Wave-S1 residual sweep, r1-corrected): opt-out shape.
+    // Real-word spellings ('1'/'true'/'on', 'false'/'off', padded) answer
+    // identically to the old `?: '1'` line EXCEPT '0': the legacy coalesce
+    // swallowed the literal '0' (PHP falsy) into the '1' default, so
+    // LASTFM_SUBMIT_NOW_PLAYING=0 scrobbled ON against the operator's
+    // intent — boolOptOut now RESPECTS '0' as OFF. The flip table is
+    // forward-recorded in CHANGELOG (the same newly-respected-'0' class
+    // SRV-ENVBOOL-r2 disclosed for PHLIX_RELAY_TLS_VERIFY; the F6-style
+    // swallow this pattern replaces is held elsewhere on purpose).
+    // Whitespace/empty answer the default ON silently; unrecognized junk
+    // ('banana') answers the default ON AND announces itself (estate
+    // boolOptOut law) — both previously answered silently OFF, silently
+    // turning a default-ON knob off.
     'submit_now_playing' => EnvConfig::boolOptOut('LASTFM_SUBMIT_NOW_PLAYING'),
 
     /**

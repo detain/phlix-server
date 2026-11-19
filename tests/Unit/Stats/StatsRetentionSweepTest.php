@@ -316,6 +316,81 @@ final class StatsRetentionSweepTest extends TestCase
         $this->assertSame(2, $libDeletes);
     }
 
+    /**
+     * RED-FIRST (D-16 cure): the old sweep retried on the English word
+     * 'deadlock' ANYWHERE in the message — so a genuine duplicate-key fault
+     * whose echoed text merely mentions a deadlock was retried (and re-harvest
+     * raced again) instead of propagating. The cure consults the wire first
+     * and only falls to the belt when the wire has nothing to say.
+     */
+    public function testCodeContradictionPropagatesWithoutRetry(): void
+    {
+        $this->bootstrapStatsConfig(null);
+
+        $libDeletes = 0;
+        $collector = $this->collector(
+            static function ($sql, $params = null) use (&$libDeletes) {
+                $sql = (string) $sql;
+                if (!str_contains($sql, 'stats_library_changes')) {
+                    return [];
+                }
+                if (str_contains($sql, 'DELETE')) {
+                    $libDeletes++;
+                    throw new PDOException(
+                        "SQL:DELETE FROM stats_library_changes WHERE id IN (?) SQLSTATE[23000]: "
+                        . "Integrity constraint violation: 1062 Duplicate entry (see the deadlock discussion in "
+                        . "the migration notes)"
+                    );
+                }
+                return [['id' => 7]];
+            }
+        );
+
+        $this->expectException(PDOException::class);
+        try {
+            $collector->sweepRetention();
+        } finally {
+            // Wire code 1062 says "not a deadlock": the old form retried the
+            // whole ladder (3 deletes).
+            $this->assertSame(1, $libDeletes);
+        }
+    }
+
+    /**
+     * RED-FIRST companion (D-16 cure): a localized deadlock (SQLSTATE 40001
+     * / driver 1213 on the wire, no English sentence) must still retry — the
+     * old `stripos('deadlock')` check silently lost the retry, exactly the
+     * defect the hub ServerReaper HUB-m56 sweep-law cured upstream of us.
+     */
+    public function testLocalizedWireDeadlockRetriesDespiteMissingEnglish(): void
+    {
+        $this->bootstrapStatsConfig(null);
+
+        $libDeletes = 0;
+        $collector = $this->collector(
+            static function ($sql, $params = null) use (&$libDeletes) {
+                $sql = (string) $sql;
+                if (!str_contains($sql, 'stats_library_changes')) {
+                    return [];
+                }
+                if (str_contains($sql, 'DELETE')) {
+                    $libDeletes++;
+                    if ($libDeletes === 1) {
+                        throw new PDOException(
+                            'SQLSTATE[40001]: Serialization failure: 1213 Kilit çarpışması, işlemi yeniden başlatın',
+                            40001
+                        );
+                    }
+                    return 1;
+                }
+                return [['id' => 11]];
+            }
+        );
+
+        $this->assertSame(1, $collector->sweepRetention());
+        $this->assertSame(2, $libDeletes);
+    }
+
     public function testANonDeadlockFailurePropagatesOnFirstAttempt(): void
     {
         $this->bootstrapStatsConfig(null);

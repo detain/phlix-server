@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Stats;
 
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -192,14 +193,17 @@ final class StorageSnapshotHelper
         );
 
         foreach ($rows as $row) {
-            $type = is_string($row['type'] ?? null) ? $row['type'] : '';
+            // E-09 cohort 5a: RowMap fold (defaults transcribed verbatim).
+            // Pinned by the legacy-oracle vectors in
+            // tests/Unit/Stats/StorageSnapshotHelperTest.php.
+            $type = RowMap::str($row, 'type', '');
             // TYPE_TO_BUCKET covers the whole column ENUM, so a miss here means
             // the ENUM grew without this map being updated.
             $bucket = self::TYPE_TO_BUCKET[$type] ?? null;
             if ($bucket === null) {
                 continue;
             }
-            $count = is_numeric($row['item_count'] ?? null) ? (int) $row['item_count'] : 0;
+            $count = RowMap::intFromNumeric($row, 'item_count', 0);
             $buckets[$bucket]['count'] += $count;
         }
 

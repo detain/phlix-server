@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Stats\StatsCollector;
 use Phlix\Stats\StorageSnapshotHelper;
+use ReflectionClass;
 use Workerman\MySQL\Connection;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -346,5 +347,53 @@ class StorageSnapshotHelperTest extends TestCase
         $collector->expects($this->never())->method('recordStorageSnapshots');
 
         StorageSnapshotHelper::bootstrapSnapshot($collector, $db);
+    }
+
+    /**
+     * E-09 cohort 5a (W5): collectBuckets type/item_count fold legs vs the
+     * pre-fold ternaries + KEPT TYPE_TO_BUCKET lookup. Only the per-bucket
+     * counts are compared — byte legs touch host filesystem state.
+     */
+    public function test_bucket_row_decode_legs_are_byte_identical_to_legacy_across_vectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['type' => 'movie', 'item_count' => 3],
+            ['type' => 'series', 'item_count' => '7'],
+            ['type' => 'episode', 'item_count' => 2.9],
+            ['type' => 'bogus', 'item_count' => 9],
+            ['type' => null, 'item_count' => null],
+            ['item_count' => 4],
+            ['type' => 'photo'],
+            [],
+        ];
+
+        foreach ($vectors as $row) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+
+            $actual = StorageSnapshotHelper::collectBuckets($db);
+
+            $type = is_string($row['type'] ?? null) ? $row['type'] : '';
+            $bucket = StorageSnapshotHelper::TYPE_TO_BUCKET[$type] ?? null;
+            $base = (new ReflectionClass(StorageSnapshotHelper::class))
+                ->getConstant('EMPTY_BUCKETS');
+            $expectedCounts = [];
+            foreach (array_keys((array) $base) as $name) {
+                $expectedCounts[$name] = 0;
+            }
+            if ($bucket !== null) {
+                $expectedCounts[$bucket] += is_numeric($row['item_count'] ?? null)
+                    ? (int) $row['item_count']
+                    : 0;
+            }
+
+            $actualCounts = [];
+            foreach ($actual as $name => $bucketRow) {
+                $actualCounts[$name] = $bucketRow['count'];
+            }
+
+            $this->assertSame($expectedCounts, $actualCounts, 'vector ' . json_encode($row));
+        }
     }
 }

@@ -11,8 +11,10 @@ declare(strict_types=1);
 
 namespace Phlix\Dlna;
 
+use Phlix\Common\Fs\Mime;
+
 /**
- * The ONE MIME table the DLNA surface uses.
+ * The ONE MIME resolution surface the DLNA stack reads.
  *
  * ## Why this class exists
  *
@@ -41,7 +43,8 @@ namespace Phlix\Dlna;
  *
  * ## The table is a SUPERSET, so some DIDL mime values changed
  *
- * {@see self::EXTENSION_MAP} is deliberately NOT byte-identical to the table
+ * The media view of {@see \Phlix\Common\Fs\Mime} (this surface's storage leg
+ * since E-17) is deliberately NOT byte-identical to the table
  * {@see LibraryBridge::determineMimeType()} used to own: that one listed only
  * mp4/m4v/mkv/webm/avi + mp3/aac/flac/wav/ogg + jpg/jpeg/png/gif, and everything
  * else fell through to the coarse `type` arm. About twenty containers therefore
@@ -52,7 +55,10 @@ namespace Phlix\Dlna;
  * `music` reports `audio/mp4` rather than `audio/mpeg`. That is a visible change
  * in the Browse response and it is an intentional improvement (the old values were
  * wrong, and a renderer that trusts them fails mid-decode), but it is a change:
- * nothing pinned the old values, and it is called out in the CHANGELOG.
+ * nothing pinned the old values, and it is called out in the CHANGELOG. Every
+ * value the CURRENT media view answers is frozen leg-by-leg by
+ * `tests/Unit/Common/Fs/MimePinMatrixTest.php`, including the web-only keys
+ * (avif/svg/fonts) that must keep answering {@see self::FALLBACK} HERE.
  *
  * ## The `type` fallback IS exhaustive (S53)
  *
@@ -85,60 +91,11 @@ final class DlnaMimeTypes
      * Treated by the stream route as NOT direct-playable: serving an unknown
      * container as `application/octet-stream` (or, worse, guessing `video/mp4`
      * from the row's `type`) makes a renderer fail mid-decode instead of
-     * reporting an unsupported format.
+     * reporting an unsupported format. An alias of the single literal in
+     * {@see Mime::FALLBACK} (E-17); the public name stays because the stream
+     * route, DIDL builders and their pins all speak `DlnaMimeTypes::FALLBACK`.
      */
-    public const FALLBACK = 'application/octet-stream';
-
-    /**
-     * Canonical lower-case extension → MIME map.
-     *
-     * Every value is a `video/`, `audio/` or `image/` type, so "the extension
-     * is known" and "the bytes are a media container" are the same question —
-     * see {@see self::isMediaType()}.
-     *
-     * @var array<string, string>
-     */
-    private const EXTENSION_MAP = [
-        // Video containers.
-        'mp4'  => 'video/mp4',
-        'm4v'  => 'video/mp4',
-        'mkv'  => 'video/x-matroska',
-        'webm' => 'video/webm',
-        'avi'  => 'video/x-msvideo',
-        'mov'  => 'video/quicktime',
-        'wmv'  => 'video/x-ms-wmv',
-        'flv'  => 'video/x-flv',
-        'mpg'  => 'video/mpeg',
-        'mpeg' => 'video/mpeg',
-        'm2v'  => 'video/mpeg',
-        'ts'   => 'video/mp2t',
-        'm2ts' => 'video/mp2t',
-        'mts'  => 'video/mp2t',
-        '3gp'  => 'video/3gpp',
-        'ogv'  => 'video/ogg',
-        // Audio containers.
-        'mp3'  => 'audio/mpeg',
-        'm4a'  => 'audio/mp4',
-        'm4b'  => 'audio/mp4',
-        'aac'  => 'audio/aac',
-        'flac' => 'audio/flac',
-        'wav'  => 'audio/wav',
-        'ogg'  => 'audio/ogg',
-        'oga'  => 'audio/ogg',
-        'opus' => 'audio/opus',
-        'wma'  => 'audio/x-ms-wma',
-        'aiff' => 'audio/aiff',
-        'aif'  => 'audio/aiff',
-        // Stills.
-        'jpg'  => 'image/jpeg',
-        'jpeg' => 'image/jpeg',
-        'png'  => 'image/png',
-        'gif'  => 'image/gif',
-        'bmp'  => 'image/bmp',
-        'webp' => 'image/webp',
-        'tif'  => 'image/tiff',
-        'tiff' => 'image/tiff',
-    ];
+    public const FALLBACK = Mime::FALLBACK;
 
     /**
      * Last-resort MIME per `media_items.type` — one entry per ENUM member.
@@ -169,6 +126,10 @@ final class DlnaMimeTypes
     /**
      * Resolve a MIME type from a file path's extension ALONE.
      *
+     * Delegates to the estate-wide media view of {@see Mime} (E-17): the
+     * media/`web` flag split IS the historical table, and the values are
+     * pinned by `MimePinMatrixTest`.
+     *
      * @param string $path Any path (absolute or relative); only its extension
      *                     is read, the filesystem is never touched.
      *
@@ -177,9 +138,7 @@ final class DlnaMimeTypes
      */
     public static function forPath(string $path): string
     {
-        $extension = pathinfo($path, PATHINFO_EXTENSION);
-
-        return self::EXTENSION_MAP[strtolower($extension)] ?? self::FALLBACK;
+        return Mime::mediaTypeFromPath($path);
     }
 
     /**
@@ -207,8 +166,9 @@ final class DlnaMimeTypes
 
         // LibraryBridge's historical last-resort arm, made EXHAUSTIVE over the
         // column ENUM by S53 (it fires far less often than it used to, because
-        // EXTENSION_MAP above is a superset of the table that preceded it — see
-        // the class docblock). A `type` that is not a column member at all —
+        // the media view of the shared Mime table is a superset of the table
+        // that preceded it — see the class docblock). A `type` that is not a
+        // column member at all —
         // e.g. the DIDL node type `item` — is not in the map and falls through
         // to FALLBACK, which is correct: it names no media.
         return self::TYPE_FALLBACK_MIME[$type] ?? self::FALLBACK;

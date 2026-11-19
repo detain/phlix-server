@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Storage;
 
 use Phlix\Auth\SignedUrl;
+use Phlix\Common\Fs\Mime;
 
 /**
  * Stores, resizes, and serves user avatar images.
@@ -294,26 +295,16 @@ class AvatarStorage
     /**
      * Determine the real MIME type of a file using finfo.
      *
+     * The finfo chain itself lives in the estate-wide {@see Mime::sniffFile()}
+     * (E-17 — this method and `ImageResizer`'s were byte-identical twins); the
+     * no-`finfo_close()` rationale is documented there.
+     *
      * @param string $path
      * @return string|null
      */
     private function getRealMime(string $path): ?string
     {
-        $finfo = finfo_open(FILEINFO_MIME_TYPE);
-        if ($finfo === false) {
-            return null;
-        }
-
-        $raw = finfo_file($finfo, $path);
-        // No finfo_close(): the finfo object is freed automatically by GC, and
-        // finfo_close() is a deprecated no-op as of PHP 8.5 (its E_DEPRECATED
-        // would otherwise be escalated by the error handler and abort the caller).
-
-        if ($raw === false) {
-            return null;
-        }
-
-        return $raw;
+        return Mime::sniffFile($path);
     }
 
     /**

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Workerman;
 
 use Phlix\Auth\RateLimitException;
+use Phlix\Common\Fs\Mime;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Core\Application;
@@ -1174,60 +1175,18 @@ final class HttpHandler
     /**
      * Best-guess Content-Type for a file we're about to serve.
      *
-     * Extension first — `mime_content_type()` sniffs file content via
-     * libmagic and returns `text/plain` for any text format, so CSS, JS,
-     * SVG, and JSON would all be mis-typed by the browser if we trusted
-     * it. For everything not in the explicit map, fall back to libmagic
-     * (good for images / archives) and finally to a safe binary default.
+     * Storage moved to the estate-wide {@see \Phlix\Common\Fs\Mime} table
+     * (E-17); this is the static server's view of it and its answer chain is
+     * unchanged: web-extension hit first — `mime_content_type()` sniffs file
+     * content via libmagic and returns `text/plain` for any text format, so
+     * CSS, JS, SVG, and JSON would all be mis-typed by the browser if we
+     * trusted it — then libmagic for everything not in the map (good for
+     * images / archives), finally the safe binary default. Every resolved
+     * value is frozen leg-by-leg by `MimePinMatrixTest`.
      */
     private static function mimeFor(string $path): string
     {
-        $ext = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
-        $byExt = [
-            'css'   => 'text/css; charset=utf-8',
-            'js'    => 'application/javascript; charset=utf-8',
-            'mjs'   => 'application/javascript; charset=utf-8',
-            'json'  => 'application/json; charset=utf-8',
-            'map'   => 'application/json; charset=utf-8',
-            'html'  => 'text/html; charset=utf-8',
-            'htm'   => 'text/html; charset=utf-8',
-            'txt'   => 'text/plain; charset=utf-8',
-            'xml'   => 'application/xml; charset=utf-8',
-            'svg'   => 'image/svg+xml',
-            'webmanifest' => 'application/manifest+json',
-            'ico'   => 'image/x-icon',
-            'png'   => 'image/png',
-            'jpg'   => 'image/jpeg',
-            'jpeg'  => 'image/jpeg',
-            'gif'   => 'image/gif',
-            'webp'  => 'image/webp',
-            'avif'  => 'image/avif',
-            'woff'  => 'font/woff',
-            'woff2' => 'font/woff2',
-            'ttf'   => 'font/ttf',
-            'otf'   => 'font/otf',
-            'eot'   => 'application/vnd.ms-fontobject',
-            'mp3'   => 'audio/mpeg',
-            'm4a'   => 'audio/mp4',
-            'ogg'   => 'audio/ogg',
-            'mp4'   => 'video/mp4',
-            'webm'  => 'video/webm',
-            'pdf'   => 'application/pdf',
-            'wasm'  => 'application/wasm',
-        ];
-        if (isset($byExt[$ext])) {
-            return $byExt[$ext];
-        }
-        // Guard is_file(): mime_content_type() emits a "Failed to open stream"
-        // warning (and PHPUnit exits non-zero on warnings) when handed a path that
-        // doesn't exist — fall through to the generic type instead.
-        if (function_exists('mime_content_type') && is_file($path)) {
-            $detected = mime_content_type($path);
-            if (is_string($detected) && $detected !== '') {
-                return $detected;
-            }
-        }
-        return 'application/octet-stream';
+        return Mime::responseTypeForFile($path);
     }
 
     /**

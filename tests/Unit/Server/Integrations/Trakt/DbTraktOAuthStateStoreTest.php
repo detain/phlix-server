@@ -577,4 +577,49 @@ final class DbTraktOAuthStateStoreTest extends TestCase
         self::assertSame('verifier-abc', $store->consume('state-123'));
         self::assertNull($store->consume('state-123'));
     }
+
+    /**
+     * E-09 cohort-5b oracle: the `data` decode guard plus the `user_id`
+     * non-empty-string guard across the driver-reachable domain. The folds to
+     * RowMap::nullableStr (data) and RowMap::nullableNonEmptyStr (user_id) are
+     * byte-identical here; green before AND after the fold — that is the proof.
+     */
+    public function test_consume_column_grammars_across_input_types(): void
+    {
+        $good = json_encode(['code_verifier' => 'v9']);
+        $vectors = [
+            ['data' => $good, 'user_id' => 'u-1', 'expectVerifier' => 'v9', 'expectUser' => 'u-1'],
+            ['data' => $good, 'user_id' => '', 'expectVerifier' => 'v9', 'expectUser' => null],
+            ['data' => $good, 'user_id' => 7, 'expectVerifier' => 'v9', 'expectUser' => null],
+            ['data' => $good, 'expectVerifier' => 'v9', 'expectUser' => null],
+            ['data' => null, 'user_id' => 'u-1', 'expectVerifier' => null, 'expectUser' => null],
+            ['data' => 42, 'user_id' => 'u-1', 'expectVerifier' => null, 'expectUser' => null],
+            ['data' => 'nope', 'user_id' => 'u-1', 'expectVerifier' => null, 'expectUser' => null],
+            ['absent' => true, 'user_id' => 'u-1', 'expectVerifier' => null, 'expectUser' => null],
+        ];
+
+        foreach ($vectors as $i => $vector) {
+            $row = [];
+            if (!($vector['absent'] ?? false)) {
+                $row['data'] = $vector['data'];
+            }
+            if (array_key_exists('user_id', $vector)) {
+                $row['user_id'] = $vector['user_id'];
+            }
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturnCallback(
+                static fn (string $sql): array|bool => str_starts_with($sql, 'SELECT') ? [$row] : true
+            );
+
+            $entry = (new DbTraktOAuthStateStore($db))->consumeWithIdentity('state-' . $i);
+
+            if ($vector['expectVerifier'] === null) {
+                $this->assertNull($entry, 'vector ' . $i);
+                continue;
+            }
+            $this->assertNotNull($entry, 'vector ' . $i);
+            $this->assertSame($vector['expectVerifier'], $entry['code_verifier'], 'vector ' . $i);
+            $this->assertSame($vector['expectUser'], $entry['user_id'], 'vector ' . $i);
+        }
+    }
 }

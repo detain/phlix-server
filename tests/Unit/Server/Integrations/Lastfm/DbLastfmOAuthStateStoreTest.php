@@ -471,4 +471,38 @@ final class DbLastfmOAuthStateStoreTest extends TestCase
 
         $this->addToAssertionCount(1); // reaching here without a throw IS the assertion
     }
+
+    /**
+     * E-09 cohort-5b oracle: the `data`-column grammar across the
+     * driver-reachable domain (RowMap::nullableStr fold byte-identical;
+     * green before AND after the fold — that is the proof).
+     */
+    public function test_consume_data_column_grammar_across_input_types(): void
+    {
+        $vectors = [
+            ['data' => json_encode(['user_id' => 'u1']), 'expect' => 'u1'],
+            ['data' => '{}', 'expect' => null],
+            ['data' => 'nope', 'expect' => null],
+            ['data' => null, 'expect' => null],
+            ['data' => 42, 'expect' => null],
+            ['data' => [], 'expect' => null],
+            ['absent' => true, 'expect' => null],
+        ];
+
+        foreach ($vectors as $i => $vector) {
+            $row = ($vector['absent'] ?? false) ? [] : ['data' => $vector['data']];
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturnCallback(
+                static fn (string $sql): array|bool => str_starts_with($sql, 'SELECT') ? [$row] : true
+            );
+
+            $userId = (new DbLastfmOAuthStateStore($db))->consume('state-' . $i);
+
+            if ($vector['expect'] === null) {
+                $this->assertNull($userId, 'vector ' . $i);
+            } else {
+                $this->assertSame($vector['expect'], $userId, 'vector ' . $i);
+            }
+        }
+    }
 }

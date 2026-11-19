@@ -14,6 +14,7 @@ namespace Phlix\Server\Integrations\Trakt;
 use Phlix\Common\Database\PruneDeadline;
 use Phlix\Common\Database\RetentionPrune;
 use Phlix\Common\Database\WriteResult;
+use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
 use Workerman\MySQL\Connection;
 
@@ -193,7 +194,8 @@ final class DbTraktOAuthStateStore implements TraktOAuthStateStore
 
             $this->db->commitTrans();
 
-            $data = is_string($row['data'] ?? null) ? json_decode($row['data'], true) : null;
+            $rawData = RowMap::nullableStr($row, 'data');
+            $data = $rawData === null ? null : json_decode($rawData, true);
             if (!is_array($data)) {
                 return null;
             }
@@ -204,9 +206,7 @@ final class DbTraktOAuthStateStore implements TraktOAuthStateStore
                 return null;
             }
 
-            $boundUserId = is_string($row['user_id'] ?? null) && $row['user_id'] !== ''
-                ? $row['user_id']
-                : null;
+            $boundUserId = RowMap::nullableNonEmptyStr($row, 'user_id');
 
             return ['code_verifier' => $codeVerifier, 'user_id' => $boundUserId];
         } catch (\Throwable) {

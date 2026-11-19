@@ -547,4 +547,39 @@ final class QuickConnectStateStoreTest extends TestCase
 
         return $db;
     }
+
+    /**
+     * E-09 cohort-5b oracle: the `data` decode guard inside hydrate() across
+     * the driver-reachable domain (RowMap::nullableStr fold byte-identical;
+     * green before AND after the fold — that is the proof).
+     */
+    public function test_find_data_column_grammar_across_input_types(): void
+    {
+        $good = json_encode(['secret' => 'sec', 'state' => 'x']);
+        $vectors = [
+            ['data' => $good, 'expect' => true],
+            ['data' => json_encode(['secret' => '', 'state' => 'x']), 'expect' => false],
+            ['data' => 'nope', 'expect' => false],
+            ['data' => null, 'expect' => false],
+            ['data' => 42, 'expect' => false],
+            ['data' => [], 'expect' => false],
+            ['absent' => true, 'expect' => false],
+        ];
+
+        foreach ($vectors as $i => $vector) {
+            $row = ($vector['absent'] ?? false) ? [] : ['data' => $vector['data']];
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturnCallback(
+                static fn (string $sql): array|bool => str_starts_with($sql, 'SELECT') ? [$row] : true
+            );
+
+            $pair = (new QuickConnectStateStore($db))->find('CODE' . str_pad((string) $i, 2, '0', STR_PAD_LEFT));
+
+            if ($vector['expect']) {
+                $this->assertInstanceOf(QuickConnectPair::class, $pair, 'vector ' . $i);
+            } else {
+                $this->assertNull($pair, 'vector ' . $i);
+            }
+        }
+    }
 }

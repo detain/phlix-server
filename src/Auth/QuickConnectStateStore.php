@@ -14,6 +14,7 @@ namespace Phlix\Auth;
 use Phlix\Common\Database\PruneDeadline;
 use Phlix\Common\Database\RetentionPrune;
 use Phlix\Common\Database\WriteResult;
+use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
 use RuntimeException;
 use Workerman\MySQL\Connection;
@@ -350,7 +351,8 @@ final class QuickConnectStateStore implements QuickConnectStateStoreInterface
      */
     private static function hydrate(string $code, array $row): ?QuickConnectPair
     {
-        $data = is_string($row['data'] ?? null) ? json_decode((string) $row['data'], true) : null;
+        $rawData = RowMap::nullableStr($row, 'data');
+        $data = $rawData === null ? null : json_decode($rawData, true);
         if (!is_array($data)) {
             return null;
         }

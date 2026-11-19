@@ -369,4 +369,39 @@ final class DbOidcStateStoreTest extends TestCase
 
         $this->addToAssertionCount(1); // reaching here without a throw IS the assertion
     }
+
+    /**
+     * E-09 cohort-5b oracle: same `data`-column grammar across the
+     * driver-reachable domain for the OIDC store (RowMap::nullableStr fold is
+     * byte-identical; green before AND after the fold — that is the proof).
+     */
+    public function test_consume_data_column_grammar_across_input_types(): void
+    {
+        $vectors = [
+            ['data' => json_encode(['code_verifier' => 'v9', 'nonce' => 'n9']), 'expect' => 'v9'],
+            ['data' => '{}', 'expect' => null],
+            ['data' => 'nope', 'expect' => null],
+            ['data' => null, 'expect' => null],
+            ['data' => 42, 'expect' => null],
+            ['data' => [], 'expect' => null],
+            ['absent' => true, 'expect' => null],
+        ];
+
+        foreach ($vectors as $i => $vector) {
+            $row = ($vector['absent'] ?? false) ? [] : ['data' => $vector['data']];
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturnCallback(
+                static fn (string $sql): array|bool => str_starts_with($sql, 'SELECT') ? [$row] : true
+            );
+
+            $entry = (new DbOidcStateStore($db))->consume('state-' . $i);
+
+            if ($vector['expect'] === null) {
+                $this->assertNull($entry, 'vector ' . $i);
+            } else {
+                $this->assertNotNull($entry, 'vector ' . $i);
+                $this->assertSame($vector['expect'], $entry['code_verifier'], 'vector ' . $i);
+            }
+        }
+    }
 }

@@ -138,6 +138,21 @@ class PhlixMySQLConnection extends Connection
     private int $transNesting = 0;
 
     /**
+     * Set by {@see execute()} when the connection died while a transaction was
+     * OPEN (TXMUTEX-A A1, port of the hub's arm): the server may have received
+     * and applied part of the work before the socket dropped, and it certainly
+     * discarded whatever it had not yet touched, so the transaction is
+     * unrecoverable — a later {@see commitTrans()} must REFUSE instead of
+     * committing onto a socket that never saw the statements. The flag is
+     * cleared by the refusal itself and by every non-throwing
+     * {@see beginTrans()}/{@see rollBackTrans()} path, so exactly one commit
+     * is denied and the connection's next transaction starts clean.
+     *
+     * @var bool
+     */
+    private bool $txPoisoned = false;
+
+    /**
      * Force emulated + fully-buffered prepared statements.
      *
      * The parent connects with NATIVE prepares (`PDO::ATTR_EMULATE_PREPARES =
@@ -244,6 +259,14 @@ class PhlixMySQLConnection extends Connection
      * call really did overwrite `$transNesting`/`$transLockHolder` and roll the
      * new owner's transaction back; see that method's docblock.
      *
+     * Since TXMUTEX-A A1 the gone (2006/2013) path splits by transaction
+     * state: in AUTOCOMMIT it keeps the vendor's one-shot retry on a fresh
+     * socket, but INSIDE an open transaction it does NOT retry — it drops the
+     * socket, rolls back, poisons the connection, and throws with a message
+     * that says so; {@see commitTrans()} then refuses exactly once
+     * (see the `$txPoisoned` field docblock). The design rationale is in
+     * /tmp/opencode/refactor-exec-1119/DESIGN-TX-MUTEX.md §P2.5-1.1.
+     *
      * @param string $query
      * @param mixed  $parameters
      * @return void
@@ -256,6 +279,26 @@ class PhlixMySQLConnection extends Connection
         } catch (\PDOException $e) {
             $errno = MysqlError::driverCode($e->errorInfo) ?? 0;
             if ($errno === MysqlError::CR_SERVER_GONE_ERROR || $errno === MysqlError::CR_SERVER_LOST) {
+                if ($this->pdo instanceof \PDO && $this->pdo->inTransaction()) {
+                    // TXMUTEX-A A1 (design §P2.5-1.1, port of the hub's arm):
+                    // a gone-away INSIDE an open transaction is NOT retried.
+                    // The first attempt may have been received and applied by
+                    // the server before the socket died, so replaying it risks
+                    // a double-apply, and the transaction it belonged to is
+                    // unrecoverable either way. Drop the dead socket, unwind
+                    // the transaction bookkeeping (which also hands the mutex
+                    // on if we hold it), poison the connection so the next
+                    // commitTrans() REFUSES, and say so in the message —
+                    // wording shared verbatim with the hub.
+                    $this->closeConnection();
+                    $this->rollBackTrans();
+                    $this->txPoisoned = true;
+                    throw new \PDOException(
+                        'SQL:' . $this->lastSQL() . ' ' . $e->getMessage()
+                            . ' (connection lost inside a transaction; not retried)',
+                        (int) $e->getCode()
+                    );
+                }
                 // "MySQL server has gone away" — drop the dead socket and retry once.
                 $this->closeConnection();
                 try {
@@ -464,7 +507,11 @@ class PhlixMySQLConnection extends Connection
     {
         $cid = $this->currentCoroutineId();
         if ($cid < 0) {
-            return parent::beginTrans();
+            // TXMUTEX-A A1: opening a transaction clears the poison — the
+            // statement that found the socket dead is not part of this scope.
+            $opened = parent::beginTrans();
+            $this->txPoisoned = false;
+            return $opened;
         }
 
         // Same coroutine, transaction already open: NOT reentrant. The parent
@@ -512,7 +559,7 @@ class PhlixMySQLConnection extends Connection
         // A parent that THROWS must still hand the mutex back. This is the same
         // rule {@see commitTrans()} states for a COMMIT that throws, and it is
         // load-bearing for the same reason: nothing else would ever release it.
-        // All nine coroutine-reachable call sites in `src/` write
+        // Every coroutine-reachable call site in `src/` writes
         // `$db->beginTrans();` OUTSIDE their `try` (the one site inside a `try`
         // is `MediaDedupePathsCommand`, which is CLI and never takes the mutex),
         // so the throwing coroutine runs no `rollBackTrans()` of its own, and the
@@ -540,6 +587,10 @@ class PhlixMySQLConnection extends Connection
         } else {
             $this->releaseTransLock();
         }
+        // TXMUTEX-A A1: the non-throwing exit of the holder path — poison is
+        // history once this coroutine stands up its own transaction (mirrors
+        // the hub's `txPoisoned = false` after parent begin).
+        $this->txPoisoned = false;
 
         return $result;
     }
@@ -639,13 +690,29 @@ class PhlixMySQLConnection extends Connection
     public function commitTrans(): bool
     {
         $cid = $this->currentCoroutineId();
-        if ($cid < 0) {
-            return parent::commitTrans();
-        }
 
         // Not the holder: this coroutine has no transaction of its own here.
-        if ($this->transLockHolder !== $cid) {
+        // (TXMUTEX-A A1: this guard now sits ABOVE the CLI pass-through and is
+        // written `$cid >= 0 && ...` so a non-holder coroutine returns without
+        // touching — or clearing — the holder's poison; behaviour for the
+        // non-poisoned paths is byte-identical to before the move.)
+        if ($cid >= 0 && $this->transLockHolder !== $cid) {
             return true;
+        }
+
+        // TXMUTEX-A A1 (design §P2.5-1.1): a connection execute() poisoned by
+        // losing the socket mid-transaction must not COMMIT onto the
+        // replacement socket — the server never saw most of the work. Refuse
+        // once (hub wording, verbatim) and clear, so the next transaction on
+        // this object is evaluated on its own merits. Mode-independent: it
+        // covers CLI and holder paths alike.
+        if ($this->txPoisoned) {
+            $this->txPoisoned = false;
+            throw new \PDOException('Transaction was lost when the connection dropped; refusing to commit.');
+        }
+
+        if ($cid < 0) {
+            return parent::commitTrans();
         }
 
         // Unreachable while beginTrans() refuses to nest (see its docblock):
@@ -666,6 +733,7 @@ class PhlixMySQLConnection extends Connection
         try {
             $result = parent::commitTrans();
         } finally {
+            $this->txPoisoned = false;
             $this->releaseTransLock();
         }
 
@@ -716,7 +784,11 @@ class PhlixMySQLConnection extends Connection
     {
         $cid = $this->currentCoroutineId();
         if ($cid < 0) {
-            return $this->rollBackParent();
+            $result = $this->rollBackParent();
+            // TXMUTEX-A A1: rollback is an explicit fresh start — the poison
+            // (if any) is consumed without a refusal, mirroring beginTrans.
+            $this->txPoisoned = false;
+            return $result;
         }
 
         // Not the holder: a STALE releaser. Return without touching anything —
@@ -741,6 +813,7 @@ class PhlixMySQLConnection extends Connection
         try {
             $result = $this->rollBackParent();
         } finally {
+            $this->txPoisoned = false;
             $this->releaseTransLock();
         }
 

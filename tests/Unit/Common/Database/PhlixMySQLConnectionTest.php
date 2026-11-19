@@ -1485,6 +1485,162 @@ final class PhlixMySQLConnectionTest extends TestCase
         });
     }
 
+    /**
+     * Build a connection whose connect() re-injects one supplied handle, so a
+     * closeConnection() inside execute() models a SUCCESSFUL reconnect onto a
+     * stand-in socket without ever touching a real server. The handle is a
+     * sqlite PDO with a controllable prepare() that can throw the fabricated
+     * 2006 ("MySQL server has gone away") errorInfo a dead socket produces.
+     */
+    private static function selfReconnectingConnection(\PDO $pdo): PhlixMySQLConnection
+    {
+        return new class ($pdo) extends PhlixMySQLConnection {
+            /**
+             * @psalm-suppress MissingParentConstructorCall Intentional: no socket.
+             */
+            public function __construct(private \PDO $fakeHandle)
+            {
+            }
+
+            public function runStatement(string $query, array $parameters = []): void
+            {
+                $this->execute($query, $parameters);
+            }
+
+            protected function connect()
+            {
+                $this->pdo = $this->fakeHandle;
+            }
+        };
+    }
+
+    private static function goneAwayHandle(): \PDO
+    {
+        return new class extends \PDO {
+            public int $prepareAttempts = 0;
+            public bool $goneOnPrepare = false;
+            public bool $clearAfterFirst = false;
+
+            public function __construct()
+            {
+                parent::__construct('sqlite::memory:');
+                $this->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+            }
+
+            public function prepare(string $query, ?array $options = null): \PDOStatement|false
+            {
+                $this->prepareAttempts++;
+                if ($this->goneOnPrepare) {
+                    if ($this->clearAfterFirst) {
+                        $this->goneOnPrepare = false;
+                    }
+                    $error = new \PDOException('SQLSTATE[HY000]: General error: 2006 MySQL server has gone away');
+                    $error->errorInfo = ['HY000', 2006, 'MySQL server has gone away'];
+                    throw $error;
+                }
+                return parent::prepare($query);
+            }
+        };
+    }
+
+    /**
+     * TXMUTEX-A A1 (design §P2.5-1.1, port of the hub's arm): a 2006/2013
+     * statement failure while a transaction is OPEN must NOT be retried —
+     * the first attempt may have been received and applied by the server
+     * before the socket died, so replaying it risks a double-apply, and the
+     * transaction it belonged to is unrecoverable either way. The arm drops
+     * the dead socket, rolls the transaction bookkeeping back, poisons the
+     * connection, and the next commitTrans() REFUSES (hub wording, verbatim)
+     * instead of committing onto a socket that never saw the work.
+     */
+    public function testAGoneAwayInsideAnOpenTransactionIsNotRetriedAndPoisonsTheCommit(): void
+    {
+        $handle = self::goneAwayHandle();
+        $handle->goneOnPrepare = true;
+        $conn = self::selfReconnectingConnection($handle);
+
+        self::assertTrue($conn->beginTrans());
+        self::assertTrue($handle->inTransaction());
+
+        $caught = null;
+        try {
+            $conn->runStatement('SELECT 1');
+        } catch (\PDOException $error) {
+            $caught = $error;
+        }
+
+        self::assertNotNull($caught, 'the gone statement must still surface as a PDOException');
+        // The arm's reason at parent: the old code retried blindly INSIDE the
+        // open transaction (two attempts) and threw the raw message without
+        // declaring the transaction lost.
+        self::assertSame(
+            1,
+            $handle->prepareAttempts,
+            'a gone-away inside an open transaction must not be re-prepared on a new socket (A1)'
+        );
+        self::assertStringContainsString(
+            '(connection lost inside a transaction; not retried)',
+            $caught->getMessage(),
+            'the arm must say so in the message it throws (A1)'
+        );
+        self::assertTrue(
+            (new ReflectionProperty(PhlixMySQLConnection::class, 'txPoisoned'))->getValue($conn),
+            'the arm must mark the connection poisoned (A1)'
+        );
+
+        $refusal = null;
+        try {
+            $conn->commitTrans();
+        } catch (\PDOException $error) {
+            $refusal = $error;
+        }
+        self::assertNotNull($refusal, 'a poisoned connection must refuse to commit (A1)');
+        self::assertSame(
+            'Transaction was lost when the connection dropped; refusing to commit.',
+            $refusal->getMessage(),
+            'the refusal wording is shared verbatim with the hub (A1)'
+        );
+        self::assertFalse(
+            (new ReflectionProperty(PhlixMySQLConnection::class, 'txPoisoned'))->getValue($conn),
+            'the refusal consumes the poison — the connection is usable again (A1)'
+        );
+
+        // A fresh transaction on the (re-modelled) recovered socket is clean:
+        // beginTrans() clears the flag on its success path, and the handle's
+        // transaction was lost with the dead socket — roll back the stand-in
+        // to model the server-side discard a reconnect would start from.
+        if ($handle->inTransaction()) {
+            $handle->rollBack();
+        }
+        self::assertTrue($conn->beginTrans());
+        self::assertFalse(
+            (new ReflectionProperty(PhlixMySQLConnection::class, 'txPoisoned'))->getValue($conn),
+            'a new transaction clears the poison (A1)'
+        );
+        self::assertTrue($conn->commitTrans());
+    }
+
+    /**
+     * TXMUTEX-A A1 companion: the arm must not EAT the existing one-shot
+     * retry outside a transaction — a gone-away in autocommit is safe to
+     * replay (no transaction to lose), and that recovery path predates A1.
+     */
+    public function testAGoneAwayOutsideATransactionStillTakesTheOneShotRetry(): void
+    {
+        $handle = self::goneAwayHandle();
+        $handle->goneOnPrepare = true;
+        $handle->clearAfterFirst = true;
+        $conn = self::selfReconnectingConnection($handle);
+
+        $conn->runStatement('SELECT 1');
+
+        self::assertSame(2, $handle->prepareAttempts, 'autocommit gone-away keeps the one-shot retry');
+        self::assertFalse(
+            (new ReflectionProperty(PhlixMySQLConnection::class, 'txPoisoned'))->getValue($conn),
+            'the retry path must not poison anything (A1 must not eat it)'
+        );
+    }
+
     /** Build a connection over a supplied PDO handle without opening a socket. */
     private static function connectionOver(\PDO $pdo): PhlixMySQLConnection
     {

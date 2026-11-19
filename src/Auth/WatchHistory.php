@@ -994,7 +994,7 @@ class WatchHistory
             if (!is_string($id) || $id === '') {
                 continue;
             }
-            $percent = is_numeric($row['progress_percent'] ?? null) ? (float) $row['progress_percent'] : 0.0;
+            $percent = RowMap::floatFromNumeric($row, 'progress_percent', 0.0);
             $map[$id] = [
                 'position_ticks' => UserRow::int($row, 'position_ticks', 0),
                 'duration_ticks' => UserRow::int($row, 'duration_ticks', 0),

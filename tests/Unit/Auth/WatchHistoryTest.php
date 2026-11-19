@@ -5,6 +5,7 @@ namespace Phlix\Tests\Unit\Auth;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\WatchHistory;
+use Phlix\Auth\Dto\UserRow;
 use Workerman\MySQL\Connection;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -762,5 +763,71 @@ class WatchHistoryTest extends TestCase
             'max limit scales x3'         => [50, 150],
             'non-positive limit clamps'   => [0, 50],
         ];
+    }
+
+    /**
+     * E-09 cohort 5a (W5): legacy-oracle vectors for the getProgressMap
+     * fold leg. The expected loop below is the pre-fold row-decode block
+     * copied verbatim from git show 1d509d91:src/Auth/WatchHistory.php;
+     * only the progress_percent ternary was folded. Vectors carry the
+     * keys the pre-fold block reads directly (failOnWarning law).
+     */
+    public function testProgressMapRowDecodeIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            [
+                'media_item_id' => 'm-1',
+                'position_ticks' => 500,
+                'duration_ticks' => 1000,
+                'progress_percent' => '95.5',
+                'playback_status' => 'completed',
+            ],
+            [
+                'media_item_id' => 'm-2',
+                'position_ticks' => '7',
+                'duration_ticks' => 8,
+                'progress_percent' => 42.0,
+                'playback_status' => 'watching',
+            ],
+            [
+                'media_item_id' => '',
+                'position_ticks' => 1,
+                'duration_ticks' => 1,
+                'progress_percent' => 10,
+            ],
+            ['media_item_id' => 9, 'progress_percent' => 90.1],
+            ['position_ticks' => 3, 'progress_percent' => 'abc'],
+            [
+                'media_item_id' => 'm-6',
+                'progress_percent' => null,
+                'position_ticks' => null,
+                'duration_ticks' => 'x',
+            ],
+        ];
+
+        foreach ($vectors as $row) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+            $history = new WatchHistory($db);
+
+            $expected = [];
+            $id = $row['media_item_id'] ?? null;
+            if (is_string($id) && $id !== '') {
+                $percent = is_numeric($row['progress_percent'] ?? null)
+                    ? (float) $row['progress_percent']
+                    : 0.0;
+                $expected[$id] = [
+                    'position_ticks' => UserRow::int($row, 'position_ticks', 0),
+                    'duration_ticks' => UserRow::int($row, 'duration_ticks', 0),
+                    'progress_percent' => $percent,
+                    'completed' => ($row['playback_status'] ?? null)
+                        === WatchHistory::STATUS_COMPLETED
+                        || $percent >= WatchHistory::COMPLETED_THRESHOLD,
+                ];
+            }
+
+            self::assertSame($expected, $history->getProgressMap('profile-1', ['m-1']));
+        }
     }
 }

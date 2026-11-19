@@ -101,17 +101,17 @@ class PhlixMySQLConnection extends Connection
      * class of claim from this file.)
      *
      * It does NOT, on its own, stop other coroutines from interleaving
-     * individual QUERIES inside a transaction: {@see query()} skips the
-     * per-query lock whenever `$transNesting > 0` — a shared field — whoever
-     * the caller is, so an unrelated coroutine's statement can still land on
-     * the socket inside somebody else's transaction. What this mutex
+     * individual QUERIES inside a transaction: MySQL transaction state belongs
+     * to the CONNECTION, so a foreign statement that {@see query()} lets
+     * through onto the shared handle still participates in the open transaction
+     * and shares its outcome (a permanent test pins this). What this mutex
      * guarantees is mutual exclusion between whole TRANSACTIONS plus
-     * single-owner commit/rollback; the missing `$transLockHolder === $cid`
-     * term in `query()`'s short-circuit is tracked separately (it changes the
-     * locking of every query on the connection, so it needs its own
-     * measurement). The destructive half — a non-holder's failed statement
-     * ending the holder's transaction — is already blocked by the holder
-     * guards in {@see commitTrans()}/{@see rollBackTrans()}.
+     * single-owner commit/rollback; `query()`'s short-circuit carries the
+     * `$transLockHolder === $cid` term (TXMUTEX-A A4, 2026-11-21), so while a
+     * transaction is open only the holder skips the per-query lock and every
+     * other caller serializes behind it. The destructive half — a non-holder's
+     * failed statement ending the holder's transaction — is blocked by the
+     * holder guards in {@see commitTrans()}/{@see rollBackTrans()}.
      *
      * Created lazily on first use (same reasoning as {@see $queryLock}).
      *
@@ -394,17 +394,22 @@ class PhlixMySQLConnection extends Connection
      *   interleave inside our transaction, and skipping the lock is simply free.
      * - Shared socket (`DB_POOL_ENABLED=0`, the opt-out fallback in
      *   `config/database.php`): one instance serves every coroutine, so
-     *   `$transNesting` is a SHARED field and the short-circuit fires for EVERY
-     *   caller while ANY coroutine has a transaction open — whoever opened it.
-     *   An unrelated coroutine's statement therefore lands on the socket inside
-     *   somebody else's transaction, with no per-query lock taken at all. The
-     *   missing term is `&& $this->transLockHolder === $cid`; it is tracked as
-     *   its own step rather than fixed here because adding it re-serialises
-     *   every read on the connection behind whole transactions and so needs its
-     *   own throughput measurement. The DESTRUCTIVE half — such a statement
-     *   failing and {@see execute()}'s rollback ending the holder's transaction
-     *   — is already blocked by the holder guards in
-     *   {@see commitTrans()}/{@see rollBackTrans()}.
+     *   `$transNesting` is a SHARED field. The short-circuit therefore carries
+     *   the `&& $this->transLockHolder === $cid` term (TXMUTEX-A A4, 2026-11-21):
+     *   only the coroutine that OWNS the whole-transaction mutex skips the
+     *   per-query lock, and every other caller takes it, so foreign statements
+     *   can no longer trample each other's prepare/execute sequence on the
+     *   shared handle. No term can lift the connection-level fact that a
+     *   foreign statement run while a transaction is open PARTICIPATES in that
+     *   transaction (MySQL transaction state belongs to the connection, not to
+     *   any mutex) — a permanent test pins that residual; it is the caveat this
+     *   fallback mode documents. What the destructive half was — a foreign
+     *   statement failing and {@see execute()}'s rollback ending the holder's
+     *   transaction — stays blocked by the holder guards in
+     *   {@see commitTrans()}/{@see rollBackTrans()}. On this mode reads now
+     *   serialize behind the per-query lock while transactions are open;
+     *   production runs the pooled mode above, where the term is always true
+     *   and the skip is free.
      *
      * (Until 2026-08-01 this paragraph claimed the opposite: that holding the
      * mutex for the whole transaction "prevents concurrent coroutines from
@@ -434,17 +439,27 @@ class PhlixMySQLConnection extends Connection
             return parent::query($query, $params, $fetchmode);
         }
 
-        // A transaction is open on this connection, so skip the per-query lock.
-        // NOT "we already hold the transaction lock": `$transNesting` is shared
-        // state, so on the single shared socket (`DB_POOL_ENABLED=0`) this fires
-        // for every coroutine while ANY of them holds the whole-transaction
-        // mutex, and the caller may well not be that holder — the missing
-        // `$transLockHolder === $cid` term is the separately-tracked defect the
-        // docblock above describes. In the DEFAULT pooled mode, where this
-        // instance is one coroutine's exclusive lease, the caller IS always the
-        // holder. And the per-query lock is not "pinned" across a transaction: it is
-        // never acquired on this path at all, so there is nothing to release.
-        if ($this->transNesting > 0) {
+        // Skip the per-query lock ONLY while THIS coroutine is the one whose
+        // transaction holds the whole-transaction mutex — re-taking the per-query
+        // lock there would deadlock the holder against itself (its transaction
+        // statements never acquired it, so there is nothing to release).
+        // The `$transLockHolder === $cid` term is what makes the short-circuit
+        // honest: `$transNesting` alone is shared state, so on the single shared
+        // socket (`DB_POOL_ENABLED=0`) a bare nesting test fired for EVERY
+        // coroutine while ANY of them held the transaction, and unrelated
+        // statements then ran on the shared handle with NO lock at all —
+        // foreign-against-foreign, trampling each other's prepare/execute
+        // sequence. With the term (TXMUTEX-A A4, 2026-11-21) only the holder
+        // skips; every other caller takes the per-query lock, so foreign
+        // statements serialize. (What the term does NOT do — and cannot: MySQL
+        // transaction state is a property of the CONNECTION, so a foreign
+        // statement that takes the lock still participates in the holder's open
+        // transaction and shares its outcome. That exposure is the documented
+        // fallback-mode caveat in the {@see $transLock} field docblock below and
+        // in the paragraph above; a permanent test at the tip pins it.) In the
+        // DEFAULT pooled mode this instance is one coroutine's exclusive lease,
+        // so the caller IS always the holder and the skip is simply free.
+        if ($this->transNesting > 0 && $this->transLockHolder === $cid) {
             return parent::query($query, $params, $fetchmode);
         }
 
@@ -890,14 +905,18 @@ class PhlixMySQLConnection extends Connection
         // the cancelled one. It is NOT fixed here because the fix is not
         // symmetric with `beginTrans()`'s: throwing out of `query()` changes the
         // failure surface of every DB read on this connection, and the
-        // release-side half lives inside `query()`'s own `finally`. Nor can it be
-        // made correct on its own — while `query()`'s `if ($transNesting > 0)`
-        // short-circuit lacks the `$transLockHolder === $cid` term, a non-holder
-        // querying DURING somebody's transaction never reaches this method at
-        // all, so a check here would be half a fix. Both halves belong
-        // to the step that owns `query()`'s locking (finding F1 in
-        // `steps/fix-unpooled-txn-mutex-race.worklog.md`), which must measure
-        // them together.
+        // release-side half lives inside `query()`'s own `finally`. The half
+        // that used to defer on it — the missing `$transLockHolder === $cid`
+        // term in `query()`'s short-circuit, without which a non-holder
+        // querying DURING somebody's transaction never reached this method at
+        // all — shipped at TXMUTEX-A A4 (2026-11-21), so the pair is no longer
+        // blocked on its own completeness; the failure-surface change and the
+        // fallback-mode read fan-out measurement remain the open half. The
+        // original finding's worklog (finding F1 in
+        // `steps/fix-unpooled-txn-mutex-race.worklog.md`) was lost — the file
+        // no longer exists anywhere in the repo — and the executed evidence for
+        // both this hazard and its `beginTrans()` twin now lives in this
+        // connection's permanent tests.
         $this->queryLock->pop();
         $this->queryLockHolder = $cid;
         return true;

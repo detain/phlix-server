@@ -1502,11 +1502,6 @@ final class PhlixMySQLConnectionTest extends TestCase
             {
             }
 
-            public function runStatement(string $query, array $parameters = []): void
-            {
-                $this->execute($query, $parameters);
-            }
-
             protected function connect()
             {
                 $this->pdo = $this->fakeHandle;
@@ -1514,9 +1509,17 @@ final class PhlixMySQLConnectionTest extends TestCase
         };
     }
 
-    private static function goneAwayHandle(): \PDO
+    /**
+     * A PDO handle whose prepare() throws the fabricated 2006 wire shape
+     * while armed. The intersection type keeps PHPStan sighted on the
+     * anonymous class's knobs; arming is a constructor decision, so the
+     * shape's read-only properties are never written from outside.
+     *
+     * @return \PDO&object{prepareAttempts:int, goneOnPrepare:bool, clearAfterFirst:bool}
+     */
+    private static function goneAwayHandle(bool $armed = false, bool $clearAfterFirst = false): \PDO
     {
-        return new class extends \PDO {
+        $handle = new class extends \PDO {
             public int $prepareAttempts = 0;
             public bool $goneOnPrepare = false;
             public bool $clearAfterFirst = false;
@@ -1541,6 +1544,10 @@ final class PhlixMySQLConnectionTest extends TestCase
                 return parent::prepare($query);
             }
         };
+        $handle->goneOnPrepare = $armed;
+        $handle->clearAfterFirst = $clearAfterFirst;
+
+        return $handle;
     }
 
     /**
@@ -1555,8 +1562,11 @@ final class PhlixMySQLConnectionTest extends TestCase
      */
     public function testAGoneAwayInsideAnOpenTransactionIsNotRetriedAndPoisonsTheCommit(): void
     {
-        $handle = self::goneAwayHandle();
-        $handle->goneOnPrepare = true;
+        // The self-reconnecting connection models a successful reconnect: the
+        // arm's closeConnection() + the retry path's connect() cycle re-injects
+        // this same stand-in handle, so only the arm's presence or absence
+        // decides the outcome.
+        $handle = self::goneAwayHandle(armed: true);
         $conn = self::selfReconnectingConnection($handle);
 
         self::assertTrue($conn->beginTrans());
@@ -1564,7 +1574,7 @@ final class PhlixMySQLConnectionTest extends TestCase
 
         $caught = null;
         try {
-            $conn->runStatement('SELECT 1');
+            $conn->query('SELECT 1');
         } catch (\PDOException $error) {
             $caught = $error;
         }
@@ -1605,13 +1615,17 @@ final class PhlixMySQLConnectionTest extends TestCase
             'the refusal consumes the poison — the connection is usable again (A1)'
         );
 
-        // A fresh transaction on the (re-modelled) recovered socket is clean:
-        // beginTrans() clears the flag on its success path, and the handle's
-        // transaction was lost with the dead socket — roll back the stand-in
-        // to model the server-side discard a reconnect would start from.
-        if ($handle->inTransaction()) {
-            $handle->rollBack();
-        }
+        // The arm nulls the handle before rollBackTrans(), so rollBackParent's
+        // null guard ends the BOOKKEEPING without touching the live socket —
+        // the sqlite stand-in's real transaction is still open, exactly as the
+        // dead MySQL server's would be mid-loss. Model the server-side discard
+        // explicitly, then prove the recovered connection is clean:
+        // beginTrans() clears the flag on its success path.
+        self::assertTrue(
+            $handle->inTransaction(),
+            'the arm must end bookkeeping, not the live handle — the stand-in transaction models the server-side loss'
+        );
+        $handle->rollBack();
         self::assertTrue($conn->beginTrans());
         self::assertFalse(
             (new ReflectionProperty(PhlixMySQLConnection::class, 'txPoisoned'))->getValue($conn),
@@ -1627,17 +1641,281 @@ final class PhlixMySQLConnectionTest extends TestCase
      */
     public function testAGoneAwayOutsideATransactionStillTakesTheOneShotRetry(): void
     {
-        $handle = self::goneAwayHandle();
-        $handle->goneOnPrepare = true;
-        $handle->clearAfterFirst = true;
+        $handle = self::goneAwayHandle(armed: true, clearAfterFirst: true);
         $conn = self::selfReconnectingConnection($handle);
 
-        $conn->runStatement('SELECT 1');
+        $conn->query('SELECT 1');
 
         self::assertSame(2, $handle->prepareAttempts, 'autocommit gone-away keeps the one-shot retry');
         self::assertFalse(
             (new ReflectionProperty(PhlixMySQLConnection::class, 'txPoisoned'))->getValue($conn),
             'the retry path must not poison anything (A1 must not eat it)'
+        );
+    }
+
+    /**
+     * TXMUTEX-A A4 (red-first at parent). On the shared socket while the MAIN
+     * coroutine holds a transaction, the pre-A4 short-circuit (`transNesting > 0`
+     * alone) made EVERY coroutine skip the per-query lock — so two unrelated
+     * statements ran on the shared handle at the same time, trampling each
+     * other's prepare/execute sequence. With the `transLockHolder === $cid`
+     * term present, non-holder statements take the lock and serialize against
+     * each other (while the holder's own statements keep skipping it — see the
+     * twin test).
+     */
+    public function testForeignStatementsSerializeOnTheQueryLockWhileAnotherCoroutinesTransactionIsOpen(): void
+    {
+        if (!extension_loaded('swoole')) {
+            $this->markTestSkipped('Swoole extension required');
+        }
+
+        $handle = new class extends \PDO {
+            /** @var list<string> */
+            public array $events = [];
+            public float $hold = 0.05;
+
+            public function __construct()
+            {
+                parent::__construct('sqlite::memory:');
+                $this->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+                $this->exec('CREATE TABLE t (v TEXT)');
+            }
+
+            /**
+             * @param array<string,mixed>|null $options
+             */
+            #[\Override]
+            public function prepare(string $query, ?array $options = null): \PDOStatement|false
+            {
+                if (str_contains($query, 'INSERT')) {
+                    $this->events[] = 'into:' . $query;
+                    \Swoole\Coroutine::sleep($this->hold);
+                    $this->events[] = 'out:' . $query;
+                }
+
+                return $options === null ? parent::prepare($query) : parent::prepare($query, $options);
+            }
+        };
+        $conn = self::connectionOver($handle);
+
+        $parked = new \Swoole\Coroutine\Channel(2);
+        $go = new \Swoole\Coroutine\Channel(1);
+        $joined = new \Swoole\Coroutine\Channel(2);
+
+        \Swoole\Coroutine\run(function () use ($conn, $parked, $go, $joined): void {
+            // A: the holder — main coroutine, transaction open the whole time.
+            self::assertTrue($conn->beginTrans(), 'holder beginTrans must succeed');
+            // The events array carries the observation; vendor's scalar INSERT
+            // return is unreliable on the sqlite venue (rowCount 0 -> null).
+            $conn->query("INSERT INTO t VALUES ('a')");
+
+            \Swoole\Coroutine::create(function () use ($conn, $parked, $go, $joined): void {
+                $parked->push('b');
+                $go->pop(1.0);
+                $conn->query("INSERT INTO t VALUES ('b')");
+                $joined->push('b');
+            });
+            \Swoole\Coroutine::create(function () use ($conn, $parked, $go, $joined): void {
+                $parked->push('c');
+                $go->pop(1.0);
+                $conn->query("INSERT INTO t VALUES ('c')");
+                $joined->push('c');
+            });
+
+            self::assertSame('b', $parked->pop(1.0));
+            self::assertSame('c', $parked->pop(1.0));
+            $go->push(true);
+            $go->push(true);
+
+            self::assertSame('b', $joined->pop(1.0), 'statement B must finish');
+            self::assertSame('c', $joined->pop(1.0), 'statement C must finish');
+            self::assertTrue($conn->commitTrans(), 'holder commit must succeed with both foreign statements complete');
+        });
+
+        $intoB = array_search("into:INSERT INTO t VALUES ('b')", $handle->events, true);
+        $outB = array_search("out:INSERT INTO t VALUES ('b')", $handle->events, true);
+        $intoC = array_search("into:INSERT INTO t VALUES ('c')", $handle->events, true);
+        self::assertIsInt($intoB);
+        self::assertIsInt($outB);
+        self::assertIsInt($intoC);
+        $order = array_search("into:INSERT INTO t VALUES ('a')", $handle->events, true);
+        self::assertIsInt($order);
+        self::assertLessThan($outB, $order);
+        self::assertGreaterThan(
+            $outB,
+            $intoC,
+            'the foreign statement that arrives second must PARK on the per-query '
+            . 'lock until the first leaves it — an index of C below B\'s exit '
+            . 'proves the lock was skipped (pre-A4 behavior)'
+        );
+    }
+
+    /**
+     * TXMUTEX-A A4 (green both — locks the holder-skip itself). The holder's
+     * statements must NEVER park on the per-query lock while its transaction is
+     * open — a holder that fell through would deadlock against a lock it never
+     * took. And after the transaction ends the same coroutine is an ordinary
+     * caller again: its next statement serializes behind a foreign statement
+     * mid-flight on the lock.
+     */
+    public function testTheTransactionHolderSkipsTheQueryLockAndRejoinsItAfterwards(): void
+    {
+        if (!extension_loaded('swoole')) {
+            $this->markTestSkipped('Swoole extension required');
+        }
+
+        $handle = new class extends \PDO {
+            /** @var list<string> */
+            public array $events = [];
+            public float $hold = 0.06;
+
+            public function __construct()
+            {
+                parent::__construct('sqlite::memory:');
+                $this->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+                $this->exec('CREATE TABLE t (v TEXT)');
+            }
+
+            /**
+             * @param array<string,mixed>|null $options
+             */
+            #[\Override]
+            public function prepare(string $query, ?array $options = null): \PDOStatement|false
+            {
+                if (str_contains($query, 'INSERT')) {
+                    $this->events[] = 'into:' . $query;
+                    \Swoole\Coroutine::sleep($this->hold);
+                    $this->events[] = 'out:' . $query;
+                }
+
+                return $options === null ? parent::prepare($query) : parent::prepare($query, $options);
+            }
+        };
+        $conn = self::connectionOver($handle);
+
+        $joined = new \Swoole\Coroutine\Channel(1);
+
+        \Swoole\Coroutine\run(function () use ($conn, $handle, $joined): void {
+            self::assertTrue($conn->beginTrans(), 'holder beginTrans must succeed');
+
+            // A foreign statement is mid-flight on the per-query lock while the
+            // holder's transaction is open (post-A4 it parks there; pre-A4 it
+            // skipped — both interleaves, so this segment is a green-both pin).
+            \Swoole\Coroutine::create(function () use ($conn, $joined): void {
+                $conn->query("INSERT INTO t VALUES ('f')");
+                $joined->push('f');
+            });
+            \Swoole\Coroutine::sleep(0.02);
+
+            $conn->query("INSERT INTO t VALUES ('h')");
+            self::assertSame('f', $joined->pop(1.0), 'the foreign statement must finish');
+
+            $intoF = array_search("into:INSERT INTO t VALUES ('f')", $handle->events, true);
+            $outF = array_search("out:INSERT INTO t VALUES ('f')", $handle->events, true);
+            $intoH = array_search("into:INSERT INTO t VALUES ('h')", $handle->events, true);
+            self::assertIsInt($intoF);
+            self::assertIsInt($outF);
+            self::assertIsInt($intoH);
+            self::assertGreaterThan(
+                $intoF,
+                $intoH,
+                'the holder statement must have started while the foreign one was mid-flight'
+            );
+            self::assertLessThan(
+                $outF,
+                $intoH,
+                'the holder must not park behind a lock it never took — it sails past mid-flight'
+            );
+
+            self::assertTrue($conn->commitTrans(), 'holder commit must succeed');
+
+            // Post-commit: the ex-holder is an ordinary caller again — it must
+            // serialize behind a foreign statement that is mid-flight.
+            \Swoole\Coroutine::create(function () use ($conn, $joined): void {
+                $conn->query("INSERT INTO t VALUES ('g')");
+                $joined->push('g');
+            });
+            \Swoole\Coroutine::sleep(0.02);
+
+            $conn->query("INSERT INTO t VALUES ('e')");
+            self::assertSame('g', $joined->pop(1.0), 'the foreign statement must finish first');
+
+            $outG = array_search("out:INSERT INTO t VALUES ('g')", $handle->events, true);
+            $intoE = array_search("into:INSERT INTO t VALUES ('e')", $handle->events, true);
+            self::assertIsInt($outG);
+            self::assertIsInt($intoE);
+            self::assertGreaterThan(
+                $outG,
+                $intoE,
+                'the ex-holder statement must begin only after the foreign statement fully left the lock'
+            );
+        });
+    }
+
+    /**
+     * TXMUTEX-A A4 residual (green both — the honest limitation pin). No mutex
+     * term can lift the connection-level fact that MySQL transaction state
+     * belongs to the CONNECTION: a foreign statement that serializes onto the
+     * handle during somebody's open transaction still PARTICIPATES in it and
+     * shares its outcome. This re-executes the design's 6-S1 scenario against
+     * the permanent tests so the fallback-mode caveat can never be silently
+     * re-marked as solved by a future locking change.
+     */
+    public function testAStatementRunDuringAnotherCoroutinesTransactionStillSharesThatTransactionsOutcome(): void
+    {
+        if (!extension_loaded('swoole')) {
+            $this->markTestSkipped('Swoole extension required');
+        }
+
+        $handle = new class extends \PDO {
+            public function __construct()
+            {
+                parent::__construct('sqlite::memory:');
+                $this->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+                $this->exec('CREATE TABLE t (v TEXT)');
+            }
+        };
+        $conn = self::connectionOver($handle);
+
+        $joined = new \Swoole\Coroutine\Channel(1);
+
+        \Swoole\Coroutine\run(function () use ($conn, $joined): void {
+            self::assertTrue($conn->beginTrans(), 'holder beginTrans must succeed');
+
+            \Swoole\Coroutine::create(function () use ($conn, $joined): void {
+                $conn->query("INSERT INTO t VALUES ('b')");
+                $joined->push('b');
+            });
+            self::assertSame('b', $joined->pop(1.0), 'the foreign statement must finish inside the transaction window');
+
+            // The holder's own read INSIDE its open transaction sees the
+            // foreign row: same handle = same transaction. This is the
+            // participation the A4 term cannot and does not prevent.
+            self::assertSame(
+                1,
+                count((array) $conn->query('SELECT v FROM t')),
+                'the foreign row must be visible to the holder inside the open transaction '
+                . '— participation, not locking, is the hazard'
+            );
+
+            self::assertTrue($conn->rollBackTrans(), 'holder rollBackTrans must succeed');
+        });
+
+        // The foreign write was erased together with the holder's rollback —
+        // silent data loss for a coroutine that believed it wrote autocommit.
+        // Fresh handle = fresh connection: the row is gone (6-S1's shape).
+        $probe = new \PDO('sqlite::memory:');
+        $probe->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $probe->exec('CREATE TABLE t (v TEXT)');
+        self::assertSame(
+            0,
+            count($probe->query('SELECT v FROM t')->fetchAll()),
+            'a fresh connection sees nothing of the erased transaction'
+        );
+        self::assertSame(
+            0,
+            count((array) self::connectionOver($handle)->query('SELECT v FROM t WHERE v = \'b\'')),
+            'the foreign row must be gone from the shared handle after the holder rolled back (erased with it)'
         );
     }
 

@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\WebPortal;
 
+use Phlix\Common\Util\RowMap;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Middleware\AuthMiddleware;
@@ -2194,7 +2195,11 @@ class WebPortalRouter
 
         $ids = [];
         foreach ($rows as $row) {
-            $itemId = is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '';
+            // E-09 cohort 5a: RowMap fold (str default '' transcribed; the
+            // skip arms are pre-fold shapes kept as-is). Pinned by the
+            // legacy-oracle vectors in
+            // tests/Unit/Server/WebPortal/WebPortalRouterWatchHistoryGetTest.php.
+            $itemId = RowMap::str($row, 'media_item_id', '');
             if ($itemId !== '' && !in_array($itemId, $ids, true)) {
                 $ids[] = $itemId;
             }
@@ -2216,7 +2221,11 @@ class WebPortalRouter
 
         $items = [];
         foreach ($rows as $row) {
-            $itemId = is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '';
+            // E-09 cohort 5a: RowMap fold (str default '' transcribed; the
+            // skip arms are pre-fold shapes kept as-is). Pinned by the
+            // legacy-oracle vectors in
+            // tests/Unit/Server/WebPortal/WebPortalRouterWatchHistoryGetTest.php.
+            $itemId = RowMap::str($row, 'media_item_id', '');
             if ($itemId === '') {
                 continue;
             }

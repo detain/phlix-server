@@ -299,4 +299,71 @@ final class WebPortalRouterWatchHistoryGetTest extends TestCase
             'completed_at' => null,
         ];
     }
+
+
+    public function testGetWatchHistoryRowDecodeLegsAreByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['media_item_id' => 'm1', 'progress_percent' => 50.0,
+                'playback_status' => 'paused', 'last_watched_at' => '2026-01-01 00:00:00'],
+            ['media_item_id' => '', 'progress_percent' => 0.0,
+                'playback_status' => 'paused', 'last_watched_at' => ''],
+            ['media_item_id' => 5, 'progress_percent' => 0.0,
+                'playback_status' => 'paused', 'last_watched_at' => ''],
+            ['media_item_id' => null, 'progress_percent' => 0.0,
+                'playback_status' => 'paused', 'last_watched_at' => ''],
+            ['progress_percent' => 0.0, 'playback_status' => 'paused',
+                'last_watched_at' => ''],
+        ];
+
+        foreach ($vectors as $row) {
+            $watchHistory = $this->createMock(WatchHistory::class);
+            $watchHistory->method('getHistory')->willReturn([$row, $row]);
+
+            $requestedIds = null;
+            $itemRepository = $this->createMock(ItemRepository::class);
+            $itemRepository->method('findByIds')->willReturnCallback(
+                static function (array $ids) use (&$requestedIds): array {
+                    $requestedIds = $ids;
+                    return array_map(
+                        static fn (string $id): array => [
+                            'id' => $id, 'name' => 'N', 'type' => 'movie',
+                            'path' => '/p', 'metadata_json' => '{}',
+                        ],
+                        $ids
+                    );
+                }
+            );
+
+            $request = new Request();
+            $request->userId = 'user-1';
+            $request->profileId = 'prof-1';
+
+            $response = $this->makeRouter($watchHistory, $itemRepository)
+                ->getWatchHistory($request, []);
+            $this->assertSame(200, $response->statusCode);
+            $body = json_decode($response->body, true);
+
+            // Transcribed pre-fold loops, feed [row,row] verbatim: the id
+            // collection DEDUPES via the in_array arm while the item-shape leg
+            // repeats per row — both arms pinned.
+            $legacyIds = [];
+            foreach ([$row, $row] as $r) {
+                $legacyItemId = is_string($r['media_item_id'] ?? null) ? $r['media_item_id'] : '';
+                if ($legacyItemId !== '' && !in_array($legacyItemId, $legacyIds, true)) {
+                    $legacyIds[] = $legacyItemId;
+                }
+            }
+            $legacyOut = [];
+            foreach ([$row, $row] as $r) {
+                $legacyItemId = is_string($r['media_item_id'] ?? null) ? $r['media_item_id'] : '';
+                if ($legacyItemId !== '') {
+                    $legacyOut[] = $legacyItemId;
+                }
+            }
+            $this->assertSame($legacyIds, $requestedIds ?? []);
+            $this->assertSame($legacyOut, array_column($body['items'], 'id'));
+        }
+    }
 }

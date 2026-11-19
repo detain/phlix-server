@@ -44,6 +44,16 @@ final class RetentionPruneTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->resetStatements();
+    }
+
+    /**
+     * Reset through a method boundary: an inline `$this->statements = []`
+     * narrows the property to the empty-shape for the rest of the function,
+     * which is what phpcs/phpstan must not misread as dead offsets below.
+     */
+    private function resetStatements(): void
+    {
         $this->statements = [];
     }
 
@@ -98,20 +108,21 @@ final class RetentionPruneTest extends TestCase
         ];
 
         foreach ($cases as $case) {
-            $this->statements = [];
+            $this->resetStatements();
             $deleted = RetentionPrune::sweep(
                 $this->connection(static fn(): int => 7),
                 $case['table'],
                 $case['column'],
                 $case['deadline'],
-                is_array($case['params']) ? (int) end($case['params']) : 100,
+                (int) end($case['params']),
                 $case['extra'],
                 $case['extraParams']
             );
             $this->assertSame(7, $deleted);
-            $this->assertCount(1, $this->statements);
-            $this->assertSame($case['sql'], $this->statements[0]['sql']);
-            $this->assertSame($case['params'], $this->statements[0]['params']);
+            $statements = $this->statements;
+            $this->assertCount(1, $statements);
+            $this->assertSame($case['sql'], $statements[0]['sql']);
+            $this->assertSame($case['params'], $statements[0]['params']);
         }
     }
 
@@ -120,7 +131,7 @@ final class RetentionPruneTest extends TestCase
         // LIMIT 0 churns and LIMIT -1 is a syntax error; either would mean a
         // mis-set site constant, so the engine refuses without a statement.
         foreach ([0, -1, -100] as $batch) {
-            $this->statements = [];
+            $this->resetStatements();
             $deleted = RetentionPrune::sweep(
                 $this->connection(static fn(): int => self::fail('no statement may run')),
                 'oauth_state_store',

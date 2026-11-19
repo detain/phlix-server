@@ -13,6 +13,7 @@ namespace Phlix\Tests\Unit\Common\Util;
 
 use Phlix\Common\Util\RowMap;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 
 /**
  * E-09 — convention table for the RowMap value-coercion accessors.
@@ -173,5 +174,50 @@ class RowMapAccessorsTest extends TestCase
         $this->assertSame(5, RowMap::intFromNumeric($row, 'x', 0), 'numeric family (Collection sort_order)');
         $this->assertSame('5', RowMap::str($row, 'x', ''), 'strict string passes it through');
         $this->assertSame('5', RowMap::stringFromScalar($row, 'x', ''), 'scalar-cast string too');
+    }
+
+    public function testEveryValueAccessorRequiresItsDefaultArgument(): void
+    {
+        // Structural pin (SRV-MICRO idiom), not a behavior pin: the whole
+        // no-harmonization doctrine rests on every default being a MANDATORY
+        // argument. A silent `= ''` escape hatch would let a future cohort
+        // omit the argument at a call site and quietly harmonize a banked
+        // legacy default away — and the r1 review proved a mandate-stripping
+        // mutant survived all behavioral tests. The signature IS the law here.
+        $defaultTaking = ['str', 'int', 'intFromNumeric', 'floatFromNumeric', 'stringFromScalar', 'boolFromCast'];
+        foreach ($defaultTaking as $method) {
+            $reflection = new ReflectionMethod(RowMap::class, $method);
+            $this->assertSame(
+                3,
+                $reflection->getNumberOfRequiredParameters(),
+                "RowMap::{$method}() must REQUIRE its default argument (explicit-default mandate)"
+            );
+            $this->assertSame(
+                3,
+                $reflection->getNumberOfParameters(),
+                "RowMap::{$method}() must accept no parameter beyond (row, column, default)"
+            );
+            $this->assertFalse(
+                $reflection->getParameters()[2]->isOptional(),
+                "RowMap::{$method}() default must have no silent fallback (third parameter optional)"
+            );
+        }
+        // The four nullable forms encode the null policy in the METHOD NAME —
+        // they take exactly (row, column) and must not grow a hidden default
+        // parameter that would re-open the harmonization escape.
+        $nullableForms = ['nullableStr', 'nullableInt', 'nullableIntFromNumeric', 'nullableStringFromScalar'];
+        foreach ($nullableForms as $method) {
+            $reflection = new ReflectionMethod(RowMap::class, $method);
+            $this->assertSame(
+                2,
+                $reflection->getNumberOfParameters(),
+                "RowMap::{$method}() is name-encoded NULL policy: (row, column) only, no default parameter"
+            );
+            $this->assertSame(
+                2,
+                $reflection->getNumberOfRequiredParameters(),
+                "RowMap::{$method}() must require both parameters"
+            );
+        }
     }
 }

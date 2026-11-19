@@ -15,9 +15,14 @@ use InvalidArgumentException;
 use Phlix\Auth\CookiePolicy;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\PasswordHasher;
-use Phlix\Plugins\OAuth2\StateCorrelation;
-use Phlix\Session\SyncPlay\GroupState;
 use Phlix\Plugins\OAuth2\Pkce;
+use Phlix\Plugins\OAuth2\StateCorrelation;
+use Phlix\Hub\RelayMessageFramer;
+use Phlix\Session\SyncPlay\GroupState;
+use Phlix\Session\SyncPlay\Messages;
+use Phlix\Shared\Relay\FrameCodec;
+use Phlix\Shared\Relay\RelayFrameType;
+use Phlix\Shared\Relay\SyncPlayDialect;
 use Phlix\Shared\Auth\PasswordHasher as SharedHasher;
 use Phlix\Shared\Auth\SessionFamily;
 use Phlix\Shared\Security\CredentialDigest;
@@ -25,6 +30,7 @@ use Phlix\Shared\Security\Ed25519Pem;
 use Phlix\Shared\Security\OriginPolicy;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
+use ReflectionMethod;
 
 /**
  * Behavior pins for the phlix-shared v0.56.0 primitive delegation (Wave-S1).
@@ -280,5 +286,60 @@ final class SharedPrimitiveDelegationTest extends TestCase
         $this->assertFalse(PasswordHasher::needsRehash($hash));
         $this->assertTrue(PasswordHasher::needsRehash(password_hash('x', PASSWORD_BCRYPT)));
         $this->assertStringStartsWith('$argon2id$v=19$m=65536,t=4,p=1$', SharedHasher::TIMING_BURN_DUMMY_HASH);
+    }
+
+    /**
+     * Wave-S1 leg 1.7 pins: the framer seams delegate to shared FrameCodec
+     * byte-for-byte, and Messages TYPE_* constants are pure aliases of the
+     * shared SyncPlayDialect catalog (design M-33: const names mirror the
+     * server so the alias form preserves every consumer import).
+     */
+    public function testFramerSeamsDelegateToSharedFrameCodec(): void
+    {
+        $framer = new ReflectionMethod(RelayMessageFramer::class, "encodeFrame");
+        $framer->setAccessible(true);
+
+        $vectors = [
+            [RelayFrameType::DATA, 0, ""],
+            [RelayFrameType::DATA, 42, "hello"],
+            [RelayFrameType::HEARTBEAT, 4294967295, random_bytes(700)],
+        ];
+        foreach ($vectors as $v) {
+            self::assertSame(
+                FrameCodec::encode($v[0], $v[1], $v[2]),
+                $framer->invoke(null, $v[0], $v[1], $v[2])
+            );
+        }
+
+        $obj = new RelayMessageFramer();
+        self::assertSame(FrameCodec::encodeHello("jwt-1", "srv-1"), $obj->encodeHello("jwt-1", "srv-1"));
+        self::assertSame(FrameCodec::encodeHelloAck("rs-1", "t-1"), $obj->encodeHelloAck("rs-1", "t-1"));
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage("Payload exceeds maximum length of 65535 bytes: 65536");
+        $framer->invoke(null, RelayFrameType::DATA, 1, str_repeat("x", 65536));
+    }
+
+    public function testSyncPlayTypeConstantsAreDialectAliases(): void
+    {
+        foreach (SyncPlayDialect::all() as $type) {
+            self::assertTrue(Messages::isValidType($type), "valid: {$type}");
+        }
+        self::assertFalse(Messages::isValidType("syncplay_bogus"));
+
+        $names = [
+            "TYPE_GROUP_CREATE", "TYPE_GROUP_JOIN", "TYPE_GROUP_LEAVE", "TYPE_GROUP_STATE",
+            "TYPE_GROUP_LIST", "TYPE_PLAYBACK_PLAY", "TYPE_PLAYBACK_PAUSE", "TYPE_PLAYBACK_SEEK",
+            "TYPE_PLAYBACK_QUEUE", "TYPE_PLAYBACK_SYNC", "TYPE_CHAT_MESSAGE", "TYPE_CHAT_TYPING",
+            "TYPE_HOST_TRANSFER", "TYPE_HOST_ELECT", "TYPE_TIME_PING", "TYPE_TIME_PONG",
+            "TYPE_TIME_SYNC", "TYPE_ERROR", "TYPE_INFO",
+        ];
+        foreach ($names as $n) {
+            self::assertSame(
+                constant(SyncPlayDialect::class . "::" . $n),
+                constant(Messages::class . "::" . $n),
+                "alias: {$n}"
+            );
+        }
     }
 }

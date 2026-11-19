@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub;
 
 use InvalidArgumentException;
+use Phlix\Shared\Relay\FrameCodec;
 use Phlix\Shared\Relay\RelayFrame as SharedRelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
@@ -60,11 +61,10 @@ final class RelayMessageFramer implements RelayWireCodecInterface
      * tests/Unit/Hub/RelayMessageFramerWireCorpusTest.php, hub
      * tests/Unit/Relay/FrameWireCorpusTest.php and shared
      * tests/Relay/FrameCodecTest.php all pin the same wire digest literal).
-     * The eventual single home is phlix-shared src/Relay/FrameCodec.php —
-     * added by the FRAME lane, adoption scheduled for the v0.56.0 release;
-     * until then each repo keeps its own copy and the corpus pins keep the
-     * twins honest. Exception wording stays per-repo until adoption
-     * harmonizes it (that harmonization is the release lane's disclosed job).
+     * The single home IS phlix-shared src/Relay/FrameCodec.php — adopted at
+     * v0.56.0: this seam delegates to FrameCodec::encode() byte-for-byte
+     * (identical pack sequence, identical >65535 exception wording); the
+     * three-repo corpus pins keep the wire digest frozen either way.
      *
      * @param RelayFrameType $type    Frame type.
      * @param int            $seq     32-bit unsigned sequence number.
@@ -76,20 +76,7 @@ final class RelayMessageFramer implements RelayWireCodecInterface
      */
     private static function encodeFrame(RelayFrameType $type, int $seq, string $payload): string
     {
-        $len = strlen($payload);
-
-        if ($len > 65535) {
-            throw new InvalidArgumentException(
-                sprintf('Payload exceeds maximum length of 65535 bytes: %d', $len),
-            );
-        }
-
-        $result  = pack('N', $seq);
-        $result .= pack('C', $type->value);
-        $result .= pack('n', $len);
-        $result .= $payload;
-
-        return $result;
+        return FrameCodec::encode($type, $seq, $payload);
     }
 
     /**
@@ -107,13 +94,7 @@ final class RelayMessageFramer implements RelayWireCodecInterface
      */
     public function encodeHello(string $enrollmentJwt, string $serverId): string
     {
-        $payload = [
-            'type' => 'hello',
-            'enrollment_jwt' => $enrollmentJwt,
-            'server_id' => $serverId,
-        ];
-
-        return json_encode($payload, JSON_THROW_ON_ERROR);
+        return FrameCodec::encodeHello($enrollmentJwt, $serverId);
     }
 
     /**
@@ -131,13 +112,7 @@ final class RelayMessageFramer implements RelayWireCodecInterface
      */
     public function encodeHelloAck(string $relaySessionId, string $tunnelId): string
     {
-        $payload = [
-            'type' => 'hello_ack',
-            'relay_session_id' => $relaySessionId,
-            'tunnel_id' => $tunnelId,
-        ];
-
-        return json_encode($payload, JSON_THROW_ON_ERROR);
+        return FrameCodec::encodeHelloAck($relaySessionId, $tunnelId);
     }
 
     /**

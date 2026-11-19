@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Session\SyncPlay;
 
+use Phlix\Shared\Relay\SyncPlayDialect;
 use Phlix\Shared\Security\CredentialDigest;
 
 /**
@@ -78,19 +79,19 @@ final class Messages
      */
 
     /** Message type: Create a new SyncPlay group */
-    public const TYPE_GROUP_CREATE = 'syncplay_group_create';
+    public const TYPE_GROUP_CREATE = SyncPlayDialect::TYPE_GROUP_CREATE;
 
     /** Message type: Join an existing SyncPlay group */
-    public const TYPE_GROUP_JOIN = 'syncplay_group_join';
+    public const TYPE_GROUP_JOIN = SyncPlayDialect::TYPE_GROUP_JOIN;
 
     /** Message type: Leave current SyncPlay group */
-    public const TYPE_GROUP_LEAVE = 'syncplay_group_leave';
+    public const TYPE_GROUP_LEAVE = SyncPlayDialect::TYPE_GROUP_LEAVE;
 
     /** Message type: Full group state broadcast (from host) */
-    public const TYPE_GROUP_STATE = 'syncplay_group_state';
+    public const TYPE_GROUP_STATE = SyncPlayDialect::TYPE_GROUP_STATE;
 
     /** Message type: Request list of available groups */
-    public const TYPE_GROUP_LIST = 'syncplay_group_list';
+    public const TYPE_GROUP_LIST = SyncPlayDialect::TYPE_GROUP_LIST;
 
     /*
      * ========================================================================
@@ -99,19 +100,19 @@ final class Messages
      */
 
     /** Message type: Start/resume playback */
-    public const TYPE_PLAYBACK_PLAY = 'syncplay_playback_play';
+    public const TYPE_PLAYBACK_PLAY = SyncPlayDialect::TYPE_PLAYBACK_PLAY;
 
     /** Message type: Pause playback */
-    public const TYPE_PLAYBACK_PAUSE = 'syncplay_playback_pause';
+    public const TYPE_PLAYBACK_PAUSE = SyncPlayDialect::TYPE_PLAYBACK_PAUSE;
 
     /** Message type: Seek to new position */
-    public const TYPE_PLAYBACK_SEEK = 'syncplay_playback_seek';
+    public const TYPE_PLAYBACK_SEEK = SyncPlayDialect::TYPE_PLAYBACK_SEEK;
 
     /** Message type: Update playback queue */
-    public const TYPE_PLAYBACK_QUEUE = 'syncplay_playback_queue';
+    public const TYPE_PLAYBACK_QUEUE = SyncPlayDialect::TYPE_PLAYBACK_QUEUE;
 
     /** Message type: Periodic playback sync broadcast */
-    public const TYPE_PLAYBACK_SYNC = 'syncplay_playback_sync';
+    public const TYPE_PLAYBACK_SYNC = SyncPlayDialect::TYPE_PLAYBACK_SYNC;
 
     /*
      * ========================================================================
@@ -120,10 +121,10 @@ final class Messages
      */
 
     /** Message type: Chat message */
-    public const TYPE_CHAT_MESSAGE = 'syncplay_chat';
+    public const TYPE_CHAT_MESSAGE = SyncPlayDialect::TYPE_CHAT_MESSAGE;
 
     /** Message type: Typing indicator */
-    public const TYPE_CHAT_TYPING = 'syncplay_typing';
+    public const TYPE_CHAT_TYPING = SyncPlayDialect::TYPE_CHAT_TYPING;
 
     /*
      * ========================================================================
@@ -132,10 +133,10 @@ final class Messages
      */
 
     /** Message type: Voluntary host transfer */
-    public const TYPE_HOST_TRANSFER = 'syncplay_host_transfer';
+    public const TYPE_HOST_TRANSFER = SyncPlayDialect::TYPE_HOST_TRANSFER;
 
     /** Message type: Automatic host election */
-    public const TYPE_HOST_ELECT = 'syncplay_host_elect';
+    public const TYPE_HOST_ELECT = SyncPlayDialect::TYPE_HOST_ELECT;
 
     /*
      * ========================================================================
@@ -144,13 +145,13 @@ final class Messages
      */
 
     /** Message type: Time sync ping (client → server) */
-    public const TYPE_TIME_PING = 'syncplay_time_ping';
+    public const TYPE_TIME_PING = SyncPlayDialect::TYPE_TIME_PING;
 
     /** Message type: Time sync pong (server → client) */
-    public const TYPE_TIME_PONG = 'syncplay_time_pong';
+    public const TYPE_TIME_PONG = SyncPlayDialect::TYPE_TIME_PONG;
 
     /** Message type: Full time sync state broadcast */
-    public const TYPE_TIME_SYNC = 'syncplay_time_sync';
+    public const TYPE_TIME_SYNC = SyncPlayDialect::TYPE_TIME_SYNC;
 
     /*
      * ========================================================================
@@ -159,10 +160,10 @@ final class Messages
      */
 
     /** Message type: Error notification */
-    public const TYPE_ERROR = 'syncplay_error';
+    public const TYPE_ERROR = SyncPlayDialect::TYPE_ERROR;
 
     /** Message type: General informational message */
-    public const TYPE_INFO = 'syncplay_info';
+    public const TYPE_INFO = SyncPlayDialect::TYPE_INFO;
 
     /**
      * Current protocol version.

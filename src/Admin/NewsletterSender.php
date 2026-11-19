@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Admin;
 
+use Phlix\Common\Util\RowMap;
 use DateTimeInterface;
 use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Logger\StructuredLogger;
@@ -163,9 +164,24 @@ class NewsletterSender
         $processed = 0;
 
         foreach ($rows as $row) {
-            $queueId = is_string($row['id']) || is_numeric($row['id']) ? (string) $row['id'] : '';
-            $userId = is_string($row['user_id']) || is_numeric($row['user_id']) ? (string) $row['user_id'] : '';
-            $weekStartStr = is_string($row['week_start']) ? $row['week_start'] : '';
+            // E-09 cohort 5a (W5, adjudication A7): the pre-fold id/user_id
+            // legs accepted string OR numeric and string-cast it. The workerman
+            // PDO handle sets ATTR_STRINGIFY_FETCHES=false +
+            // ATTR_EMULATE_PREPARES=false (vendor Connection.php:1723-1724),
+            // so BIGINT queue ids arrive as native PHP INTS — RowMap::str()
+            // would map them to '' (divergence). stringFromScalar is the
+            // value-identical accessor on the reachable SQL domain
+            // {string, int, float, NULL, missing}: int 123 -> '123', string
+            // passthrough, NULL/missing -> '' exactly like the pre-fold arm.
+            // (bool divergence is unreachable: numeric columns decode to
+            // int/float/string, never PHP bool.) week_start/status are DATE/
+            // VARCHAR legs -> str(); the pre-fold direct access could not warn
+            // on a real row (SELECT supplies all three columns), so the fold
+            // only removes that never-fires hazard. Byte-identity pinned by
+            // tests/Unit/Admin/NewsletterSenderTest.php.
+            $queueId = RowMap::stringFromScalar($row, 'id', '');
+            $userId = RowMap::stringFromScalar($row, 'user_id', '');
+            $weekStartStr = RowMap::str($row, 'week_start', '');
 
             $this->db->query(
                 "UPDATE newsletter_queue
@@ -242,8 +258,11 @@ class NewsletterSender
         ];
 
         foreach ($rows as $row) {
-            $status = is_string($row['status']) ? $row['status'] : '';
-            $count = is_numeric($row['count']) ? (int) $row['count'] : 0;
+            // E-09 cohort 5a (W5): RowMap fold (see processQueue note; COUNT(*)
+            // arrives as int — intFromNumeric matches the pre-fold is_numeric
+            // arm exactly). Pinned in tests/Unit/Admin/NewsletterSenderTest.php.
+            $status = RowMap::str($row, 'status', '');
+            $count = RowMap::intFromNumeric($row, 'count', 0);
 
             // Explicit key match rather than isset($stats[$status]) with a dynamic
             // key: the dynamic write made the inferred shape open-ended, and it

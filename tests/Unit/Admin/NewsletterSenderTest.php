@@ -177,4 +177,99 @@ class NewsletterSenderTest extends TestCase
         $sender = new NewsletterSender($this->db);
         $this->assertSame(0, $sender->reapExhausted());
     }
+
+    /**
+     * E-09 cohort 5a (W5, adjudication A7): processQueue id/user_id
+     * stringFromScalar legs + week_start str leg vs the pre-fold dual-guard
+     * ternaries (transcribed verbatim from the parent blob). Bool vectors are
+     * omitted: unreachable through the stringify-off PDO handle (the fold
+     * comment documents the one-corner domain difference).
+     */
+    public function test_queue_row_decode_legs_are_byte_identical_to_legacy_across_vectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['id' => '12', 'user_id' => '34', 'week_start' => '2026-01-05'],
+            ['id' => 123, 'user_id' => 456, 'week_start' => '2026-01-05'],
+            ['id' => 7.0, 'user_id' => '8', 'week_start' => '2026-01-06'],
+            ['id' => null, 'user_id' => null, 'week_start' => null],
+            ['id' => 'abc', 'user_id' => '', 'week_start' => 42],
+        ];
+
+        foreach ($vectors as $row) {
+            $attemptsIds = [];
+            $sentIds = [];
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturnCallback(
+                function (string $sql, array $params = []) use ($row, &$attemptsIds, &$sentIds) {
+                    if (str_contains($sql, 'FROM newsletter_queue')) {
+                        return [$row];
+                    }
+                    if (str_contains($sql, 'SET attempts')) {
+                        $attemptsIds[] = $params[0];
+                    }
+                    if (str_contains($sql, "SET status = 'sent'")) {
+                        $sentIds[] = $params[0];
+                    }
+                    return [];
+                }
+            );
+
+            $sender = new class ($db) extends NewsletterSender {
+                /** @var list<array{string, string}> */
+                public array $seen = [];
+
+                protected function sendNewsletter(string $userId, string $weekStart): bool
+                {
+                    $this->seen[] = [$userId, $weekStart];
+                    return true;
+                }
+            };
+
+            $this->assertSame(1, $sender->processQueue(1));
+
+            $queueId = is_string($row['id']) || is_numeric($row['id']) ? (string) $row['id'] : '';
+            $userId  = is_string($row['user_id']) || is_numeric($row['user_id'])
+                ? (string) $row['user_id']
+                : '';
+            $week    = is_string($row['week_start']) ? $row['week_start'] : '';
+
+            $this->assertSame([$queueId], $attemptsIds, 'attempts leg for vector ' . json_encode($row));
+            $this->assertSame([$queueId], $sentIds, 'sent leg for vector ' . json_encode($row));
+            $this->assertSame([[$userId, $week]], $sender->seen, 'send payload for vector ' . json_encode($row));
+        }
+    }
+
+    /**
+     * E-09 cohort 5a (W5): getDeliveryStats status/count fold legs vs the
+     * pre-fold ternaries + the KEPT explicit-key consumption arms.
+     */
+    public function test_delivery_stats_row_decode_legs_are_byte_identical_to_legacy_across_vectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['status' => 'pending', 'count' => 2],
+            ['status' => 'sent', 'count' => '7'],
+            ['status' => 'failed', 'count' => 1.9],
+            ['status' => 'total', 'count' => 3],
+            ['status' => null, 'count' => null],
+            ['status' => 5, 'count' => 'abc'],
+        ];
+
+        foreach ($vectors as $row) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+            $sender = new NewsletterSender($db);
+
+            $status = is_string($row['status']) ? $row['status'] : '';
+            $count  = is_numeric($row['count']) ? (int) $row['count'] : 0;
+            $expected = ['pending' => 0, 'sent' => 0, 'failed' => 0, 'total' => 0];
+            if ($status === 'pending' || $status === 'sent' || $status === 'failed') {
+                $expected[$status] = $count;
+            }
+            $expected['total'] += $count;
+
+            $this->assertSame($expected, $sender->getDeliveryStats(), 'vector ' . json_encode($row));
+        }
+    }
 }

@@ -48,6 +48,34 @@ final class RelayMessageFramer implements RelayWireCodecInterface
      */
     public function encode(RelayFrameType $type, int $seq, string $payload): string
     {
+        return self::encodeFrame($type, $seq, $payload);
+    }
+
+    /**
+     * The single byte-emitting frame encoder of this repo.
+     *
+     * FRAME lane (scan finding C-06): the hub repo carries the twin of this
+     * encoder at phlix-hub src/Relay/FrameDecoder.php::encodeFrame(). Both
+     * are pinned byte-identical by the triple corpus tests (server
+     * tests/Unit/Hub/RelayMessageFramerWireCorpusTest.php, hub
+     * tests/Unit/Relay/FrameWireCorpusTest.php and shared
+     * tests/Relay/FrameCodecTest.php all pin the same wire digest literal).
+     * The eventual single home is phlix-shared src/Relay/FrameCodec.php —
+     * added by the FRAME lane, adoption scheduled for the v0.56.0 release;
+     * until then each repo keeps its own copy and the corpus pins keep the
+     * twins honest. Exception wording stays per-repo until adoption
+     * harmonizes it (that harmonization is the release lane's disclosed job).
+     *
+     * @param RelayFrameType $type    Frame type.
+     * @param int            $seq     32-bit unsigned sequence number.
+     * @param string         $payload Raw byte payload.
+     *
+     * @return string Binary-encoded frame.
+     *
+     * @throws InvalidArgumentException If payload exceeds 65535 bytes.
+     */
+    private static function encodeFrame(RelayFrameType $type, int $seq, string $payload): string
+    {
         $len = strlen($payload);
 
         if ($len > 65535) {
@@ -72,6 +100,9 @@ final class RelayMessageFramer implements RelayWireCodecInterface
      *
      * @return string JSON text frame (not binary-encoded).
      *
+     * @see phlix-hub src/Relay/FrameDecoder.php::encodeHello() — wire twin;
+     *      shared home phlix-shared src/Relay/FrameCodec.php (v0.56.0 adoption).
+     *
      * @since 0.5.0
      */
     public function encodeHello(string $enrollmentJwt, string $serverId): string
@@ -92,6 +123,9 @@ final class RelayMessageFramer implements RelayWireCodecInterface
      * @param string $tunnelId      Tunnel UUID assigned by hub.
      *
      * @return string JSON text frame (not binary-encoded).
+     *
+     * @see phlix-hub src/Relay/FrameDecoder.php::encodeHelloAck() — wire twin;
+     *      shared home phlix-shared src/Relay/FrameCodec.php (v0.56.0 adoption).
      *
      * @since 0.5.0
      */

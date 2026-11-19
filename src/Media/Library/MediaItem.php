@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library;
 
+use Phlix\Common\Util\RowMap;
+
 /**
  * Simple media item representation for music.
  *
@@ -55,10 +57,14 @@ final class MediaItem
             }
         }
 
-        $id = is_string($row['id'] ?? null) ? $row['id'] : '';
-        $name = is_string($row['name'] ?? null) ? $row['name'] : '';
-        $type = is_string($row['type'] ?? null) ? $row['type'] : '';
-        $path = is_string($row['path'] ?? null) ? $row['path'] : '';
+        // E-09 cohort 5a: RowMap fold of the pre-fold ??-guarded strict
+        // ternaries (fallbacks transcribed; the metadata_json walker above is
+        // kept verbatim); byte-identity pinned by the legacy-oracle vectors in
+        // tests/Unit/Media/Metadata/Writer/MetadataWriteWorkerTest.php.
+        $id = RowMap::str($row, 'id', '');
+        $name = RowMap::str($row, 'name', '');
+        $type = RowMap::str($row, 'type', '');
+        $path = RowMap::str($row, 'path', '');
 
         return new self(
             id: $id,

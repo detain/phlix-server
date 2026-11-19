@@ -166,6 +166,61 @@ final class MetadataWriteWorkerTest extends TestCase
         $this->assertSame(0, $worker->runOnce());
         $this->assertSame(0, $worker->getPendingCount());
     }
+
+    /**
+     * E-09 cohort 5a: pins the RowMap fold of MediaItem::fromRow against a
+     * verbatim transcription of the pre-fold metadata_json walker and the
+     * ??-guarded strict ternaries (ca91c293 shape).
+     */
+    public function testMediaItemFromRowDecodeIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            [
+                'id' => 'item-1',
+                'name' => 'Dune',
+                'type' => 'movie',
+                'path' => '/m/d.mkv',
+                'metadata_json' => '{"a":1}',
+            ],
+            ['id' => null, 'name' => 7, 'type' => 1.5, 'path' => true],
+            ['id' => '', 'name' => '', 'type' => '', 'path' => ''],
+            ['metadata_json' => '{"images":{"poster_url":"p"}}'],
+            ['metadata_json' => 'not-json'],
+            ['metadata_json' => ['pre' => 'decoded']],
+            ['name' => 'Partial only'],
+            [],
+        ];
+
+        foreach ($vectors as $row) {
+            $decoded = MediaItem::fromRow($row);
+
+            // Verbatim from the ca91c293 tree.
+            $metadata = [];
+            $rawJson = $row['metadata_json'] ?? null;
+            if (is_string($rawJson)) {
+                $legacyDecoded = json_decode($rawJson, true);
+                if (is_array($legacyDecoded)) {
+                    foreach ($legacyDecoded as $key => $value) {
+                        if (is_string($key)) {
+                            $metadata[$key] = $value;
+                        }
+                    }
+                }
+            }
+            $id = is_string($row['id'] ?? null) ? $row['id'] : '';
+            $name = is_string($row['name'] ?? null) ? $row['name'] : '';
+            $type = is_string($row['type'] ?? null) ? $row['type'] : '';
+            $path = is_string($row['path'] ?? null) ? $row['path'] : '';
+            $legacy = new MediaItem(id: $id, name: $name, type: $type, path: $path, metadata: $metadata);
+
+            $this->assertSame($legacy->id, $decoded->id);
+            $this->assertSame($legacy->name, $decoded->name);
+            $this->assertSame($legacy->type, $decoded->type);
+            $this->assertSame($legacy->path, $decoded->path);
+            $this->assertSame($legacy->metadata, $decoded->metadata);
+        }
+    }
 }
 
 /**

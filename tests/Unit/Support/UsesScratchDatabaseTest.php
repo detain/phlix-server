@@ -220,18 +220,31 @@ final class UsesScratchDatabaseTest extends TestCase
     }
 
     /**
-     * H-08 drift tripwire: the migration-127 test once resolved credentials
-     * through the $_ENV superglobal AND defaulted DB_PASSWORD to 'root' — an
-     * idiom that silently targets an unauthenticated server instead of making
-     * the S126 probe skip honestly. It must never resurface in a non-Support
-     * test: canonical resolution is getenv-shaped, trait-side.
+     * H-08 drift tripwire (widened per r1 MINOR-1): the migration-127 test once
+     * resolved credentials through the $_ENV superglobal AND defaulted
+     * DB_PASSWORD to 'root' — an idiom that silently targets an unauthenticated
+     * server instead of making the S126 probe skip honestly. Two spellings must
+     * never resurface in a non-Support test:
+     *  (1) any `$_ENV['DB_...']` credential read;
+     *  (2) a hand-rolled scratch prologue — a file that issues
+     *      `CREATE DATABASE` itself — resolving DB_PASSWORD through getenv with
+     *      a NON-EMPTY fallback. The canonical empty default (`?: ''`, the
+     *      trait's own shape) passes.
+     * Base/pool credential readers without a scratch CREATE
+     * (PooledConnectionConcurrencyTest, CliScanJobVisibilityTest) are outside
+     * the H-08 disease and are recorded as closeout rows; the second arm is
+     * deliberately scoped to hand-rolled scratch lifecycle.
      */
-    public function testNoNonSupportTestReadsDbCredentialsViaEnvSuperglobal(): void
+    public function testNoNonSupportTestResurfacesHandRolledCredentialIdioms(): void
     {
         $root = dirname(__DIR__, 2);
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)
         );
+
+        $envSuperGlobal = '/\$_ENV\s*\[\s*[\x27"]DB_/';
+        $handRolledPassword =
+            '/getenv\s*\(\s*[\x27"]DB_PASSWORD[\x27"]\s*\)\s*(?:\?:|\?\?|\|\|)\s*[\x27"][^\x27"]/';
 
         $offenders = [];
         foreach ($iterator as $file) {
@@ -241,7 +254,10 @@ final class UsesScratchDatabaseTest extends TestCase
             if (str_contains($file->getPathname(), '/Support/')) {
                 continue;
             }
-            if (preg_match('/\$_ENV\s*\[\s*[\x27"]DB_/', (string) file_get_contents($file->getPathname())) === 1) {
+            $contents = (string) file_get_contents($file->getPathname());
+            $handRolled = str_contains($contents, 'CREATE DATABASE')
+                && preg_match($handRolledPassword, $contents) === 1;
+            if (preg_match($envSuperGlobal, $contents) === 1 || $handRolled) {
                 $offenders[] = $file->getFilename();
             }
         }
@@ -249,7 +265,8 @@ final class UsesScratchDatabaseTest extends TestCase
         $this->assertSame(
             [],
             $offenders,
-            'DB credentials must resolve via UsesScratchDatabase::scratchCredentials(), not $_ENV (H-08)'
+            'Scratch-DB credentials must resolve via UsesScratchDatabase::scratchCredentials(),'
+            . ' never via $_ENV or a hand-rolled getenv DB_PASSWORD default (H-08)'
         );
     }
 

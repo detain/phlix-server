@@ -651,6 +651,10 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     private const DB_ACQUISITION_MARKERS = [
         'requireRealDatabase',
         'requireHealthyDatabase',
+        // r1 MINOR-2: the UsesScratchDatabase acquisition entry point joins the
+        // net — a try/catch laundered around openScratchDatabase() is the same
+        // S126 defect in the trait's spelling.
+        'openScratchDatabase',
         'IntegrationDbGuard',
         'IntegrationDbUnusableException',
         'PhlixMySQLConnection',

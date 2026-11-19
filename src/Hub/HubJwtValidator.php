@@ -21,7 +21,9 @@ use Throwable;
  * This validator:
  * 1. Extracts the `kid` (key ID) from the JWT header.
  * 2. Fetches and caches JWKS from the hub's JWKS URL.
- * 3. Finds the signing key matching the `kid`; refetches once on cache miss (handles key rotation).
+ * 3. Finds the signing key matching the `kid`; refetches once on cache miss (handles key rotation),
+ *    and rejects any resolved key that does not itself carry that kid (B-08 kid cross-check — a
+ *    token signed under key A can never validate by presenting kid B).
  * 4. Verifies the Ed25519 signature using `sodium_crypto_sign_verify_detached`.
  * 5. Validates `iss == 'phlix-hub'`, `aud == 'phlix-server'`, `server_id` matches the server's own ID.
  * 6. Returns `HubUserClaims` on success; `null` on any failure.
@@ -93,6 +95,23 @@ final class HubJwtValidator implements HubJwtValidatorInterface
             $jwk = $this->resolveJwk($kid);
             if ($jwk === null) {
                 $this->logger->debug('Hub JWT validation failed: could not resolve JWK', ['kid' => $kid]);
+                return null;
+            }
+
+            // kid cross-check (B-08, server half of the hub law at
+            // phlix-hub src/Hub/EnrollmentJwtService.php:209-211): the key
+            // was resolved FROM the header's kid, so the JWK must carry that
+            // very identity itself. Without this binding the slot the header
+            // names decides what verifies — a token signed under key A would
+            // validate by presenting kid B whenever cache slot B held A's
+            // material. Fail closed on an anonymous key (no kid of its own):
+            // it cannot be bound to anything. hash_equals keeps the identity
+            // compare constant-time, same posture as the signature check.
+            $jwkKid = is_string($jwk['kid'] ?? null) ? $jwk['kid'] : '';
+            if ($jwkKid === '' || !hash_equals($kid, $jwkKid)) {
+                $this->logger->debug('Hub JWT validation failed: resolved JWK does not carry the header kid', [
+                    'kid' => $kid,
+                ]);
                 return null;
             }
 

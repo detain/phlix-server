@@ -380,6 +380,123 @@ class HubJwtValidatorTest extends TestCase
         $this->assertNull($claims);
     }
 
+    /**
+     * B-08 kid cross-check (server half of the hub law at
+     * phlix-hub src/Hub/EnrollmentJwtService.php:209-211): the header kid is
+     * the NAME the key was resolved under, so the resolved key must carry
+     * that identity itself. Without the binding, whatever lands in cache
+     * slot B — even key A's JWK — happily verifies a token signed under A
+     * while the header presents kid B. The first two arms are RED at the
+     * unfixed HEAD (signature valid, claims valid — only the identity is
+     * wrong); the third is the control arm proving the binding does not
+     * tighten honest keys out of acceptance.
+     */
+    public function testTokenSignedUnderKeyAIsRejectedWhenPresentedWithKidB(): void
+    {
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->expects($this->never())->method('get');
+
+        $presentedKid = 'key-b-presented';
+        $cache = new JwksCache(900);
+        // Cache slot B hands back key A's JWK — the exact shape the hub
+        // law exists to make unfalsifiable from the validator side.
+        $cache->set($presentedKid, [
+            'kty' => 'OKP',
+            'crv' => 'Ed25519',
+            'kid' => $this->kid,
+            'x' => $this->base64UrlEncode($this->publicKey),
+        ]);
+
+        $validator = $this->createValidator($httpClient, 'test-server', $cache);
+
+        // Signed under key A (setUp's pair), presenting kid B, everything
+        // downstream valid: only the kid identity can reject it.
+        $jwt = $this->mintWithHeader(
+            ['alg' => 'EdDSA', 'typ' => 'JWT', 'kid' => $presentedKid],
+            $this->validClaims([
+                'iss' => 'phlix-hub',
+                'aud' => 'phlix-server',
+                'sub' => 'hub-user-123',
+                'hub_user_id' => 'hub-user-123',
+                'server_id' => 'test-server',
+            ]),
+        );
+
+        $this->assertNull(
+            $validator->validate($jwt),
+            'a token signed under key A must never validate by presenting kid B'
+        );
+    }
+
+    public function testResolvedKeyWithoutOwnKidIdentityIsRejected(): void
+    {
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->expects($this->never())->method('get');
+
+        $cache = new JwksCache(900);
+        // Anonymous key: the slot says kid A but the JWK itself carries no
+        // identity to cross-check. Fail closed — an unbound key is not the
+        // key the header named, it just happens to sit in that slot.
+        $cache->set($this->kid, [
+            'kty' => 'OKP',
+            'crv' => 'Ed25519',
+            'x' => $this->base64UrlEncode($this->publicKey),
+        ]);
+
+        $validator = $this->createValidator($httpClient, 'test-server', $cache);
+        $jwt = $this->createJwt($this->validClaims([
+            'iss' => 'phlix-hub',
+            'aud' => 'phlix-server',
+            'sub' => 'hub-user-123',
+            'hub_user_id' => 'hub-user-123',
+            'server_id' => 'test-server',
+        ]));
+
+        $this->assertNull(
+            $validator->validate($jwt),
+            'a resolved key that carries no kid of its own cannot be bound to the header'
+        );
+    }
+
+    public function testKidBoundHonestCacheEntryStillValidates(): void
+    {
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->expects($this->never())->method('get');
+
+        $cache = new JwksCache(900);
+        $cache->set($this->kid, [
+            'kty' => 'OKP',
+            'crv' => 'Ed25519',
+            'kid' => $this->kid,
+            'x' => $this->base64UrlEncode($this->publicKey),
+        ]);
+
+        $validator = $this->createValidator($httpClient, 'test-server', $cache);
+        $jwt = $this->createJwt($this->validClaims([
+            'iss' => 'phlix-hub',
+            'aud' => 'phlix-server',
+            'sub' => 'hub-user-123',
+            'hub_user_id' => 'hub-user-123',
+            'server_id' => 'test-server',
+        ]));
+
+        $this->assertInstanceOf(HubUserClaims::class, $validator->validate($jwt));
+    }
+
+    /**
+     * @param array<string, mixed> $header
+     * @param array<string, mixed> $payload
+     */
+    private function mintWithHeader(array $header, array $payload): string
+    {
+        $headerEncoded = $this->base64UrlEncode(json_encode($header, JSON_THROW_ON_ERROR));
+        $payloadEncoded = $this->base64UrlEncode(json_encode($payload, JSON_THROW_ON_ERROR));
+        $signedMessage = $headerEncoded . '.' . $payloadEncoded;
+        $signature = sodium_crypto_sign_detached($signedMessage, $this->privateKey);
+
+        return $signedMessage . '.' . $this->base64UrlEncode($signature);
+    }
+
     public function testMalformedJwtReturnsNull(): void
     {
         $httpClient = $this->createMock(HttpClientInterface::class);

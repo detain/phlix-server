@@ -176,6 +176,91 @@ class RowMapAccessorsTest extends TestCase
         $this->assertSame('5', RowMap::stringFromScalar($row, 'x', ''), 'scalar-cast string too');
     }
 
+    /**
+     * S121 law, extracted verbatim from the music DTOs' mediaItemIdFromRow():
+     * strict string, empty collapses to NULL, whitespace passes through
+     * UNTRIMMED (the disclosed residual — mutants adding trim() or widening to
+     * is_numeric must redden the ' '/'"\0"' rows below, exactly as they reddened
+     * S121's guards).
+     */
+    public function testNullableNonEmptyStrCarriesTheS121MediaItemIdLaw(): void
+    {
+        $uuid = '3f2b1c0a-9d8e-4f70-a1b2-c3d4e5f60718';
+        $this->assertSame($uuid, RowMap::nullableNonEmptyStr(['x' => $uuid], 'x'));
+        $this->assertSame('0', RowMap::nullableNonEmptyStr(['x' => '0'], 'x'), 'junk strings pass: FK validates, not the reader');
+        $this->assertNull(RowMap::nullableNonEmptyStr(['x' => ''], 'x'), "'' collapses to NULL — never to '' downstream");
+        $this->assertNull(RowMap::nullableNonEmptyStr(['x' => null], 'x'));
+        $this->assertNull(RowMap::nullableNonEmptyStr([], 'x'), 'missing key behaves like SQL NULL');
+        $this->assertNull(RowMap::nullableNonEmptyStr(['x' => 42], 'x'), 'strict family: int is NOT a string');
+        $this->assertNull(RowMap::nullableNonEmptyStr(['x' => 3.5], 'x'));
+        $this->assertNull(RowMap::nullableNonEmptyStr(['x' => true], 'x'));
+        $this->assertNull(RowMap::nullableNonEmptyStr(['x' => ['a']], 'x'));
+        // Whitespace residual (S121 review r8 INFO-2): passes through UNCHANGED.
+        $this->assertSame(' ', RowMap::nullableNonEmptyStr(['x' => ' '], 'x'));
+        $this->assertSame('  ', RowMap::nullableNonEmptyStr(['x' => '  '], 'x'));
+        $this->assertSame("\0", RowMap::nullableNonEmptyStr(['x' => "\0"], 'x'));
+        $this->assertSame(' x ', RowMap::nullableNonEmptyStr(['x' => ' x '], 'x'));
+        $this->assertSame($uuid . ' ', RowMap::nullableNonEmptyStr(['x' => $uuid . ' '], 'x'));
+    }
+
+    /**
+     * S143 law: the parser must never FABRICATE — degenerate strings, non-
+     * strings and unparseable strings all hydrate NULL (pre-S143, '' yielded
+     * the current second and '0000-00-00…' yielded year -0001).
+     */
+    public function testParseMysqlDateTimeRefusesToFabricate(): void
+    {
+        $this->assertNull(RowMap::parseMysqlDateTime(''), "new DateTime('') silently means 'now' — refused");
+        $this->assertNull(RowMap::parseMysqlDateTime('   '), 'whitespace also parses as now — refused');
+        $this->assertNull(RowMap::parseMysqlDateTime('0000-00-00 00:00:00'), 'MySQL zero date — refused');
+        $this->assertNull(RowMap::parseMysqlDateTime('0000-00-00'), 'zero date, short form — refused');
+        $this->assertNull(RowMap::parseMysqlDateTime('not a date at all'));
+        $this->assertNull(RowMap::parseMysqlDateTime(123), 'an int is NOT a unix timestamp');
+        $this->assertNull(RowMap::parseMysqlDateTime(123.5));
+        $this->assertNull(RowMap::parseMysqlDateTime(true));
+        $this->assertNull(RowMap::parseMysqlDateTime(['2026-01-01']));
+        $this->assertNull(RowMap::parseMysqlDateTime(null));
+        // Real values parse; trim() decides EMPTYNESS only — the parsed string
+        // itself is passed byte-for-byte (padded values keep parsing as always).
+        $parsed = RowMap::parseMysqlDateTime('2026-01-01 10:00:00');
+        $this->assertInstanceOf(\DateTime::class, $parsed);
+        $this->assertSame('2026-01-01 10:00:00', $parsed->format('Y-m-d H:i:s'));
+        $padded = RowMap::parseMysqlDateTime('  2026-01-01 10:00:00  ');
+        $this->assertInstanceOf(\DateTime::class, $padded, 'non-blank padded values are NOT this law\'s business');
+    }
+
+    /**
+     * S143's second bug: \DateTimeImmutable does NOT extend \DateTime. The
+     * interface conversion must preserve instant + microseconds + timezone,
+     * and a mutable \DateTime must come back BY IDENTITY.
+     */
+    public function testParseMysqlDateTimeHandlesInterfaceConversionAndIdentity(): void
+    {
+        $immutable = new \DateTimeImmutable('2026-02-02 11:00:00.123456', new \DateTimeZone('America/New_York'));
+        $converted = RowMap::parseMysqlDateTime($immutable);
+        $this->assertInstanceOf(\DateTime::class, $converted);
+        $this->assertNotSame($immutable, $converted, 'immutable is CONVERTED to mutable');
+        $this->assertSame('2026-02-02 11:00:00.123456', $converted->format('Y-m-d H:i:s.u'), 'microseconds survive');
+        $this->assertSame($immutable->getTimezone()->getName(), $converted->getTimezone()->getName(), 'timezone survives');
+        $this->assertSame($immutable->getTimestamp(), $converted->getTimestamp(), 'instant survives');
+
+        $mutable = new \DateTime('2026-03-03 12:00:00', new \DateTimeZone('UTC'));
+        $this->assertSame($mutable, RowMap::parseMysqlDateTime($mutable), 'mutable DateTime returns BY IDENTITY');
+    }
+
+    public function testNullableDateTimeCollapsesMissingNullAndValueIdentically(): void
+    {
+        // Equivalence to `isset($row[$c]) ? parse($row[$c]) : null`: the parser
+        // maps NULL to null anyway, so missing-key and explicit-NULL land alike.
+        $this->assertNull(RowMap::nullableDateTime([], 'x'));
+        $this->assertNull(RowMap::nullableDateTime(['x' => null], 'x'));
+        $this->assertNull(RowMap::nullableDateTime(['x' => ''], 'x'));
+        $this->assertNull(RowMap::nullableDateTime(['x' => 123], 'x'));
+        $value = RowMap::nullableDateTime(['x' => '2026-01-01 10:00:00'], 'x');
+        $this->assertInstanceOf(\DateTime::class, $value);
+        $this->assertSame('2026-01-01 10:00:00', $value->format('Y-m-d H:i:s'));
+    }
+
     public function testEveryValueAccessorRequiresItsDefaultArgument(): void
     {
         // Structural pin (SRV-MICRO idiom), not a behavior pin: the whole
@@ -205,7 +290,14 @@ class RowMapAccessorsTest extends TestCase
         // The four nullable forms encode the null policy in the METHOD NAME —
         // they take exactly (row, column) and must not grow a hidden default
         // parameter that would re-open the harmonization escape.
-        $nullableForms = ['nullableStr', 'nullableInt', 'nullableIntFromNumeric', 'nullableStringFromScalar'];
+        $nullableForms = [
+            'nullableStr',
+            'nullableInt',
+            'nullableIntFromNumeric',
+            'nullableStringFromScalar',
+            'nullableNonEmptyStr',
+            'nullableDateTime',
+        ];
         foreach ($nullableForms as $method) {
             $reflection = new ReflectionMethod(RowMap::class, $method);
             $this->assertSame(

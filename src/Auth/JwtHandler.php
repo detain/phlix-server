@@ -13,6 +13,8 @@ namespace Phlix\Auth;
 
 use Phlix\Common\Token;
 use Phlix\Shared\Auth\JwtClaims;
+use Phlix\Shared\Auth\SessionFamily;
+use Phlix\Shared\Security\Base64Url;
 
 /**
  * JWT token handler for creating and validating JSON Web Tokens.
@@ -67,7 +69,7 @@ class JwtHandler
      *
      * @var string
      */
-    public const CLAIM_PROFILE_ID = 'profile_id';
+    public const CLAIM_PROFILE_ID = SessionFamily::CLAIM_PROFILE_ID;
 
     /**
      * Claim carrying the login-family id behind a token (CP-029 / D-1a).
@@ -98,7 +100,7 @@ class JwtHandler
      *
      * @since CP-029 (D-1a session-family revocation)
      */
-    public const CLAIM_SESSION_ID = 'sid';
+    public const CLAIM_SESSION_ID = SessionFamily::CLAIM_SESSION_ID;
 
     /** @var string Secret key for HMAC signature */
     private string $secretKey;
@@ -646,7 +648,7 @@ class JwtHandler
      */
     private function base64UrlEncode(string $data): string
     {
-        return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
+        return Base64Url::encode($data);
     }
 
     /**
@@ -666,6 +668,6 @@ class JwtHandler
      */
     private function base64UrlDecode(string $data): string
     {
-        return base64_decode(strtr($data, '-_', '+/'));
+        return Base64Url::decode($data);
     }
 }

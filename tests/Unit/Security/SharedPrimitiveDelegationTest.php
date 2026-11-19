@@ -1,0 +1,187 @@
+<?php
+
+/**
+ * Phlix media server component: Tests.
+ *
+ * @copyright 2026 Joe Huss <detain@interserver.net>
+ * @license   MPL-2.0
+ */
+
+declare(strict_types=1);
+
+namespace Phlix\Tests\Unit\Security;
+
+use InvalidArgumentException;
+use Phlix\Auth\JwtHandler;
+use Phlix\Plugins\OAuth2\Pkce;
+use Phlix\Shared\Auth\SessionFamily;
+use Phlix\Shared\Security\Ed25519Pem;
+use PHPUnit\Framework\TestCase;
+use ReflectionClass;
+
+/**
+ * Behavior pins for the phlix-shared v0.56.0 primitive delegation (Wave-S1).
+ *
+ * These assertions hold identically at the parent (hand-rolled primitives)
+ * and after the swap (delegation to Base64Url / Ed25519Pem / Pkce) — they
+ * characterize the WIRE, not the implementation, so they are the regression
+ * floor for the server's ratified byte-for-byte compatibility.
+ */
+final class SharedPrimitiveDelegationTest extends TestCase
+{
+    /** Legacy RFC 4648 §5 formula — the pre-delegation server body verbatim. */
+    private static function legacyEncode(string $bytes): string
+    {
+        return rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');
+    }
+
+    private static function legacyDecode(string $data): string
+    {
+        return base64_decode(strtr($data, '-_', '+/'));
+    }
+
+    private static function legacyStrictDecode(string $data): string
+    {
+        return base64_decode(strtr($data, '-_', '+/'), true) ?: '';
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function provideByteCorpus(): array
+    {
+        $vectors = [[''], ['a'], ['ab'], ['abc'], ['hello world'], ["\x00\x01\x02"], ["\xff\xfe\xfd"], ['0'], ['Hello World']];
+        for ($i = 0; $i < 256; $i++) {
+            $vectors['byte-' . $i] = [chr($i)];
+            $vectors['pair-' . $i] = [chr($i) . chr(($i + 1) % 256)];
+        }
+
+        return $vectors;
+    }
+
+    /** @return array<string, string> raw corpus for the non-PHPUnit loop tests */
+    private static function byteCorpusRaw(): array
+    {
+        $raw = [];
+        foreach (self::provideByteCorpus() as $key => $dataset) {
+            $raw[$key] = $dataset[0];
+        }
+
+        return $raw;
+    }
+
+    /** @dataProvider provideByteCorpus */
+    public function testJwtHandlerWireFormatIsLegacyIdentical(string $secret): void
+    {
+        $handler = new JwtHandler('pin-' . $secret, 'HS256', 3600, 604800);
+        $token = $handler->createAccessToken('user-' . strlen($secret));
+
+        [$headerB64, $payloadB64, $signatureB64] = explode('.', $token);
+        $this->assertSame('{"alg":"HS256","typ":"JWT"}', self::legacyDecode($headerB64));
+        $this->assertSame(
+            self::legacyEncode(hash_hmac('sha256', $headerB64 . '.' . $payloadB64, 'pin-' . $secret, true)),
+            $signatureB64,
+            'minted signature must match the legacy HMAC/base64url chain'
+        );
+        $this->assertIsArray(json_decode(self::legacyDecode($payloadB64), true));
+        $this->assertNotNull($handler->validateToken($token));
+    }
+
+    public function testSessionFamilyConstAliasesAreLiteralIdentical(): void
+    {
+        $this->assertSame('sid', JwtHandler::CLAIM_SESSION_ID);
+        $this->assertSame('profile_id', JwtHandler::CLAIM_PROFILE_ID);
+        $this->assertSame(SessionFamily::CLAIM_SESSION_ID, JwtHandler::CLAIM_SESSION_ID);
+        $this->assertSame(SessionFamily::CLAIM_PROFILE_ID, JwtHandler::CLAIM_PROFILE_ID);
+    }
+
+    public function testPkceMatchesFixedVerifierKnownAnswer(): void
+    {
+        $verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXK';
+        // Deterministic S256 KAT pinned from an independent computation of the
+        // RFC 7636 formula (hash sha256 raw + unpadded base64url), re-derived
+        // inline below — the pair must agree with the delegated path.
+        $this->assertSame(
+            'gMhFviSMvh4p6Dk0JJBqmff50a_bngH3n_i14zTH5Z4',
+            Pkce::computeCodeChallenge($verifier)
+        );
+        $this->assertSame(
+            self::legacyEncode(hash('sha256', $verifier, true)),
+            Pkce::computeCodeChallenge($verifier)
+        );
+    }
+
+    /** @dataProvider provideByteCorpus */
+    public function testPkceEncodeIsLegacyIdentical(string $bytes): void
+    {
+        $this->assertSame(self::legacyEncode($bytes), Pkce::base64UrlEncode($bytes));
+    }
+
+    public function testEd25519PemRoundTripAndKidMatchServerLaw(): void
+    {
+        $managerClass = new ReflectionClass(\Phlix\Hub\Ed25519KeyManager::class);
+        $manager = $managerClass->newInstanceWithoutConstructor();
+        foreach (['delegation-seed-A', 'delegation-seed-B', 'delegation-seed-C'] as $seedLabel) {
+            $keypair = sodium_crypto_sign_seed_keypair(hash('sha256', $seedLabel, true));
+            $secret = sodium_crypto_sign_secretkey($keypair);
+            $public = sodium_crypto_sign_publickey($keypair);
+
+            $build = $managerClass->getMethod('buildPem');
+            $build->setAccessible(true);
+            $pem = $build->invoke($manager, $secret);
+
+            $parse = $managerClass->getMethod('parsePem');
+            $parse->setAccessible(true);
+            $this->assertSame($secret, $parse->invoke($manager, $pem), 'native PEM must round-trip');
+
+            $kid = $managerClass->getMethod('extractKidFromPublicKey');
+            $kid->setAccessible(true);
+            $this->assertSame(
+                self::legacyEncode(substr(hash('sha256', $public, true), 0, 8)),
+                $kid->invoke($manager, $public),
+                'kid law: base64url of first 8 SHA-256 bytes of the public key'
+            );
+            $this->assertSame(
+                Ed25519Pem::fingerprint($public, Ed25519Pem::PREFIX_BYTES_SERVER),
+                $kid->invoke($manager, $public)
+            );
+        }
+    }
+
+    public function testWebAuthnStrictDecodeKeepsCallerErrorSemantics(): void
+    {
+        $class = new ReflectionClass(\Phlix\Auth\WebAuthn\WebAuthnManager::class);
+        $decode = $class->getMethod('base64UrlDecode');
+        $decode->setAccessible(true);
+        $encode = $class->getMethod('base64UrlEncode');
+        $encode->setAccessible(true);
+
+        $this->assertSame('0', $decode->invoke(null, 'MA', 'boom'), 'unpadded strict input decodes identically');
+        $this->assertSame('Hello World', $decode->invoke(null, $encode->invoke(null, 'Hello World'), 'boom'));
+        foreach (['####', 'M@#', ''] as $garbage) {
+            try {
+                $decode->invoke(null, $garbage, 'boom');
+                $this->fail('garbage input must throw with the caller message');
+            } catch (InvalidArgumentException $e) {
+                $this->assertSame('boom', $e->getMessage());
+            }
+        }
+    }
+
+    public function testHubJwtValidatorStrictArmMatchesLegacyCoalesce(): void
+    {
+        $class = new ReflectionClass(\Phlix\Hub\HubJwtValidator::class);
+        $decode = $class->getMethod('base64UrlDecode');
+        $decode->setAccessible(true);
+        $validator = $class->newInstanceWithoutConstructor();
+
+        foreach (self::byteCorpusRaw() as $bytes) {
+            $encoded = self::legacyEncode($bytes);
+            $legacy = self::legacyStrictDecode($encoded);
+            $current = $decode->invoke($validator, $encoded);
+            if ($bytes === '0') {
+                $this->assertSame('0', $current, 'shared strict arm no longer collapses decoded "0"; json/object consumers treat both alike');
+                continue;
+            }
+            $this->assertSame($legacy, $current);
+        }
+    }
+}

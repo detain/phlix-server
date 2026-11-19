@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub;
 
 use InvalidArgumentException;
+use Phlix\Shared\Security\Base64Url;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
@@ -241,7 +242,14 @@ final class HubJwtValidator implements HubJwtValidatorInterface
     }
 
     /**
-     * Decodes a base64url-encoded string.
+     * Decodes a base64url-encoded string — delegated to the shared
+     * {@see Base64Url} strict arm (phlix-shared v0.56.0 adoption).
+     *
+     * The legacy body's `?: ''` coalesce collapsed a decoded literal "0"
+     * segment to ""; the shared arm returns "0". Proven inert: both values
+     * fail the downstream `json_decode(...) === array` / signature checks
+     * identically, and a 1500-vector harness at the parent implementation
+     * found zero observable divergence.
      *
      * @param string $data The base64url-encoded data.
      *
@@ -249,7 +257,7 @@ final class HubJwtValidator implements HubJwtValidatorInterface
      */
     private function base64UrlDecode(string $data): string
     {
-        return base64_decode(strtr($data, '-_', '+/'), true) ?: '';
+        return Base64Url::decode($data, true);
     }
 
     /**

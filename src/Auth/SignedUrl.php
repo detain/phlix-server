@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Auth;
 
+use Phlix\Shared\Security\Base64Url;
+
 /**
  * Mints and verifies short-lived, HMAC-signed URLs for the byte-serving /
  * streaming endpoints that a `<video>`, `<img>`, `<audio>`, e-reader or native
@@ -404,6 +406,6 @@ final class SignedUrl
      */
     private static function base64UrlEncode(string $raw): string
     {
-        return rtrim(strtr(base64_encode($raw), '+/', '-_'), '=');
+        return Base64Url::encode($raw);
     }
 }

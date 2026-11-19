@@ -17,6 +17,7 @@ use Phlix\Shared\Hub\ClaimRequest;
 use Phlix\Shared\Hub\ClaimResponse;
 use Phlix\Shared\Hub\HeartbeatDto;
 use Phlix\Shared\Hub\LibraryRef;
+use Phlix\Shared\Security\Base64Url;
 use Throwable;
 
 /**
@@ -470,10 +471,7 @@ class HubClient
         }
 
         $payload = $parts[1];
-        $decoded = base64_decode(strtr($payload, '-_', '+/'), true);
-        if ($decoded === false) {
-            return null;
-        }
+        $decoded = Base64Url::decode($payload, true);
 
         $data = json_decode($decoded, true);
         if (!is_array($data)) {

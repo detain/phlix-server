@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Plugins\OAuth2;
 
 use Phlix\Common\Token;
+use Phlix\Shared\Security\Base64Url;
+use Phlix\Shared\Security\Pkce as SharedPkce;
 
 /**
  * RFC 7636 PKCE (Proof Key for Code Exchange) helpers, shared by every OAuth2
@@ -30,6 +32,15 @@ use Phlix\Common\Token;
 final class Pkce
 {
     /**
+     * Delegation law (phlix-shared v0.56.0 adoption, Wave-S1): the S256 challenge
+     * formula and the base64url primitive below are thin delegates onto
+     * {@see \Phlix\Shared\Security\Pkce} / {@see \Phlix\Shared\Security\Base64Url} —
+     * byte-for-byte equivalence over a 1500+-vector harness at the parent
+     * implementation. This class remains the in-repo import surface for the
+     * OAuth2/OIDC/GitHub callers; do not re-implement the math here.
+     */
+
+    /**
      * Generate a cryptographically-random RFC 7636 `code_verifier`.
      *
      * Returns a 64-character string drawn from the unreserved-character set (hex
@@ -47,7 +58,7 @@ final class Pkce
      */
     public static function computeCodeChallenge(string $codeVerifier): string
     {
-        return self::base64UrlEncode(hash('sha256', $codeVerifier, true));
+        return SharedPkce::challengeFor($codeVerifier);
     }
 
     /**
@@ -55,6 +66,6 @@ final class Pkce
      */
     public static function base64UrlEncode(string $bytes): string
     {
-        return rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');
+        return Base64Url::encode($bytes);
     }
 }

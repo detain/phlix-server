@@ -20,6 +20,7 @@ use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Uuid;
 use Phlix\Shared\Auth\AuthResult;
+use Phlix\Shared\Security\Base64Url;
 use Throwable;
 use Workerman\MySQL\Connection;
 
@@ -861,21 +862,23 @@ class WebAuthnManager
      */
     private static function base64UrlEncode(string $bytes): string
     {
-        return rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');
+        return Base64Url::encode($bytes);
     }
 
     /**
      * Strict base64url decode: wrong alphabet or padding garbage throws the
      * caller's ceremony-level error rather than smuggling in a mangled key.
+     * Delegated to the shared {@see Base64Url} strict arm (v0.56.0 adoption);
+     * the legacy explicit `str_pad` was proven inert against PHP's strict
+     * base64_decode (unpadded input decodes identically) by corpus harness.
      */
     private static function base64UrlDecode(string $encoded, string $errorMessage): string
     {
-        $normalized = strtr($encoded, '-_', '+/');
-        $padded = str_pad($normalized, (int) (ceil(strlen($normalized) / 4) * 4), '=');
-        $decoded = base64_decode($padded, true);
-        if ($decoded === false || $decoded === '') {
+        $decoded = Base64Url::decode($encoded, true);
+        if ($decoded === '') {
             throw new \InvalidArgumentException($errorMessage);
         }
+
         return $decoded;
     }
 

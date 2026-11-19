@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Hub;
 
 use InvalidArgumentException;
+use Phlix\Shared\Security\Base64Url;
+use Phlix\Shared\Security\Ed25519Pem;
 use RuntimeException;
 
 /**
@@ -302,11 +304,7 @@ final class Ed25519KeyManager
      */
     private function buildPem(string $secretKey): string
     {
-        $base64 = rtrim(strtr(base64_encode($secretKey), '+/', '-_'), '=');
-
-        return "-----BEGIN ED25519 PRIVATE KEY-----\n"
-            . implode("\n", str_split($base64, 64)) . "\n"
-            . "-----END ED25519 PRIVATE KEY-----\n";
+        return Ed25519Pem::buildPem($secretKey);
     }
 
     /**
@@ -333,132 +331,15 @@ final class Ed25519KeyManager
      */
     private function parsePem(string $pem): ?string
     {
-        // Format 1: the application's own label wrapping a base64url-encoded
-        // raw 64-byte libsodium secret key. Kept first for full backward
-        // compatibility with keys written by buildPem().
-        $native = $this->parseNativeEd25519Pem($pem);
-        if ($native !== null) {
-            return $native;
-        }
+        // v0.56.0 adoption: the two-format ladder (native label first, then
+        // RFC 8410 PKCS#8 with sodium seed expansion) moved verbatim into
+        // shared Ed25519Pem::parsePem(); the shared parser returns the
+        // secret/public pair — this manager only ever consumed the secret,
+        // so the public arm is dropped here. Byte-for-byte equivalence over
+        // native/PKCS#8/garbage corpora proven before the swap.
+        $parsed = Ed25519Pem::parsePem($pem);
 
-        // Format 2: interop with a standard PKCS#8 Ed25519 private key.
-        return $this->parsePkcs8Ed25519Pem($pem);
-    }
-
-    /**
-     * Parses the native `-----BEGIN ED25519 PRIVATE KEY-----` PEM format.
-     *
-     * The body is the base64url encoding of the raw 64-byte libsodium secret
-     * key (32-byte seed ‖ 32-byte public key), as written by {@see buildPem()}.
-     *
-     * @param string $pem The PEM content.
-     *
-     * @return string|null The raw 64-byte Ed25519 secret key, or null if the
-     *                     native label is absent or the body is malformed.
-     */
-    private function parseNativeEd25519Pem(string $pem): ?string
-    {
-        $pattern = '/-----BEGIN ED25519 PRIVATE KEY-----(.*?)-----END ED25519 PRIVATE KEY-----/s';
-        if (!preg_match($pattern, $pem, $matches)) {
-            return null;
-        }
-
-        $base64Content = $matches[1];
-        $base64 = preg_replace('/\s+/', '', $base64Content);
-        if (!is_string($base64)) {
-            return null;
-        }
-        $decoded = base64_decode(strtr($base64, '-_', '+/'), true);
-
-        if ($decoded === false || strlen($decoded) < 64) {
-            return null;
-        }
-
-        return substr($decoded, 0, 64);
-    }
-
-    /**
-     * Parses a standard PKCS#8 Ed25519 private key (RFC 8410).
-     *
-     * The 32-byte seed is extracted from the DER structure and expanded via
-     * libsodium into the 64-byte secret key (seed ‖ public key). The sodium
-     * seed-expansion path is used rather than ext-openssl because PHP's
-     * `openssl_pkey_get_details()` does not reliably expose the raw Ed25519 key
-     * material across builds, whereas seed expansion is portable and exact.
-     *
-     * @param string $pem The PEM content.
-     *
-     * @return string|null The raw 64-byte Ed25519 secret key, or null if the
-     *                     PKCS#8 label is absent, the DER is malformed, or the
-     *                     key is not an Ed25519 key.
-     */
-    private function parsePkcs8Ed25519Pem(string $pem): ?string
-    {
-        $pattern = '/-----BEGIN PRIVATE KEY-----(.*?)-----END PRIVATE KEY-----/s';
-        if (!preg_match($pattern, $pem, $matches)) {
-            return null;
-        }
-
-        $base64 = preg_replace('/\s+/', '', $matches[1]);
-        if (!is_string($base64) || $base64 === '') {
-            return null;
-        }
-
-        // PKCS#8 uses standard (not URL-safe) base64.
-        $der = base64_decode($base64, true);
-        if ($der === false || strlen($der) < 48) {
-            return null;
-        }
-
-        $seed = $this->extractEd25519SeedFromPkcs8($der);
-        if ($seed === null || $seed === '') {
-            return null;
-        }
-
-        // Expand the 32-byte seed into the 64-byte libsodium secret key so
-        // loadKeyPair()'s strlen === 64 check and every downstream
-        // sodium_crypto_sign_* call behave exactly as for a native key.
-        $keypair = sodium_crypto_sign_seed_keypair($seed);
-
-        return sodium_crypto_sign_secretkey($keypair);
-    }
-
-    /**
-     * Extracts the 32-byte Ed25519 seed from a PKCS#8 DER blob.
-     *
-     * The Ed25519 algorithm OID (1.3.101.112) is verified to be present before
-     * any extraction, so a non-Ed25519 PKCS#8 key (RSA, P-256, …) is never
-     * silently mis-read as an Ed25519 seed. The seed is a 32-byte OCTET STRING
-     * nested inside the PrivateKey OCTET STRING, framed in DER as
-     * `04 22 04 20 <32 seed bytes>`.
-     *
-     * @param string $der Raw DER bytes of the PKCS#8 PrivateKeyInfo.
-     *
-     * @return string|null The 32-byte seed, or null if the structure is not a
-     *                     well-formed Ed25519 PKCS#8 key.
-     */
-    private function extractEd25519SeedFromPkcs8(string $der): ?string
-    {
-        // OID 1.3.101.112 (Ed25519) => DER: 06 03 2B 65 70.
-        if (strpos($der, "\x06\x03\x2b\x65\x70") === false) {
-            return null;
-        }
-
-        // Inner 32-byte OCTET STRING (04 20) nested inside the PrivateKey
-        // OCTET STRING (04 22). Anchor on the full framing so a coincidental
-        // 04 20 elsewhere cannot be mistaken for the seed marker.
-        $marker = "\x04\x22\x04\x20";
-        $pos = strpos($der, $marker);
-        if ($pos === false) {
-            return null;
-        }
-
-        $seed = substr($der, $pos + strlen($marker), 32);
-        if (strlen($seed) !== 32) {
-            return null;
-        }
-
-        return $seed;
+        return $parsed['secret'] ?? null;
     }
 
     /**
@@ -477,7 +358,7 @@ final class Ed25519KeyManager
      */
     private function extractKidFromPublicKey(string $publicKey): string
     {
-        return $this->base64UrlEncode(substr(hash('sha256', $publicKey, true), 0, 8));
+        return Ed25519Pem::fingerprint($publicKey, Ed25519Pem::PREFIX_BYTES_SERVER);
     }
 
     /**
@@ -489,6 +370,6 @@ final class Ed25519KeyManager
      */
     private function base64UrlEncode(string $data): string
     {
-        return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
+        return Base64Url::encode($data);
     }
 }

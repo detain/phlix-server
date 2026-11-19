@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Integrations\Trakt;
 
 use Phlix\Media\Library\MediaItem;
+use Phlix\Shared\Security\Pkce as SharedPkce;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -100,7 +101,7 @@ class TraktApi
      */
     public function getAuthUrl(string $state, string $codeVerifier, ?string $redirectUri = null): string
     {
-        $codeChallenge = $this->base64UrlEncode(hash('sha256', $codeVerifier, true));
+        $codeChallenge = SharedPkce::challengeFor($codeVerifier);
         $params = [
             'client_id' => $this->clientId,
             'redirect_uri' => $redirectUri ?? $this->getRedirectUri(),
@@ -927,17 +928,5 @@ class TraktApi
         }
 
         return [];
-    }
-
-    /**
-     * Base64url encode without padding.
-     *
-     * @param string $data Raw bytes to encode
-     *
-     * @return string Base64url encoded string
-     */
-    private function base64UrlEncode(string $data): string
-    {
-        return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
     }
 }

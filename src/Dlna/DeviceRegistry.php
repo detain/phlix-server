@@ -15,6 +15,7 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Net\LanEndpointGuard;
+use Phlix\Common\Net\SsrfGuard;
 
 /**
  * Device Registry for DLNA/UPnP Device Discovery and Management.
@@ -722,11 +723,7 @@ class DeviceRegistry
                 if (is_array($addresses)) {
                     $this->localAddresses = array_values(array_filter(
                         $addresses,
-                        static fn(string $addr): bool => filter_var(
-                            $addr,
-                            FILTER_VALIDATE_IP,
-                            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
-                        ) !== false
+                        static fn(string $addr): bool => self::advertisedAddressAllowed($addr)
                     ));
                 }
             }
@@ -740,6 +737,41 @@ class DeviceRegistry
         $this->logger->debug('Local addresses discovered', [
             'addresses' => $this->localAddresses,
         ]);
+    }
+
+    /**
+     * SRV-3.2 (bug #13): the hostname-fallback selection rule.
+     *
+     * ## SITE SEMANTICS (read before "tightening" this)
+     * Branch 1 of discoverLocalAddresses() — the machine's own route source
+     * from `ip route get` — is INTENTIONALLY unfiltered: DLNA/SSDP is a
+     * LAN-serving protocol and the route source IS the address SSDP
+     * responses advertise. Filtering it would break legitimate LAN serving,
+     * the opposite of this fix. Branch 3's `0.0.0.0` sentinel is a bind
+     * wildcard, not an advertised unicast. Only this branch-2 fallback ever
+     * consulted a private-range filter, and it keeps its raw verdicts
+     * byte-identical — with ONE addition: an address PHP's filter refuses as
+     * private/reserved is re-asked of SsrfGuard, so the operator's
+     * PHLIX_SSRF_ALLOW_CIDRS override (env, or the setAllowedCidrs() seam)
+     * is honored here exactly as it is at every other estate SSRF site.
+     * Valid literals PHP refuses for MALFORMEDNESS reasons (never a
+     * gethostbynamel output today, pinned anyway) stay refused — the knob
+     * widens range selection, never literal acceptance. One deny vocabulary
+     * (SsrfGuard); zero env parsing duplicated here.
+     */
+    private static function advertisedAddressAllowed(string $address): bool
+    {
+        if (filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) {
+            return true;
+        }
+
+        if (filter_var($address, FILTER_VALIDATE_IP) === false) {
+            return false;
+        }
+
+        $url = str_contains($address, ':') ? "http://[{$address}]/" : "http://{$address}/";
+
+        return SsrfGuard::isPublicUrl($url);
     }
 
     /**

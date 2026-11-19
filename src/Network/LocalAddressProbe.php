@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Network;
 
+use Phlix\Common\Net\SsrfGuard;
+
 /**
  * The one home of local-address discovery for the port-forwarding clients — SH-007.
  *
@@ -99,6 +101,12 @@ final class LocalAddressProbe
     /**
      * The interface-table leg: first non-private, non-reserved unicast address.
      *
+     * The selection rule is the raw PHP filter UNION the operator's
+     * PHLIX_SSRF_ALLOW_CIDRS allowlist (SsrfGuard vocabulary): an address
+     * selectable today stays selectable, and an internal range the operator
+     * opted into becomes selectable too. Nothing else changes — without the
+     * knob this is byte-for-byte the old private/reserved refusal.
+     *
      * @param array<array-key, mixed>|null $interfaces Table in
      *        `net_get_interfaces()` shape; null reads this machine's real
      *        table. An injected table is the documented test seam for the
@@ -121,13 +129,54 @@ final class LocalAddressProbe
                     continue;
                 }
                 $ip = $addr['address'];
-                if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+                if (self::interfaceAddressUsable($ip)) {
                     return $ip;
                 }
             }
         }
 
         return null;
+    }
+
+    /**
+     * SRV-3.2 (bug #13): the one address-selection rule of the interface leg.
+     *
+     * ## THE UNION, AND WHY IT ADDS NOTHING BUT THE OPERATOR KNOB
+     *  1. The raw PHP filter is consulted FIRST and unchanged: any address it
+     *     accepts (public, plus the measured leniency cases it wrongly calls
+     *     public — 100.64.0.0/10 CGNAT is the pinned example) is usable
+     *     exactly as before. This keeps the site byte-identical for every
+     *     non-allowlisted input and short-circuits the common path.
+     *  2. An address PHP rejects as a NON-LITERAL (IPv6 zone id `fe80::1%lo`,
+     *     bracketed host `[2001:db8::1]`, junk, empty) stays rejected even
+     *     under a widest-possible allowlist — the operator knob widens
+     *     address RANGE selection, it never resurrects malformed literals
+     *     this method has always refused (pinned truth table: tests).
+     *  3. A valid literal PHP refuses for being private/reserved is asked
+     *     once of SsrfGuard: `isPublicUrl()` honors both the environment
+     *     PHLIX_SSRF_ALLOW_CIDRS override and the setAllowedCidrs() test
+     *     seam, and on an IP literal it resolves without DNS. So an operator
+     *     who opts 192.168.1.0/24 in can select it for port-forwarding;
+     *     without the knob, private addresses remain unselectable — which IS
+     *     this probe's WAN-facing contract (it feeds NAT-PMP/STUN/UPnP: the
+     *     WAN-side address of this host), preserved verbatim.
+     *
+     * One deny vocabulary (SsrfGuard) across the estate; zero env parsing
+     * duplicated here.
+     */
+    private static function interfaceAddressUsable(string $ip): bool
+    {
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            return true;
+        }
+
+        if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
+            return false;
+        }
+
+        $url = str_contains($ip, ':') ? "http://[{$ip}]/" : "http://{$ip}/";
+
+        return SsrfGuard::isPublicUrl($url);
     }
 
     /**

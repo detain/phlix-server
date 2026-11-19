@@ -13,6 +13,7 @@ namespace Phlix\Tests\Unit\Network;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Phlix\Common\Net\SsrfGuard;
 use Phlix\Network\LocalAddressProbe;
 use ReflectionMethod;
 
@@ -53,6 +54,15 @@ use ReflectionMethod;
  */
 class LocalAddressProbeTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        // SRV-3.2: the operator-knob pins mutate SsrfGuard global state and
+        // the environment — reset so the default verdict tables above stay
+        // default in every execution order.
+        SsrfGuard::reset();
+        putenv('PHLIX_SSRF_ALLOW_CIDRS');
+    }
+
     /**
      * The edge shapes named in the SH-007 brief, as a truth table.
      *
@@ -158,6 +168,61 @@ class LocalAddressProbeTest extends TestCase
     public function test_an_empty_injected_table_finds_nothing(): void
     {
         $this->assertNull(LocalAddressProbe::localInterfaceAddress([]));
+    }
+
+    /**
+     * SRV-3.2 (bug #13): the operator PHLIX_SSRF_ALLOW_CIDRS override is
+     * honored at this site — a private address in an opted-in range becomes
+     * selectable. RED until the scan routes filter refusals through SsrfGuard.
+     */
+    public function test_the_operator_ssrf_allowlist_selects_an_opted_in_private_address(): void
+    {
+        SsrfGuard::setAllowedCidrs(['192.168.1.0/24']);
+        $table = [['unicast' => [['address' => '192.168.1.5']]]];
+
+        $this->assertSame('192.168.1.5', LocalAddressProbe::localInterfaceAddress($table));
+    }
+
+    /**
+     * SRV-3.2: the same override via the ENVIRONMENT (the documented operator
+     * knob), not only the boot seam — both entry points behave alike.
+     */
+    public function test_the_operator_ssrf_allowlist_env_override_is_respected(): void
+    {
+        putenv('PHLIX_SSRF_ALLOW_CIDRS=10.20.0.0/16');
+        $table = [['unicast' => [['address' => '10.20.30.40']]]];
+
+        $this->assertSame('10.20.30.40', LocalAddressProbe::localInterfaceAddress($table));
+    }
+
+    /**
+     * SRV-3.2 guardrail: the knob widens range selection, never literal
+     * acceptance — zone ids, bracketed hosts and junk stay refused even under
+     * allowlists that cover the ranges those strings merely resemble.
+     */
+    public function test_the_allowlist_never_resurrects_non_literal_addresses(): void
+    {
+        SsrfGuard::setAllowedCidrs(['fe80::/10', '127.0.0.0/8']);
+        foreach (['fe80::1%lo', '[2001:db8::1]', 'not-an-ip', ''] as $address) {
+            $table = [['unicast' => [['address' => $address]]]];
+            $this->assertNull(
+                LocalAddressProbe::localInterfaceAddress($table),
+                $address . ' is not an address literal; no allowlist makes it selectable'
+            );
+        }
+    }
+
+    /**
+     * SRV-3.2 order law: the override ADDS candidates, it never reorders the
+     * scan — an already-selectable public address still wins over a later
+     * allowlisted private one.
+     */
+    public function test_the_override_adds_without_reordering_the_first_acceptable_rule(): void
+    {
+        SsrfGuard::setAllowedCidrs(['192.168.1.0/24']);
+        $table = [['unicast' => [['address' => '198.51.100.7'], ['address' => '192.168.1.5']]]];
+
+        $this->assertSame('198.51.100.7', LocalAddressProbe::localInterfaceAddress($table));
     }
 
     public function test_in_coroutine_is_false_on_the_main_stack(): void

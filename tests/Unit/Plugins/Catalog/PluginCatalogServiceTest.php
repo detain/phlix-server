@@ -187,6 +187,39 @@ final class PluginCatalogServiceTest extends TestCase
         $this->service($this->settings($store))->fetchCatalog('https://metadata.example/plugins.json');
     }
 
+    /**
+     * SRV-3.2 (bug #13) composition pin — GREEN TODAY BY DESIGN of this site:
+     * requireHttpUrl() was already SsrfGuard::assertPublicUrl() (E-03's
+     * "hand-rolled checker" citation is stale). It is pinned because this is
+     * the reference behavior the LocalAddressProbe/DeviceRegistry sites were
+     * routed to: the operator CIDR allowlist is honored with zero local
+     * checks, and an IP-literal URL never consults the resolver.
+     */
+    public function test_add_source_honors_the_operator_cidr_override(): void
+    {
+        SsrfGuard::setAllowedCidrs(['10.10.0.0/24']);
+        $store = [];
+
+        $result = $this->service($this->settings($store))->addSource('http://10.10.0.5/plugins.json');
+
+        self::assertContains('http://10.10.0.5/plugins.json', $result);
+        self::assertSame(['http://10.10.0.5/plugins.json'], $store[PluginCatalogService::KEY_SOURCES]);
+    }
+
+    /**
+     * SRV-3.2 guardrail pin (green today): CGNAT 100.64.0.0/10 is NOT covered
+     * by PHP's raw NO_PRIV/NO_RES filter — the measured leniency documented
+     * and pinned in LocalAddressProbeTest — so this rejection rests entirely
+     * on SsrfGuard's explicit deny vocabulary. If the site ever regresses to
+     * a raw filter, this reddens instead of silently widening SSRF exposure.
+     */
+    public function test_add_source_rejects_cgnat_literal_the_php_filter_calls_public(): void
+    {
+        $store = [];
+        $this->expectException(\InvalidArgumentException::class);
+        $this->service($this->settings($store))->addSource('http://100.64.0.1/catalog.json');
+    }
+
     public function test_remove_source_drops_the_extra(): void
     {
         $store = [

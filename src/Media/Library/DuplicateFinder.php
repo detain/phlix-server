@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library;
 
+use Phlix\Common\Util\RowMap;
+
 /**
  * Groups top-level media items that are in fact the SAME show/film but were
  * persisted as separate rows — the "100 episodes + 1 episode" symptom that the
@@ -113,7 +115,11 @@ final class DuplicateFinder
         do {
             $batch = $this->items->getTopLevelByLibrary($libraryId, $this->batchSize, $offset);
             foreach ($batch as $row) {
-                $rowType = isset($row['type']) && is_string($row['type']) ? $row['type'] : '';
+                // E-09 cohort 5a: RowMap fold (isset&&is_string leg value-table
+                // identical to str's; defaults transcribed). Pinned by the
+                // legacy-oracle vectors in
+                // tests/Unit/Media/Library/DuplicateFinderTest.php.
+                $rowType = RowMap::str($row, 'type', '');
                 if ($rowType === '') {
                     continue;
                 }
@@ -235,7 +241,7 @@ final class DuplicateFinder
             return $stored;
         }
 
-        $title = isset($row['name']) && is_string($row['name']) ? $row['name'] : '';
+        $title = RowMap::str($row, 'name', '');
         $year = isset($metadata['year']) && is_numeric($metadata['year']) ? (int) $metadata['year'] : null;
 
         return CanonicalKey::forItem($title, $year, $this->externalIdsOf($metadata));
@@ -274,6 +280,6 @@ final class DuplicateFinder
      */
     private function idOf(array $row): string
     {
-        return isset($row['id']) && is_string($row['id']) ? $row['id'] : '';
+        return RowMap::str($row, 'id', '');
     }
 }

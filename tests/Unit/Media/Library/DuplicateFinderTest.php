@@ -346,6 +346,87 @@ class DuplicateFinderTest extends TestCase
         $this->assertSame('aaa', $groups[0]['primary']['id'], 'tie → smallest id wins even when it is later');
         $this->assertSame('zzz', $groups[0]['duplicates'][0]['id']);
     }
+
+
+    public function testRowDecodeLegsAreByteIdenticalToLegacyAcrossVectors(): void
+    {
+        $finder = new DuplicateFinder($this->createMock(ItemRepository::class));
+        $idOf = new \ReflectionMethod(DuplicateFinder::class, 'idOf');
+        $idOf->setAccessible(true);
+        $keyFor = new \ReflectionMethod(DuplicateFinder::class, 'canonicalKeyFor');
+        $keyFor->setAccessible(true);
+
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['id' => 'a', 'name' => 'Movie', 'metadata' => ['year' => 2001]],
+            ['id' => 7, 'name' => 'Movie', 'metadata' => ['year' => '2001']],
+            ['id' => null, 'name' => null, 'metadata' => []],
+            ['name' => 'x', 'metadata' => ['canonical_key' => 'stored-key']],
+            ['id' => 'b', 'metadata' => ['canonical_key' => '', 'year' => 'abc']],
+            ['id' => 'c', 'name' => ['bad'], 'metadata' => 'not-array'],
+        ];
+
+        foreach ($vectors as $row) {
+            $legacyId = isset($row['id']) && is_string($row['id']) ? $row['id'] : '';
+            $this->assertSame($legacyId, $idOf->invoke($finder, $row));
+
+            $metadata = isset($row['metadata']) && is_array($row['metadata']) ? $row['metadata'] : [];
+            $stored = $metadata['canonical_key'] ?? null;
+            if (is_string($stored) && $stored !== '') {
+                $legacyKey = $stored;
+            } else {
+                $title = isset($row['name']) && is_string($row['name']) ? $row['name'] : '';
+                $year = isset($metadata['year']) && is_numeric($metadata['year'])
+                    ? (int) $metadata['year']
+                    : null;
+                $legacyKey = \Phlix\Media\Library\CanonicalKey::forItem(
+                    $title,
+                    $year,
+                    $this->legacyExternalIdsForC5a($metadata)
+                );
+            }
+            $this->assertSame($legacyKey, $keyFor->invoke($finder, $row));
+        }
+
+        $base = ['id' => 'base-1', 'type' => 'series', 'name' => 'Dup',
+            'metadata' => ['canonical_key' => 'k1']];
+        $typeVectors = [
+            [['id' => 'v-1', 'name' => 'Dup', 'type' => 'series',
+                'metadata' => ['canonical_key' => 'k1']], 1],
+            [['id' => 'v-2', 'name' => 'Dup', 'type' => 7,
+                'metadata' => ['canonical_key' => 'k1']], 0],
+            [['id' => 'v-3', 'name' => 'Dup', 'metadata' => ['canonical_key' => 'k1']], 0],
+            [['id' => 'v-4', 'name' => 'Dup', 'type' => 'movie',
+                'metadata' => ['canonical_key' => 'k1']], 0],
+        ];
+        foreach ($typeVectors as [$extra, $expect]) {
+            $libRepo = $this->createMock(ItemRepository::class);
+            $libRepo->method('getTopLevelByLibrary')->willReturn([$base, $extra]);
+            $groups = (new DuplicateFinder($libRepo))->findForLibrary('lib-1');
+            $this->assertCount($expect, $groups);
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     *
+     * @return array<string, string|int|null>
+     */
+    private function legacyExternalIdsForC5a(array $metadata): array
+    {
+        $external = isset($metadata['external_ids']) && is_array($metadata['external_ids'])
+            ? $metadata['external_ids']
+            : [];
+        $out = [];
+        foreach (['imdb', 'tmdb'] as $provider) {
+            $value = $external[$provider] ?? ($metadata[$provider . '_id'] ?? null);
+            if (is_string($value) || is_int($value)) {
+                $out[$provider] = $value;
+            }
+        }
+
+        return $out;
+    }
 }
 
 

@@ -1292,7 +1292,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // rotated here: their deltas belong to 04ad2870's Token migration, 651a6bfe's rateLimited
     // seam, and later sibling Request-write work. SRV-MICRO touches zero Request reads/writes in
     // any commit of this lane, so rotating those legs would launder other lanes' censuses.
-    private const EXPECTED_PHP_FILES = 2171;
+    //
+    // Staircase continued — measured atop c150e3f4 (SRV-ROWMAP, E-09 pilot, commit 1 of 4).
+    // +2 c150e3f4 (SRV-SCRATCHDB H-08): tests/Support/Database/UsesScratchDatabase.php +
+    //   tests/Unit/Support/UsesScratchDatabaseTest.php — landed without rotating this pin;
+    //   attributed, not absorbed (the lane's header above already anticipated its step).
+    // +1 (SRV-ROWMAP's own): tests/Unit/Common/Util/RowMapAccessorsTest.php — the E-09
+    //   value-coercion convention table joins the corpus.
+    // Pinned to the TRACKED set after this commit: git ls-files '*.php' = 2174. The six
+    // untracked src/Common/Process WIP files of the live SRV-PROCESS lane remain excluded
+    // (disk inflation, not tracked truth — same discipline as every step above). Reads/writes
+    // legs stay RED: SRV-ROWMAP speaks on zero Request roots.
+    private const EXPECTED_PHP_FILES = 2174;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

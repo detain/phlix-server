@@ -15,6 +15,7 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Metadata\Dto\MetadataValue;
+use Phlix\Media\Metadata\Tmdb\ImageUrl;
 
 /**
  * TmdbProvider fetches movie metadata from The Movie Database (TMDB) API.
@@ -55,9 +56,6 @@ class TmdbProvider implements MetadataProviderInterface
 
     /** @var MetadataHttpClient HTTP client for TMDB API requests */
     private MetadataHttpClient $http;
-
-    /** @var string Base URL for TMDB image CDN */
-    private string $imageBaseUrl;
 
     /** @var string TMDB API v3 authentication key (empty when unconfigured). */
     private string $apiKey;
@@ -125,7 +123,6 @@ class TmdbProvider implements MetadataProviderInterface
             'https://api.themoviedb.org/3',
             $apiKey
         );
-        $this->imageBaseUrl = 'https://image.tmdb.org/t/p';
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::MEDIA);
         $this->apiKeyResolver = $apiKeyResolver;
     }
@@ -1124,10 +1121,7 @@ class TmdbProvider implements MetadataProviderInterface
      */
     private function profileUrl(?string $path): ?string
     {
-        if ($path === null || $path === '') {
-            return null;
-        }
-        return $this->imageBaseUrl . '/w185' . $path;
+        return ImageUrl::buildOrNull('w185', $path);
     }
 
     /**
@@ -1138,10 +1132,7 @@ class TmdbProvider implements MetadataProviderInterface
      */
     private function logoUrl(?string $path): ?string
     {
-        if ($path === null || $path === '') {
-            return null;
-        }
-        return $this->imageBaseUrl . '/w185' . $path;
+        return ImageUrl::buildOrNull('w185', $path);
     }
 
     /**
@@ -1447,8 +1438,8 @@ class TmdbProvider implements MetadataProviderInterface
         foreach ($images as $image) {
             $filePath = MetadataValue::asString($image['file_path'] ?? null);
             $output[] = [
-                'url' => $this->imageBaseUrl . '/w500' . $filePath,
-                'url_original' => $this->imageBaseUrl . '/original' . $filePath,
+                'url' => ImageUrl::build('w500', $filePath),
+                'url_original' => ImageUrl::build('original', $filePath),
                 'width' => MetadataValue::asInt($image['width'] ?? null),
                 'height' => MetadataValue::asInt($image['height'] ?? null),
                 'language' => MetadataValue::asNullableString($image['iso_639_1'] ?? null),
@@ -1736,7 +1727,7 @@ class TmdbProvider implements MetadataProviderInterface
 
         return [
             'logo_path' => $chosen['path'],
-            'logo_url' => $this->imageBaseUrl . '/original' . $chosen['path'],
+            'logo_url' => ImageUrl::build('original', $chosen['path']),
         ];
     }
 

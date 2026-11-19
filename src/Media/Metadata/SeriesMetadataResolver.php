@@ -20,6 +20,7 @@ use Phlix\Media\Metadata\Resolution\PluginSourceConsultation;
 use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Metadata\Resolution\PriorityFieldResolver;
 use Phlix\Media\Metadata\Resolution\SourceRegistry;
+use Phlix\Media\Metadata\Tmdb\ImageUrl;
 use Throwable;
 
 /**
@@ -59,9 +60,6 @@ use Throwable;
  */
 class SeriesMetadataResolver
 {
-    /** @var string Base URL for the TMDB image CDN. */
-    private string $imageBaseUrl = 'https://image.tmdb.org/t/p';
-
     /** @var PriorityConfig Effective per-media-type source priority. */
     private PriorityConfig $priorityConfig;
 
@@ -587,11 +585,7 @@ class SeriesMetadataResolver
 
     private function imageUrl(mixed $path): ?string
     {
-        $clean = MetadataValue::asNullableString($path);
-        if ($clean === null) {
-            return null;
-        }
-        return $this->imageBaseUrl . '/w500' . $clean;
+        return ImageUrl::buildMixedOrNull('w500', $path);
     }
 
     /**

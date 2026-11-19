@@ -38,9 +38,6 @@ use Phlix\Media\Metadata\Dto\MetadataValue;
  */
 final class FieldMappers
 {
-    /** TMDB image CDN base (image PATHs are converted to w500/original URLs). */
-    private const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p';
-
     /** One TMDB runtime tick-per-minute factor (minutes * 600000000 = ticks). */
     private const TICKS_PER_MINUTE = 600000000;
 
@@ -398,11 +395,5 @@ final class FieldMappers
             }
         }
         return null;
-    }
-
-    /** TMDB image base accessor (used by the Builder). */
-    public static function tmdbImageBase(): string
-    {
-        return self::TMDB_IMAGE_BASE;
     }
 }

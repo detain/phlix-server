@@ -21,6 +21,7 @@ use Phlix\Media\Metadata\Exception\TmdbUnconfiguredException;
 use Phlix\Media\Metadata\Resolution\LibraryPriorityResolver;
 use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Metadata\ThemeMusic\ThemeMusicResolver;
+use Phlix\Media\Metadata\Tmdb\ImageUrl;
 use Phlix\Media\Storage\ArtworkDownloadPolicy;
 use Phlix\Media\Storage\ArtworkStorage;
 use Throwable;
@@ -97,9 +98,6 @@ class LibraryMetadataMatcher
 
     /** @var StructuredLogger Logger for the MEDIA channel. */
     private StructuredLogger $logger;
-
-    /** @var string Base URL for the TMDB image CDN (poster/backdrop URL building). */
-    private string $imageBaseUrl = 'https://image.tmdb.org/t/p';
 
     /**
      * Effective trailing-edition noise-suffix list applied to a parsed title
@@ -1287,11 +1285,7 @@ class LibraryMetadataMatcher
      */
     private function imageUrl(mixed $path): ?string
     {
-        $clean = MetadataValue::asNullableString($path);
-        if ($clean === null) {
-            return null;
-        }
-        return $this->imageBaseUrl . '/w500' . $clean;
+        return ImageUrl::buildMixedOrNull('w500', $path);
     }
 
     /**

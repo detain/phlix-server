@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Metadata\Resolution;
 
 use Phlix\Media\Metadata\Dto\MetadataValue;
+use Phlix\Media\Metadata\Tmdb\ImageUrl;
 
 /**
  * Mutable accumulator that the {@see FieldMappers} factories use to assemble a
@@ -158,7 +159,7 @@ final class Builder
         }
         $fragment = MetadataValue::asNullableString($path);
         if ($fragment !== null) {
-            $this->set($field, FieldMappers::tmdbImageBase() . '/w500' . $fragment);
+            $this->set($field, ImageUrl::build('w500', $fragment));
         }
     }
 

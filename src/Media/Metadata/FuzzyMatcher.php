@@ -15,6 +15,7 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Metadata\Dto\MetadataValue;
+use Phlix\Media\Metadata\Tmdb\ImageUrl;
 use Workerman\MySQL\Connection;
 
 /**
@@ -369,10 +370,7 @@ final class FuzzyMatcher
      */
     private function imageUrl(?string $path): ?string
     {
-        if (!is_string($path) || $path === '') {
-            return null;
-        }
-        return 'https://image.tmdb.org/t/p/w500' . $path;
+        return ImageUrl::buildOrNull('w500', $path);
     }
 
     /**

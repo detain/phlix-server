@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Media\Library\Dto;
 use Phlix\Media\Library\Dto\LibraryRow;
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
+use ReflectionMethod;
 
 /**
  * Smoke tests for the LibraryRow DTO.
@@ -369,5 +370,53 @@ class LibraryRowTest extends TestCase
             'options' => '{"autoCollections":{"enabled":false}}',
         ])->toArray();
         $this->assertSame(['enabled' => false], $explicitlyOff['auto_collections']);
+    }
+
+    /**
+     * E-09 cohort 5a: pins the RowMap fold of LibraryRow::fromRow against a
+     * verbatim transcription of the pre-fold ??-guarded strict ternaries plus
+     * the untouched paths/options decode legs (ca91c293 shape).
+     */
+    public function testFromRowDecodeIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        $decodePaths = new ReflectionMethod(LibraryRow::class, 'decodePaths');
+        $decodePaths->setAccessible(true);
+        $decodeOptions = new ReflectionMethod(LibraryRow::class, 'decodeOptions');
+        $decodeOptions->setAccessible(true);
+
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['id' => 'lib-1', 'name' => 'Movies', 'type' => 'movie'],
+            ['id' => null, 'name' => 7, 'type' => 1.5],
+            ['id' => '', 'name' => '', 'type' => true],
+            ['paths' => '["/a","/b"]', 'options' => '{"k":1}'],
+            ['paths' => ['x'], 'options' => 'not-json'],
+            ['name' => 'Partial only'],
+            [],
+        ];
+
+        foreach ($vectors as $row) {
+            $decoded = LibraryRow::fromRow($row);
+
+            // Verbatim from the ca91c293 tree.
+            $id = is_string($row['id'] ?? null) ? $row['id'] : '';
+            $name = is_string($row['name'] ?? null) ? $row['name'] : '';
+            $type = is_string($row['type'] ?? null) ? $row['type'] : '';
+            /** @var array<string, mixed> $paths */
+            $paths = $decodePaths->invoke(null, $row['paths'] ?? null);
+            /** @var array<string, mixed> $options */
+            $options = $decodeOptions->invoke(null, $row['options'] ?? null);
+            $raw = $row;
+            $raw['paths'] = $paths;
+            $raw['options'] = $options;
+            $legacy = new LibraryRow($id, $name, $type, $paths, $options, $raw);
+
+            $this->assertSame($legacy->id, $decoded->id);
+            $this->assertSame($legacy->name, $decoded->name);
+            $this->assertSame($legacy->type, $decoded->type);
+            $this->assertSame($legacy->paths, $decoded->paths);
+            $this->assertSame($legacy->options, $decoded->options);
+            $this->assertSame($legacy->toArray(), $decoded->toArray());
+        }
     }
 }

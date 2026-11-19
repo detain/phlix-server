@@ -178,7 +178,13 @@ final class RelayMessageFramerWireCorpusTest extends TestCase
 
     /**
      * The corpus payload set. ORDER AND CONTENT are part of the cross-repo
-     * contract — mirror exactly in the hub and shared twin tests.
+     * contract — mirror exactly in the hub and shared twin tests. NOTE: the
+     * truncation bounds 65534/65535 exceed their sources and substr cannot
+     * extend a string, so the last two payloads measure 512B/768B (ramp x2
+     * and x3), NOT the uint16 caps. Cap-boundary coverage lives in the
+     * dedicated max-size/oversized-rejection tests below; changing these
+     * bounds would change the pinned digest and belongs to the three-file
+     * disclosure ritual, never to a labels fix.
      *
      * @return list<string>
      */
@@ -192,8 +198,8 @@ final class RelayMessageFramerWireCorpusTest extends TestCase
             "\x00\xFF\x80\x01\r\n",               // binary-unsafe: NUL, high-bit, CR, LF
             $ramp,                                // 256 bytes (length crosses one byte)
             $ramp . substr($ramp, 0, 255),         // 511 bytes
-            substr($ramp . $ramp, 0, 65534),       // cap minus one
-            substr($ramp . $ramp . $ramp, 0, 65535), // cap exactly (max size)
+            substr($ramp . $ramp, 0, 65534),       // 512 bytes (ramp x2 — see docblock)
+            substr($ramp . $ramp . $ramp, 0, 65535), // 768 bytes (ramp x3 — see docblock)
         ];
     }
 

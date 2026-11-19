@@ -9,6 +9,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Metadata;
 
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -144,8 +145,13 @@ class RatingService
 
         foreach ($rows as $row) {
             /** @var array<string, mixed> $row */
-            $score = is_numeric($row['score'] ?? null) ? (float) $row['score'] : 0.0;
-            $votes = isset($row['votes']) && is_int($row['votes']) ? $row['votes'] : 1;
+            // E-09 cohort 5a: RowMap fold (floatFromNumeric/int defaults
+            // transcribed verbatim — the votes fallback is 1, not 0; the
+            // isset&&is_int leg is value-table identical to int()'s). Pinned
+            // by the legacy-oracle vectors in
+            // tests/Unit/Media/Metadata/LibraryMetadataMatcherPluginRatingsTest.php.
+            $score = RowMap::floatFromNumeric($row, 'score', 0.0);
+            $votes = RowMap::int($row, 'votes', 1);
 
             $totalScore += $score * $votes;
             $totalWeight += $votes;
@@ -161,8 +167,7 @@ class RatingService
         /** @var array<array<string, mixed>> $rows */
         $totalVotes = array_reduce(
             $rows,
-            static fn(int $sum, array $row): int => $sum + (isset($row['votes']) && is_int($row['votes']) ?
-                $row['votes'] : 0),
+            static fn(int $sum, array $row): int => $sum + RowMap::int(RowMap::fromMixed($row), 'votes', 0),
             0
         );
 

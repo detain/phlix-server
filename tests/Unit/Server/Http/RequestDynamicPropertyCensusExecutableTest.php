@@ -1414,7 +1414,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   rotated READS to 517 and WRITES to 1315, and the full class is GREEN
     //   at tip (OK 6 tests, 7 assertions). 'UNROTATED / zero own-delta' stays
     //   true of this diff (staircase rows + the 2206→2207 bump only).
-    private const EXPECTED_PHP_FILES = 2207;
+    // Staircase continued -- TXMUTEX-A r2 T1 (real-driver KILL-mid-tx leg,
+    // r1 cure, reviewer MINOR-1). +1 mine: tests/Integration/Common/
+    //   Database/PhlixMySQLConnectionGoneAwayRealDbTest.php — 2006 through
+    //   the live mysqld into execute(): not-retried refusal wording, poison
+    //   mark, stale-commit refusal, server-side-rollback counter-proof and
+    //   recovery (UsesScratchDatabase two-connection venue; red-at-parent
+    //   proven by disabling the arm in-tree, gate logs
+    //   TXMUTEX-r2-A1srv-realdb-{parent-red,green}.log; measured pre-rotation
+    //   red 2208-vs-2207 in TXMUTEX-r2-census-prerot.log, sole failure).
+    //   Reads/writes legs untouched: zero own-delta (reads 517 / writes 1318
+    //   are the owning cohorts' landed truth; this bump is file-count only).
+    private const EXPECTED_PHP_FILES = 2208;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

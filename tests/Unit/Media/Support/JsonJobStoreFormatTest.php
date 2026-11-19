@@ -17,6 +17,7 @@ use Phlix\Media\Metadata\Writer\MetadataWriteJob;
 use Phlix\Media\Metadata\Writer\MetadataWriteJobStore;
 use Phlix\Media\SimilarityJob;
 use Phlix\Media\SimilarityJobStore;
+use Phlix\Media\Support\JsonJobStore;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -159,12 +160,53 @@ final class JsonJobStoreFormatTest extends TestCase
         return (string) $files[0];
     }
 
-    private function maxQueueSizeOf(SimilarityJobStore|CollectionJobStore|MetadataWriteJobStore $store): int
+    /**
+     * The bound the eviction leg must honour. Post-fold this is the BASE's own
+     * private MAX_QUEUE_SIZE (single source); the fold-census test below pins
+     * that the concrete stores re-declare neither the bound nor the extension.
+     */
+    private function maxQueueSize(): int
     {
-        $constant = (new \ReflectionClass($store))->getReflectionConstant('MAX_QUEUE_SIZE');
-        $this->assertNotFalse($constant, 'each store keeps its own private MAX_QUEUE_SIZE');
+        $constant = (new \ReflectionClass(JsonJobStore::class))->getReflectionConstant('MAX_QUEUE_SIZE');
+        $this->assertNotFalse($constant, 'the base declares MAX_QUEUE_SIZE');
 
         return (int) $constant->getValue();
+    }
+
+    /**
+     * D-10 fold census: the format constants live on the base ONLY.
+     *
+     * PHP does not reflect a parent's PRIVATE constants through a child class,
+     * so getReflectionConstant() returning false on each concrete store is
+     * proof that the store re-declares nothing — the grammar has exactly one
+     * declaration site after the fold.
+     */
+    public function testFoldCensusTheStoresDeclareTheFormatConstantsOnTheBaseOnly(): void
+    {
+        $base = new \ReflectionClass(JsonJobStore::class);
+
+        $ext = $base->getReflectionConstant('JOB_EXT');
+        $bound = $base->getReflectionConstant('MAX_QUEUE_SIZE');
+        $this->assertNotFalse($ext);
+        $this->assertNotFalse($bound);
+        $this->assertSame('.job.json', $ext->getValue());
+        $this->assertSame(1000, $bound->getValue());
+        $this->assertTrue($ext->isPrivate(), 'the extension is base-internal');
+        $this->assertTrue($bound->isPrivate(), 'the bound is base-internal');
+        $this->assertSame(JsonJobStore::class, $ext->getDeclaringClass()->getName());
+        $this->assertSame(JsonJobStore::class, $bound->getDeclaringClass()->getName());
+
+        foreach ([self::STORE_SIMILARITY, self::STORE_COLLECTION, self::STORE_METADATA_WRITE] as $class) {
+            $store = new \ReflectionClass($class);
+            $this->assertFalse(
+                $store->getReflectionConstant('JOB_EXT'),
+                $class . ' must not re-declare the extension constant'
+            );
+            $this->assertFalse(
+                $store->getReflectionConstant('MAX_QUEUE_SIZE'),
+                $class . ' must not re-declare the queue bound'
+            );
+        }
     }
 
     /**
@@ -360,7 +402,7 @@ final class JsonJobStoreFormatTest extends TestCase
             mkdir($dir, 0755, true);
         }
 
-        $bound = $this->maxQueueSizeOf($store);
+        $bound = $this->maxQueueSize();
 
         // Fill to exactly the bound with legacy-grammar files named job-NNNN.
         // The eviction list is taken BEFORE the newcomer is written, so the

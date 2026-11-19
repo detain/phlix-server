@@ -1336,7 +1336,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // Reads/writes legs stay RED and UNROTATED (law, repeated): this lane's files
     //   contain zero $request roots (grep census: five lane files, all 0 hits).
     // Pin: 2189 tracked at stage time (git ls-files '*.php'), +1 mine = 2190.
-    private const EXPECTED_PHP_FILES = 2190;
+    //
+    // Staircase continued -- SRV-STOREFAMILIES commit 2 of 3 (the fold itself).
+    // +1 mine: src/Media/Support/JsonJobStore.php -- the single base the trio now
+    //   extends; the three stores and the format test were MODIFIED in that commit
+    //   (no further new files), the fold census test asserting base-only constants
+    //   rides with it.
+    // Pin: 2190 tracked at stage time +1 = 2191.
+    private const EXPECTED_PHP_FILES = 2191;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

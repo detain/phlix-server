@@ -245,7 +245,8 @@ class Request
             . ' Declared members: method, path, queryString, headers, query, body, rawBody, files,'
             . ' remoteIp, remotePort, protocol, bearerToken, cookies, userId, profileId, tokenSessionId,'
             . ' hubUser, pathParams.'
-            . ' Use ->body for the decoded request body, input()/has() for body+query lookups, and'
+            . ' Use ->body for the decoded request body, input()/has() for body lookups, ->query'
+            . ' (with queryString()/queryInt()/queryPageSize()) for query parameters, and'
             . ' getHeader()/getCookie() for headers and cookies. [' . self::REACHABILITY_GUARD_PROVENANCE . ']'
         );
     }

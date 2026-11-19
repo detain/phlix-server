@@ -187,4 +187,31 @@ final class RequestDynamicPropertyGuardTest extends TestCase
         $request->userId = 'user-42';
         $this->assertSame('user-42', $request->userId);
     }
+
+    /**
+     * SRV-3 (INFO-3) — message-truth pin: the guard's steering text must
+     * describe the channels as they ARE. `input()`/`has()` read the decoded
+     * BODY only (`$this->body[$key]`), so the old "body+query lookups" claim
+     * sent callers to a body-only helper for query params; the query channel
+     * is `->query` with queryString()/queryInt()/queryPageSize(). Zero
+     * behavior change — text truthfulness only, pinned so the lie cannot
+     * silently return.
+     */
+    public function testGuardMessageDescribesInputAndHasAsBodyOnly(): void
+    {
+        $request = new Request();
+
+        try {
+            /** @phpstan-ignore-next-line intentional dynamic-property read under test */
+            $value = $request->jsonBody;
+            $this->fail('Expected LogicException; got ' . var_export($value, true));
+        } catch (\LogicException $e) {
+            $message = $e->getMessage();
+        }
+
+        $this->assertStringNotContainsString('body+query', $message);
+        $this->assertMatchesRegularExpression('/input\(\)\/has\(\)[^\n]*body/s', $message);
+        $this->assertStringContainsString('->query', $message);
+        $this->assertStringContainsString('queryInt()', $message);
+    }
 }

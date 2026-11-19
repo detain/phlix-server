@@ -692,4 +692,97 @@ final class ScanJobRepositoryTest extends TestCase
         $this->assertNull($repo->startRunningIfIdle('lib-1', 'scan'));
         $this->assertSame(2, $calls);
     }
+
+    /**
+     * RED-FIRST (D-16 cure): the old detector accepted the literal digits
+     * '1213' ANYWHERE in the message — including the echoed SQL template —
+     * so a genuine duplicate-key rejection on a statement whose text merely
+     * mentions 1213 burned the one lawful retry and then died anyway. The
+     * cure reads the driver errno from the wire (errorInfo, or an actual
+     * SQLSTATE segment) and nothing else when the wire speaks.
+     */
+    public function testPayloadDigitsCannotForgeALockRetry(): void
+    {
+        $failure = new \PDOException(
+            "SQL:INSERT INTO library_scan_jobs (id, library_id, type, status) SELECT '1213', ?, ?, ? "
+            . 'SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry for key \'PRIMARY\''
+        );
+        $calls = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function () use (&$calls, $failure) {
+                $calls++;
+                throw $failure;
+            }
+        );
+
+        $repo = new ScanJobRepository($db);
+
+        $this->expectException(\PDOException::class);
+        try {
+            $repo->enqueueIfNoneActiveOfType('lib-1', 'scan');
+        } finally {
+            // Wire code 1062 is not a lock error: the single INSERT is the
+            // whole story — the old form retried (calls === 2).
+            $this->assertSame(1, $calls);
+        }
+    }
+
+    /**
+     * RED-FIRST companion (D-16 cure): a localized deadlock carries neither
+     * the English words the old belt demanded nor digits, but the wire fields
+     * are unambiguous — the retry must happen. (ServerReaper HUB-m56 law: the
+     * decision runs off wire identity; lc_messages is not a locale lottery.)
+     */
+    public function testLocalizedDeadlockRetriesOnWireIdentity(): void
+    {
+        $failure = new \PDOException('Kilit çarpışması nedeniyle işlem geri alındı');
+        $failure->errorInfo = ['40001', 1213, 'Kilit çarpışması nedeniyle işlem geri alındı'];
+
+        $calls = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function () use (&$calls, $failure) {
+                $calls++;
+                if ($calls === 1) {
+                    throw $failure;
+                }
+                return 1;
+            }
+        );
+
+        $repo = new ScanJobRepository($db);
+        $result = $repo->enqueueIfNoneActiveOfType('lib-1', 'scan');
+
+        $this->assertSame(2, $calls);
+        $this->assertTrue($result['created']);
+    }
+
+    /**
+     * Pin (strict-preservation witness): the English belt stays for the shapes
+     * the wire cannot speak for — a hand-rolled deadlock notice with no
+     * errorInfo and no SQLSTATE rendering still earns its one retry.
+     */
+    public function testEnglishPhraseBeltSurvivesForWirelessShapes(): void
+    {
+        $failure = new \PDOException('Deadlock found when trying to get lock; try restarting transaction');
+
+        $calls = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function () use (&$calls, $failure) {
+                $calls++;
+                if ($calls === 1) {
+                    throw $failure;
+                }
+                return 1;
+            }
+        );
+
+        $repo = new ScanJobRepository($db);
+        $result = $repo->enqueueIfNoneActiveOfType('lib-1', 'scan');
+
+        $this->assertSame(2, $calls);
+        $this->assertTrue($result['created']);
+    }
 }

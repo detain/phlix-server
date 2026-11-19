@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Library;
 
 use InvalidArgumentException;
+use Phlix\Common\Database\MysqlError;
 use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Uuid;
 use Workerman\MySQL\Connection;
@@ -575,9 +576,13 @@ class ScanJobRepository
      *
      * 1213 `ER_LOCK_DEADLOCK` (SQLSTATE 40001) and 1205 `ER_LOCK_WAIT_TIMEOUT` are the
      * only two errors InnoDB raises that mean "your transaction was rolled back, try
-     * again"; every other error is a real fault and must propagate. The match is on the
-     * message text as well as the code because the connection wraps PDO and rethrows
-     * with the driver code in either position depending on the failure path.
+     * again"; every other error is a real fault and must propagate. The wire code
+     * ({@see MysqlError::driverCode()} over `errorInfo`, else the rendered SQLSTATE
+     * segment) is authoritative whenever it speaks — the digits appearing in the
+     * echoed SQL text are payload, not identity, and the pre-D-16 form trusted
+     * them (red-first pinned: a literal 1213 in the statement no longer buys a
+     * retry). The English belt survives ONLY for wireless shapes (hand-rolled
+     * throwables that carry neither errorInfo nor an SQLSTATE rendering).
      *
      * @param \Throwable $e The error thrown by the INSERT.
      *
@@ -585,10 +590,13 @@ class ScanJobRepository
      */
     private function isRetryableLockError(\Throwable $e): bool
     {
-        $message = $e->getMessage();
-        if (str_contains($message, '1213') || str_contains($message, '1205')) {
-            return true;
+        $code = MysqlError::driverCode($e instanceof \PDOException ? $e->errorInfo : null)
+            ?? MysqlError::driverCode($e->getMessage());
+        if ($code !== null) {
+            return MysqlError::isDeadlock($code) || $code === MysqlError::ER_LOCK_WAIT_TIMEOUT;
         }
+
+        $message = $e->getMessage();
 
         return stripos($message, 'deadlock') !== false
             || stripos($message, 'lock wait timeout') !== false

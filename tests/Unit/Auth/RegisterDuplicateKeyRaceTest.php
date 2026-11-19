@@ -145,4 +145,96 @@ class RegisterDuplicateKeyRaceTest extends TestCase
 
         $manager->register('amy', 'amy@example.com', 'Sup3r-Secret!2026');
     }
+
+    /**
+     * Manager whose pre-checks pass and whose INSERT dies with a fully
+     * crafted PDOException (errorInfo included) — the raw-shape path the
+     * vendor re-throws untouched on the reconnect-retry leg.
+     */
+    private function racingManagerWith(\PDOException $failure): AuthManager
+    {
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings->method('getEffective')->willReturn(8);
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('usernameExists')->willReturn(false);
+        $repo->method('emailExists')->willReturn(false);
+        $repo->method('countUsers')->willReturn(0);
+        $repo->method('create')->willThrowException($failure);
+
+        return new AuthManager(
+            $repo,
+            new JwtHandler('test-secret-key-12345', 'HS256', 3600, 604800),
+            $this->createMock(AuditLogger::class),
+            $this->silentLogger(),
+            null,
+            null,
+            null,
+            null,
+            $settings
+        );
+    }
+
+    /**
+     * RED-FIRST (D-16 cure): the old detector read ONLY the message, so a
+     * wire-verified deadlock (errorInfo [40001, 1213]) whose rendered text
+     * also happens to carry the duplicate-key phrase was swallowed into a
+     * friendly signup 400 instead of propagating as the real fault it is.
+     * The cure makes driver code authoritative whenever it is present.
+     */
+    public function testWireVerifiedDeadlockIsNeverFriendliedIntoASignup400(): void
+    {
+        $failure = new \PDOException(
+            "SQL:INSERT INTO users ... SQLSTATE[40001]: Serialization failure: 1213 Deadlock found ... "
+            . "(echoed row text contained \"Duplicate entry 'bob' for key 'users.username'\")",
+            40001
+        );
+        $failure->errorInfo = ['40001', 1213, 'Deadlock found when trying to get lock'];
+        $manager = $this->racingManagerWith($failure);
+
+        $this->expectException(\PDOException::class);
+
+        $manager->register('bob', 'bob@example.com', 'Sup3r-Secret!2026');
+    }
+
+    /**
+     * Pin (strict-preservation witness): a RAW 1062 whose driver text is
+     * localized carries no English phrase for the copy selector, so it keeps
+     * the PRE-CURE verdict — the PDOException propagates verbatim. The D-16
+     * cure makes wire identity authoritative for CONTRADICTIONS (a non-1062
+     * code can no longer be friendlied); it deliberately does NOT invent a
+     * translated copy where the old form had none. Disclosed as the known
+     * lc_messages limitation of the copy belt, unchanged behavior.
+     */
+    public function testLocalizedDuplicateWithoutPhraseKeepsVerbatimPropagation(): void
+    {
+        $failure = new \PDOException(
+            "SQLSTATE[23000]: Integrity constraint violation: 1062 Çift kayıt hatası ... 'users.username'",
+            23000
+        );
+        $failure->errorInfo = ['23000', 1062, "Çift kayıt hatası for key 'users.username'"];
+        $manager = $this->racingManagerWith($failure);
+
+        $this->expectException(\PDOException::class);
+
+        $manager->register('bob', 'bob@example.com', 'Sup3r-Secret!2026');
+    }
+
+    /**
+     * Pin: the raw genuine-1062 shape with the English phrase still
+     * translates (the cure must not narrow the true-positive leg).
+     */
+    public function testRawWireDuplicateStillTranslatesToTheFriendlyCopy(): void
+    {
+        $failure = new \PDOException(
+            "SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'bob' for key 'users.email'"
+        );
+        $failure->errorInfo = ['23000', 1062, "Duplicate entry 'bob' for key 'users.email'"];
+        $manager = $this->racingManagerWith($failure);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('That email address is already in use');
+
+        $manager->register('bobby', 'bob@example.com', 'Sup3r-Secret!2026');
+    }
 }

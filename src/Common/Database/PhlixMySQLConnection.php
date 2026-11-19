@@ -254,8 +254,8 @@ class PhlixMySQLConnection extends Connection
             $this->prepareAndBind($query, $parameters);
             $this->success = $this->sQuery instanceof \PDOStatement && $this->sQuery->execute();
         } catch (\PDOException $e) {
-            $errno = (is_array($e->errorInfo) && isset($e->errorInfo[1])) ? (int) $e->errorInfo[1] : 0;
-            if ($errno === 2006 || $errno === 2013) {
+            $errno = MysqlError::driverCode($e->errorInfo) ?? 0;
+            if ($errno === MysqlError::CR_SERVER_GONE_ERROR || $errno === MysqlError::CR_SERVER_LOST) {
                 // "MySQL server has gone away" — drop the dead socket and retry once.
                 $this->closeConnection();
                 try {

@@ -1325,7 +1325,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // staged index; my two new tests are the +2). The 2180->2185 drift rode with
     // siblings' committed walks (3525bfe9 +1, b5ae02f4 +2, c50e8bb1 +1, one from
     // an earlier step's arithmetic) -- named, not absorbed; FILES green on measurement.
-    private const EXPECTED_PHP_FILES = 2187;
+    private const EXPECTED_PHP_FILES = 2189;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

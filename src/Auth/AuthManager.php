@@ -13,6 +13,7 @@ namespace Phlix\Auth;
 
 use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\Dto\UserRow;
+use Phlix\Common\Database\MysqlError;
 use Phlix\Shared\Events\Auth\UserCreated;
 use Phlix\Shared\Events\Auth\UserLoggedIn;
 use Phlix\Shared\Events\Auth\UserLoggedOut;
@@ -655,17 +656,40 @@ class AuthManager
     }
 
     /**
-     * Which signup identity did a duplicate-key INSERT reject? (M17)
+     * Which signup identity did a duplicate-key INSERT reject? (M17, D-16 cure)
      *
      * Returns 'username' / 'email' for a MySQL 1062 on the respective UNIQUE
      * constraint — inline column UNIQUEs are reported as `for key
      * 'users.username'` — and null for ANYTHING else, so an unrelated INSERT
      * failure (PRIMARY collision, malformed row) is never swallowed into a
      * friendly 400; the caller rethrows it verbatim.
+     *
+     * D-16 made the WIRE authoritative before the copy belt is trusted at
+     * all: a driver code that is present and not 1062 (the raw shape the
+     * vendor re-throws untouched — deadlock, lock-timeout, FK) can no longer
+     * be friendlied just because the rendered text happens to carry the
+     * duplicate-key phrase; and a re-wrap whose surviving SQLSTATE is not the
+     * integrity class is likewise rejected. The phrase + key-identifier match
+     * then selects WHICH identity, exactly as before — including its known
+     * lc_messages limitation (no English phrase, no friendly copy; the
+     * PDOException propagates, unchanged behavior, pinned in the race test).
      */
-    private static function duplicateSignupKeyField(string $message): ?string
+    private static function duplicateSignupKeyField(\PDOException $e): ?string
     {
-        if (!str_contains($message, 'Duplicate entry')) {
+        $code = MysqlError::driverCode($e->errorInfo);
+        if ($code !== null) {
+            if (!MysqlError::isDuplicateKey($code)) {
+                return null;
+            }
+        } else {
+            $sqlstate = (int) $e->getCode();
+            if ($sqlstate !== 0 && (string) $sqlstate !== MysqlError::SQLSTATE_INTEGRITY) {
+                return null;
+            }
+        }
+
+        $message = $e->getMessage();
+        if (!str_contains($message, MysqlError::DUPLICATE_ENTRY_PHRASE)) {
             return null;
         }
         if (str_contains($message, "key 'users.username'") || str_contains($message, "key 'username'")) {
@@ -1083,10 +1107,12 @@ class AuthManager
             // the wire as a generic 500. The race now throws the SAME 400 copy
             // the pre-check produces (InvalidArgumentException rides
             // AuthController's existing JSON + browser arms; no new wire
-            // codes). Detection is message-based because the connection
-            // implementation rethrows non-reconnect errors as a fresh
-            // PDOException with no errorInfo — the repo's own
-            // StreamProbeBackfill doctrine: only the message survives.
+            // codes). Detection reads the WIRE first (D-16): the
+            // connection rethrows non-reconnect errors as a fresh
+            // PDOException whose surviving identity is the SQLSTATE in
+            // getCode(); a code that is present and not 1062/23000 is
+            // never friendlied — the phrase belt below only picks the
+            // copy for integrity-class shapes.
             try {
                 $userId = $this->userRepository->create([
                     'username' => $username,
@@ -1096,7 +1122,7 @@ class AuthManager
                     'status' => $status,
                 ]);
             } catch (\PDOException $e) {
-                $taken = self::duplicateSignupKeyField($e->getMessage());
+                $taken = self::duplicateSignupKeyField($e);
                 if ($taken === null) {
                     throw $e;
                 }

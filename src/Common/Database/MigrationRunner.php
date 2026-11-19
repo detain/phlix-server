@@ -824,11 +824,7 @@ final class MigrationRunner
      */
     private static function driverErrorCode(string $segment): ?int
     {
-        if (preg_match('/^SQLSTATE\[[^\]]*\]:\s*[^:]*:\s*(\d+)\b/', $segment, $m) !== 1) {
-            return null;
-        }
-
-        return (int) $m[1];
+        return MysqlError::driverCode($segment);
     }
 
     /**

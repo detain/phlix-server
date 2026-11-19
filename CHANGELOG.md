@@ -33,6 +33,7 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Signup collisions and scan-queue lock retries now trust the wire, not nearby text.** MySQL error detection was hand-rolled in six places with three levels of rigor; the weakest two mis-detected in ways users can feel. A signup INSERT that failed with a genuine deadlock (or any non-duplicate fault) whose rendered text merely carried the words `Duplicate entry` was friendlied into a `Username already taken` 400, swallowing the real error; now a driver code that is present and not 1062 always propagates verbatim (red-first pinned). Likewise the scan-job enqueue retry no longer buys a retry from the digits `1213`/`1205` appearing anywhere in the message (echoed SQL payload), while a localized (non-English) deadlock on the wire — which the old English belt silently lost — now retries. [D-16 / refactor SRV-MYSQLERR]
 - **DLNA search now logs when its scan cap truncates the result, and the metrics rollup retry buffer is bounded.** A `Search` over a container larger than 50 pages (100k rows) still stops there on purpose, but now emits a `DLNA search truncated at the scan cap` warning instead of silently undercounting `TotalMatches`; `MetricsRegistry::restoreRollups()` keeps at most 720 buckets (oldest dropped) so a long database outage cannot grow worker memory without bound. [SRV-S15, SRV-S2]
 - **The admin log list sorts newest-first by true modification time.** `LogController` now orders on the integer file mtime before formatting `modified_at`, so out-of-order mtimes (and sub-format-resolution ties) no longer reorder rows; a pin test covers it. [SRV-S32 / SRV-79]
 - **`PortForwardService` names a stale on-disk record instead of dropping a failed config write.** A mapping that succeeded on the router but could not be persisted (or a teardown whose config could not be cleared) now logs `Port-forward state could not be persisted; the on-disk record is stale`; `mergeState()` returns the write outcome. [SRV-S13]
@@ -49,6 +50,19 @@ House discipline this file maintains (established by review W-min90/91/92):
   hub deploy that enforces the shared grammar (SHR-S1 owner ruling 2026-11-13).
 
 ### Changed
+
+- **MySQL error-code detection lives in one place.** New
+  `Phlix\Common\Database\MysqlError` (`driverCode()` over `errorInfo` or a
+  rendered SQLSTATE segment, `isDuplicateKey()`, `isDeadlock()`, named 1062 /
+  1205 / 1213 / 2006 / 2013 / 23000 / 40001 constants — no magic numbers at
+  call sites) is the single classifier behind `ItemRepository`'s duplicate
+  reuse path, `AuthManager`'s signup race, `MigrationRunner`'s idempotent
+  errno parse, `ScanJobRepository`'s lock retry and the connection's
+  gone-away retry in `execute()`. The string arm refuses ambiguous
+  multi-segment messages instead of grepping the last occurrence. Migration
+  shapes are byte-preserved except the disclosed fixes above; the
+  `StreamProbeBackfill` sqlstate+code pair classifier is deliberately not a
+  driver-code form and stays. [D-16 / refactor SRV-MYSQLERR]
 
 - web-ui: adopt `@phlix/ui` v1.0.2 (transitive `@phlix/contracts` v0.5.8 unchanged) and regenerate the vendored `public/assets/app` bundle; clears the S181 UI pin skew for the server consumer.
 - **Composer dependencies upgraded to the newest set that works together.** `smarty/smarty` 4 to 5 (newsletter: `Smarty\Smarty`, `{foreach item=media ...}`), `phpseclib/phpseclib` 3 to 4, `directorytree/ldaprecord` 3 to 4 (the LDAP transport flags were renamed: `use_ssl` is now `use_tls` and `use_tls` is now `use_starttls`; `LdapConnection` maps ldaps:// and STARTTLS to the new keys, behaviour unchanged), `web-auth/webauthn-lib` 4 to 5, `squizlabs/php_codesniffer` 3 to 4, plus the transitive refresh. The `/app` toolchain (`web-ui`) moves to vite 8.3.8, vue 3.5.45, vue-tsc 3.3.14, @vitejs/plugin-vue 6.0.11 and @types/node 26, with the committed bundle rebuilt (byte-identical on node 24.20.0 and 24.22.3); TypeScript stays on 6.0.x because vue-tsc cannot drive TypeScript 7 (`ERR_PACKAGE_PATH_NOT_EXPORTED: ./lib/tsc`). PHPUnit stays on 10.5: PHPUnit 11+ removed the `Event\Test\AssertionFailed` event the S120 assertion-escape guard is built on, so moving would silently drop that gate. The test suite's docblock annotations (`@dataProvider`, `@group`, `@test`, `@requires`, `@runInSeparateProcess`, `@preserveGlobalState`, `@covers`) are now PHP attributes, which PHPUnit 10.5 honours and 12 requires. `webmozart/assert` 2 (transitive) adds `ext-date` to the generated platform check; it is recorded as a vendor-declared addition.

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Library;
 
 use Phlix\Collections\SmartRuleVocabulary;
+use Phlix\Common\Database\MysqlError;
 use Phlix\Common\Http\PageLimit;
 use Phlix\Common\Uuid;
 use Phlix\Server\Http\RequestContext;
@@ -533,14 +534,14 @@ class ItemRepository
         }
 
         // Raw shape: errorInfo = [SQLSTATE, driver-code, driver-message].
-        $errorInfo = $e->errorInfo;
-        if (is_array($errorInfo) && (int)($errorInfo[1] ?? 0) === 1062) {
+        $code = MysqlError::driverCode($e->errorInfo);
+        if ($code !== null && MysqlError::isDuplicateKey($code)) {
             return true;
         }
 
         // Vendor re-wrap: errorInfo dropped, code is SQLSTATE 23000.
-        return (int)$e->getCode() === 23000
-            && str_contains($e->getMessage(), 'Duplicate entry');
+        return (string) $e->getCode() === MysqlError::SQLSTATE_INTEGRITY
+            && str_contains($e->getMessage(), MysqlError::DUPLICATE_ENTRY_PHRASE);
     }
 
     /**

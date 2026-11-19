@@ -1954,7 +1954,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // 80b7e557 +2 (A-13 parity helper seeds), 7506f306 +4 (DECODE-ADOPT method/body/method/
     // rawBody), 2d2ac30b +3 (ENVELOPES-B3 path/headers/path). Measured from the phpunit red (1315),
     // not predicted; per-delta attribution in /tmp/opencode/refactor-exec-1119/SRV-CENSUS-ROTATE.md.
-    private const EXPECTED_DECLARED_WRITES = 1315;
+    // +3 1315→1318 (cohort-5a unrotated own-delta, measured at 1b3db98d): three whole-property
+    // $request->userId seeds on a recognized Request root, both in cohort-5a oracle files — 941dca55
+    // +1 (W4 AccountLinkControllerTest seed), 09e64fbf +2 (two W5 WebPortalRouterWatchHistoryGetTest
+    // seeds). TXMUTEX-A disclosed this leg red at 1316 (measured before 09e64fbf landed). The reads
+    // leg measured UNCHANGED at its pin (517) and the files leg at its pin (2207) — both stay. Zero
+    // src/ writes added. Measured from the phpunit red (1318), not predicted; per-file attribution
+    // table in /tmp/opencode/refactor-exec-1119/SRV-ROWMAP.md §COHORT-5B.
+    private const EXPECTED_DECLARED_WRITES = 1318;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

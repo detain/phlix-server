@@ -47,6 +47,16 @@ use Psr\Log\LoggerInterface;
  *   file is written to a dot-named temp file and rename()d into place, so a reader never sees a partial
  *   file under a name the glob matches.
  *
+ * Family note (D-10, 2026-11-19): the similarity/collection/metadata-write trio
+ * was folded onto the shared engine {@see \Phlix\Media\Support\JsonJobStore}
+ * (same payload-line grammar as {@see enqueue()}). This store deliberately does
+ * NOT join it: its chapter-queue drain sorts by file mtime rather than the
+ * in-file timestamp line, it has no count bound on that kind, and the
+ * stream-probe kind layers percent-encoded names, a bounded-flock check-and-
+ * write protocol, sentinel files and rename-atomic writes on top — folding
+ * those differences in would have bent the base into per-store mode flags,
+ * which is the drift the family exists to end, not a form of it.
+ *
  * @since 0.36.0
  */
 final class MediaAssetJobStore

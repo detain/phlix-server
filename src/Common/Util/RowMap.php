@@ -45,6 +45,11 @@ namespace Phlix\Common\Util;
  *   string/int/float/bool value casts to string; arrays/objects take
  *   the default (or `''` under the nullable form, mirroring the legacy
  *   `WatchHistoryRow::asString()` contract).
+ * - NULLABLE SCALAR STRING (`nullableScalarStr`): SQL NULL or a missing
+ *   key → null; a NON-SCALAR value → null as well (unlike the nullable
+ *   SCALAR-CAST form, where a non-scalar becomes `''`); scalars cast to
+ *   their `(string)` form — the legacy `ScanJobRepository::nullableString()`
+ *   vocabulary.
  * - TRUTHY CAST (`boolFromCast`): the raw `(bool)` cast with an explicit
  *   default for the missing/NULL case — beware: `(bool)"0"` is false but
  *   `(bool)"false"` is true, which is exactly why the cast mode is named
@@ -238,6 +243,34 @@ final class RowMap
             return null;
         }
         return self::stringFromScalar($row, $col, '');
+    }
+
+    /**
+     * Nullable scalar-cast string column: an actual SQL NULL (or a
+     * missing key) hydrates to null and a NON-SCALAR value (array,
+     * object, resource) hydrates to null as well; every scalar casts to
+     * its `(string)` form (`true` → `"1"`, `false` → `""`, `7.9` →
+     * `"7.9"`). Lifted byte-identically from the legacy
+     * `ScanJobRepository::nullableString()` helper (E-09 cohort 4).
+     *
+     * This is NOT {@see self::nullableStringFromScalar()}, which shares
+     * the helper's NAME but not its vocabulary: there a non-scalar
+     * collapses to `''` (the `WatchHistoryRow` contract); here it
+     * collapses to null. The two spellings coexist as pinned legacy
+     * vocabularies — a migration cohort picks per column by provenance,
+     * and outputs are never silently harmonized between them.
+     *
+     * @param array<string, mixed> $row
+     * @since E-09 cohort 4 (ScanJobRepository extraction)
+     */
+    public static function nullableScalarStr(array $row, string $col): ?string
+    {
+        $value = $row[$col] ?? null;
+        if ($value === null) {
+            return null;
+        }
+
+        return is_scalar($value) ? (string) $value : null;
     }
 
     /**

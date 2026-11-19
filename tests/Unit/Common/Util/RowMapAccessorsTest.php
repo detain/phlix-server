@@ -141,6 +141,38 @@ class RowMapAccessorsTest extends TestCase
         $this->assertSame('', RowMap::nullableStringFromScalar(['x' => ''], 'x'));
     }
 
+    /**
+     * E-09 cohort 4: the `ScanJobRepository::nullableString()` vocabulary —
+     * SQL NULL and NON-SCALAR both hydrate null (unlike the SCALAR-CAST
+     * nullable form, where a non-scalar becomes the empty string), while
+     * every scalar casts to its `(string)` form.
+     */
+    public function testNullableScalarStrCollapsesNullAndNonScalarToNull(): void
+    {
+        $this->assertNull(RowMap::nullableScalarStr([], 'x'));
+        $this->assertNull(RowMap::nullableScalarStr(['x' => null], 'x'));
+        $this->assertNull(
+            RowMap::nullableScalarStr(['x' => ['a']], 'x'),
+            'non-scalar is NULL here — NOT the "" of nullableStringFromScalar()'
+        );
+        $this->assertNull(RowMap::nullableScalarStr(['x' => new \stdClass()], 'x'));
+        $this->assertSame('abc', RowMap::nullableScalarStr(['x' => 'abc'], 'x'));
+        $this->assertSame('', RowMap::nullableScalarStr(['x' => ''], 'x'), 'the empty string is a scalar and stays ""');
+        $this->assertSame('55', RowMap::nullableScalarStr(['x' => 55], 'x'));
+        $this->assertSame('7.9', RowMap::nullableScalarStr(['x' => 7.9], 'x'));
+        $this->assertSame('1', RowMap::nullableScalarStr(['x' => true], 'x'));
+        $this->assertSame('', RowMap::nullableScalarStr(['x' => false], 'x'), '(string)false is empty');
+    }
+
+    public function testNullableScalarStrDivergesFromNullableStringFromScalarOnNonScalars(): void
+    {
+        // The E-09 no-harmonization law, stated once more for the pair that
+        // shares a legacy helper NAME: same input, two pinned vocabularies.
+        $row = ['x' => ['a']];
+        $this->assertNull(RowMap::nullableScalarStr($row, 'x'));
+        $this->assertSame('', RowMap::nullableStringFromScalar($row, 'x'));
+    }
+
     public function testBoolFromCastMirrorsLegacyTruthyCast(): void
     {
         $this->assertTrue(RowMap::boolFromCast(['x' => 1], 'x', false));
@@ -295,6 +327,7 @@ class RowMapAccessorsTest extends TestCase
             'nullableInt',
             'nullableIntFromNumeric',
             'nullableStringFromScalar',
+            'nullableScalarStr',
             'nullableNonEmptyStr',
             'nullableDateTime',
         ];

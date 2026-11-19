@@ -857,4 +857,69 @@ class UserProfileManagerTest extends TestCase
 
         return 'OTHER';
     }
+
+    /**
+     * E-09 cohort-5b oracle: the `content_rating` legs of hydrateProfile()
+     * across the driver-reachable domain (the RowMap::str fold on the rank leg
+     * is byte-identical; the key-presence gates around BOTH legs stay keeps).
+     * An int value keeps its legacy shape: UNRATED rank, raw passthrough into
+     * settings. Green before AND after the fold — that is the proof.
+     */
+    public function testHydrateContentRatingColumnGrammar(): void
+    {
+        $base = [
+            'id' => 'p-1',
+            'user_id' => 'user-1',
+            'name' => 'Profile',
+            'avatar_url' => null,
+            'is_active' => true,
+            'is_admin' => false,
+            'created_at' => '2024-01-01 00:00:00',
+            'updated_at' => '2024-01-01 00:00:00',
+        ];
+        $this->db->method('query')->willReturn([
+            $base + ['content_rating' => 'G'],
+            $base + ['content_rating' => 7],
+            $base + ['content_rating' => ''],
+            $base,
+        ]);
+
+        $profiles = $this->manager->findByUserId('user-1');
+
+        $this->assertSame(UserProfileManager::RATING_ORDER['G'], $profiles[0]['rating']);
+        $this->assertSame('G', $profiles[0]['settings']['content_rating']);
+
+        $this->assertSame(7, $profiles[1]['rating']);
+        $this->assertSame(7, $profiles[1]['settings']['content_rating']);
+
+        $this->assertSame(7, $profiles[2]['rating']);
+        $this->assertSame('', $profiles[2]['settings']['content_rating']);
+
+        $this->assertFalse(array_key_exists('rating', $profiles[3]));
+        $this->assertFalse(array_key_exists('settings', $profiles[3]));
+    }
+
+    /**
+     * E-09 cohort-5b oracle: the `active_theme_id` column grammar of
+     * getActiveThemeId() (RowMap::nullableStr fold byte-identical: strings
+     * pass, non-strings and explicit NULLs hydrate to null). Green before AND
+     * after the fold — that is the proof.
+     */
+    public function testGetActiveThemeIdColumnGrammar(): void
+    {
+        $vectors = [
+            [['active_theme_id' => 'nocturne'], 'nocturne'],
+            [['active_theme_id' => ''], ''],
+            [['active_theme_id' => 7], null],
+            [['active_theme_id' => null], null],
+            [[], null],
+        ];
+
+        foreach ($vectors as $i => [$row, $expected]) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+
+            $this->assertSame($expected, (new UserProfileManager($db))->getActiveThemeId('user-1'), 'vector ' . $i);
+        }
+    }
 }

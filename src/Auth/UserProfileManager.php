@@ -1392,7 +1392,7 @@ class UserProfileManager
         // An unknown/missing content_rating defaults to the most-restrictive
         // UNRATED rank, matching isContentRatingAllowed()/getAllowedRatings().
         if (isset($row['content_rating'])) {
-            $contentRating = is_string($row['content_rating']) ? $row['content_rating'] : '';
+            $contentRating = RowMap::str($row, 'content_rating', '');
             $profile['rating'] = self::RATING_ORDER[$contentRating] ?? self::RATING_ORDER['UNRATED'];
         }
 
@@ -1454,7 +1454,7 @@ class UserProfileManager
         /** @var array<string, mixed> $row */
         $row = $result[0];
 
-        return is_string($row['active_theme_id'] ?? null) ? $row['active_theme_id'] : null;
+        return RowMap::nullableStr($row, 'active_theme_id');
     }
 
     /**

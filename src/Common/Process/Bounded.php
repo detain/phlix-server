@@ -58,6 +58,9 @@ final class Bounded
      */
     private const KILL_REAP_BOUND_SEC = 5;
 
+    /** Poll slice while waiting for a capped-run child to exit on its own. */
+    private const AWAIT_SLICE_MICRO = 20_000;
+
     /**
      * Run to completion while blocking on captured streams (site-shape mode).
      *
@@ -270,6 +273,14 @@ final class Bounded
             }
         }
 
+        if (!$timedOut && $deadlineNs > 0 && !self::awaitChildExit($process, $deadlineNs)) {
+            // r1b MAJOR: both pumps may have closed via cap-overflow (or early
+            // EOF) while the child lives on. The deadline promise survives by
+            // bounded-polling the exit status here; expiry arms the SAME kill
+            // ladder the mid-pump timeout path uses.
+            $timedOut = true;
+        }
+
         if ($timedOut) {
             $exitCode = self::killLadder($process, $killGraceSecs);
             $stdout = self::drainTail($pipes[1] ?? null, $stdout, $maxStdoutBytes);
@@ -297,6 +308,34 @@ final class Bounded
     {
         proc_terminate($process, $signal);
         proc_close($process);
+    }
+
+    /**
+     * Poll the child's exit status until its deadline budget runs out.
+     *
+     * True the moment the process is observed not running — the caller's
+     * plain proc_close then reaps it with the ordinary exit status, so the
+     * happy path stays byte-identical. False ONLY when the deadline expired
+     * with the child still alive, which sends the caller through killLadder().
+     *
+     * @param resource  $process    A live proc_open handle.
+     * @param int|float $deadlineNs Monotonic hrtime nanosecond budget end (the
+     *                              run() deadline arithmetic promotes to float
+     *                              only for absurd timeouts; comparisons hold).
+     */
+    private static function awaitChildExit($process, int|float $deadlineNs): bool
+    {
+        do {
+            $status = proc_get_status($process);
+            if (!$status['running']) {
+                return true;
+            }
+            usleep(self::AWAIT_SLICE_MICRO);
+        } while (hrtime(true) < $deadlineNs);
+
+        $status = proc_get_status($process);
+
+        return !$status['running'];
     }
 
     /**

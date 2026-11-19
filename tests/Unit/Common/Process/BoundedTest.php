@@ -175,6 +175,33 @@ final class BoundedTest extends TestCase
         self::assertSame('abcd', $tiny->stdout);
     }
 
+    /**
+     * r1b MAJOR: both pumps closing via cap-overflow must NOT silently defeat
+     * the advertised deadline. The flood-then-sleep child outlives the timeout
+     * with no readable streams left; the reaping path must bounded-poll to the
+     * deadline and then escalate through the kill ladder — pre-cure, the
+     * blocking proc_close waited out the 30s sleep with timedOut=false.
+     */
+    public function testRunDeadlineSurvivesBothPumpsCappedByOverflow(): void
+    {
+        $floodThenSleep = 'head -c 5000 /dev/zero | tr "\\0" "o"; '
+            . 'head -c 5000 /dev/zero | tr "\\0" "e" >&2; exec sleep 30';
+
+        $started  = hrtime(true);
+        $result   = Bounded::run(['/bin/sh', '-c', $floodThenSleep], null, 2, 1, 64, 64);
+        $elapsedSec = (hrtime(true) - $started) / 1_000_000_000;
+
+        self::assertInstanceOf(BoundedResult::class, $result);
+        self::assertTrue($result->timedOut, 'the deadline must fire even when both pumps closed on cap');
+        self::assertSame(64, strlen($result->stdout));
+        self::assertSame(64, strlen($result->stderr));
+        self::assertLessThan(
+            6.0,
+            $elapsedSec,
+            'run() must return within timeout+grace+slack, never wait out the child'
+        );
+    }
+
     public function testRunKillLadderPrefersSigtermWhenTheChildHonorsIt(): void
     {
         $started = hrtime(true);

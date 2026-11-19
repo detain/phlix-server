@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Admin\Maintenance;
 
+use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
 use Workerman\MySQL\Connection;
 
@@ -316,20 +317,26 @@ class MaintenanceJobRepository
      */
     private function decodeRow(array $row): array
     {
+        // Boundary narrowing per the WebAuthnCredentialRepository::normalizeRow
+        // law: the client hands back array<array-key,mixed>; RowMap accessors
+        // consume array<string,mixed>. Int keys are never read here, so the
+        // discarding normalization is behavior-neutral.
+        $row = RowMap::fromMixed($row);
+
         $params = $this->decodeJsonObject($row['params_json'] ?? null);
         $result = $this->decodeJsonObject($row['result_json'] ?? null);
 
         return [
-            'id' => is_string($row['id'] ?? null) ? $row['id'] : '',
-            'task' => is_string($row['task'] ?? null) ? $row['task'] : '',
-            'status' => is_string($row['status'] ?? null) ? $row['status'] : '',
+            'id' => RowMap::str($row, 'id', ''),
+            'task' => RowMap::str($row, 'task', ''),
+            'status' => RowMap::str($row, 'status', ''),
             'params' => $params ?? [],
             'result' => $result,
-            'error' => is_string($row['error'] ?? null) ? $row['error'] : null,
-            'requested_by' => is_string($row['requested_by'] ?? null) ? $row['requested_by'] : null,
-            'queued_at' => is_string($row['queued_at'] ?? null) ? $row['queued_at'] : null,
-            'started_at' => is_string($row['started_at'] ?? null) ? $row['started_at'] : null,
-            'completed_at' => is_string($row['completed_at'] ?? null) ? $row['completed_at'] : null,
+            'error' => RowMap::nullableStr($row, 'error'),
+            'requested_by' => RowMap::nullableStr($row, 'requested_by'),
+            'queued_at' => RowMap::nullableStr($row, 'queued_at'),
+            'started_at' => RowMap::nullableStr($row, 'started_at'),
+            'completed_at' => RowMap::nullableStr($row, 'completed_at'),
         ];
     }
 

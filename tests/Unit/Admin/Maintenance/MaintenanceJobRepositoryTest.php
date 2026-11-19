@@ -370,4 +370,120 @@ final class MaintenanceJobRepositoryTest extends TestCase
             array_keys($job)
         );
     }
+
+    /**
+     * E-09 cohort 4 legacy oracle: the pre-migration decodeRow body (verbatim,
+     * with a local mirror of decodeJsonObject) pinned against the shipped path
+     * on every shape/JSON vector the column matrix exercises.
+     */
+    public function test_decode_row_matches_the_pre_migration_body_on_every_pin_vector(): void
+    {
+        $legacy = static function (array $row): array {
+            $json = static function (mixed $raw): ?array {
+                if (!is_string($raw) || $raw === '') {
+                    return null;
+                }
+                $decoded = json_decode($raw, true);
+
+                return is_array($decoded) ? $decoded : null;
+            };
+            $params = $json($row['params_json'] ?? null);
+            $result = $json($row['result_json'] ?? null);
+
+            return [
+                'id' => is_string($row['id'] ?? null) ? $row['id'] : '',
+                'task' => is_string($row['task'] ?? null) ? $row['task'] : '',
+                'status' => is_string($row['status'] ?? null) ? $row['status'] : '',
+                'params' => $params ?? [],
+                'result' => $result,
+                'error' => is_string($row['error'] ?? null) ? $row['error'] : null,
+                'requested_by' => is_string($row['requested_by'] ?? null) ? $row['requested_by'] : null,
+                'queued_at' => is_string($row['queued_at'] ?? null) ? $row['queued_at'] : null,
+                'started_at' => is_string($row['started_at'] ?? null) ? $row['started_at'] : null,
+                'completed_at' => is_string($row['completed_at'] ?? null) ? $row['completed_at'] : null,
+            ];
+        };
+
+        $vectors = [
+            'happy' => [
+                'id' => 'job-1',
+                'task' => 'dedupe_paths',
+                'status' => 'running',
+                'params_json' => '{"apply":true}',
+                'result_json' => '{"freed":1024}',
+                'error' => null,
+                'requested_by' => 'admin-1',
+                'queued_at' => '2026-08-07 10:00:00',
+                'started_at' => '2026-08-07 10:00:05',
+                'completed_at' => null,
+            ],
+            'garbage-params-valid-result' => [
+                'id' => 'job-2',
+                'task' => 'storage_snapshot',
+                'status' => 'failed',
+                'params_json' => '{not json',
+                'result_json' => '{"ok":1}',
+                'error' => 'boom',
+                'requested_by' => 'admin-2',
+                'queued_at' => '2026-08-07 10:00:00',
+                'started_at' => '2026-08-07 10:00:05',
+                'completed_at' => '2026-08-07 10:00:09',
+            ],
+            'scalar-and-null-json' => [
+                'id' => 'job-3',
+                'task' => 'dedupe_paths',
+                'status' => 'queued',
+                'params_json' => '42',
+                'result_json' => 'null',
+                'error' => '',
+                'requested_by' => '',
+                'queued_at' => '2026-08-07 10:00:00',
+                'started_at' => '',
+                'completed_at' => '',
+            ],
+            'array-json' => [
+                'id' => 'job-4',
+                'task' => 'cache_clear',
+                'status' => 'completed',
+                'params_json' => '[1,2]',
+                'result_json' => '"str"',
+                'error' => null,
+                'requested_by' => null,
+                'queued_at' => null,
+                'started_at' => null,
+                'completed_at' => null,
+            ],
+            'empty-string-params' => [
+                'id' => 'job-5',
+                'task' => '',
+                'status' => 'queued',
+                'params_json' => '',
+                'result_json' => '',
+                'error' => null,
+                'requested_by' => null,
+                'queued_at' => null,
+                'started_at' => null,
+                'completed_at' => null,
+            ],
+            'all-columns-wrong-shape' => [
+                'id' => 7,
+                'task' => null,
+                'status' => ['queued'],
+                'error' => 5.0,
+                'requested_by' => true,
+                'queued_at' => 1754560000,
+                'started_at' => false,
+                'completed_at' => ['2026-08-07 10:00:00'],
+                5 => 'int-key noise',
+            ],
+        ];
+
+        foreach ($vectors as $name => $row) {
+            $db = $this->connection(static fn (): array => [$row]);
+            $decoded = (new MaintenanceJobRepository($db))->findById('job-x');
+
+            self::assertIsArray($decoded, $name);
+            self::assertSame($legacy($row), $decoded, $name);
+        }
+    }
 }

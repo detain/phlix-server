@@ -66,7 +66,9 @@ return [
      *
      * Example env: PREFER_HDR_OUTPUT=true
      */
-    'prefer_hdr_output' => filter_var(getenv('PREFER_HDR_OUTPUT') ?: 'false', FILTER_VALIDATE_BOOLEAN),
+    // E-04 grammar (Wave-S1 residual sweep): identical answers to the old
+    // filter_var(`?: 'false'`) line; junk announces itself, trim law applies.
+    'prefer_hdr_output' => EnvConfig::bool('PREFER_HDR_OUTPUT', false),
 
     /**
      * x264/x265 encoder preset — the speed/compression trade.

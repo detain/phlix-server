@@ -20,7 +20,10 @@ return [
      * Whether the Last.fm scrobbler is active.
      * Set `LASTFM_ENABLED=1` in the environment to enable.
      */
-    'enabled' => filter_var(getenv('LASTFM_ENABLED') ?: '0', FILTER_VALIDATE_BOOLEAN),
+    // E-04 grammar (Wave-S1 residual sweep): EnvConfig::bool — identical answers
+    // to the old filter_var(`?:`) line for every real spelling; junk now
+    // announces itself and padded spellings take the estate trim law.
+    'enabled' => EnvConfig::bool('LASTFM_ENABLED', false),
 
     /**
      * Last.fm API key. Required.
@@ -63,7 +66,15 @@ return [
      * Whether to send `track.updateNowPlaying` on playback start in
      * addition to the scrobble on stop.
      */
-    'submit_now_playing' => filter_var(getenv('LASTFM_SUBMIT_NOW_PLAYING') ?: '1', FILTER_VALIDATE_BOOLEAN),
+    // E-04 grammar (Wave-S1 residual sweep): opt-out shape. Real-word spellings
+    // ('0'/'1'/'true'/'false'/'on'/'off', padded) answer identically to the old
+    // `?: '1'` line; JUNK ('banana') and whitespace used to be silently OFF on
+    // a knob whose comment promises it defaults ON — under the estate boolOptOut
+    // law (same convergence SRV-ENVBOOL-r1/r2 ratified for PHLIX_RELAY_TLS_VERIFY)
+    // junk now answers the documented default ON and announces itself. Disclosed
+    // deliberately: an operator typing junk into an opt-out can no longer
+    // accidentally turn the feature OFF.
+    'submit_now_playing' => EnvConfig::boolOptOut('LASTFM_SUBMIT_NOW_PLAYING'),
 
     /**
      * Legacy fraction-based threshold consumed by the original (now removed)

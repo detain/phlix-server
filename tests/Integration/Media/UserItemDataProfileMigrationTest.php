@@ -5,10 +5,8 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Media;
 
 use Phlix\Common\Database\MigrationRunner;
-use Phlix\Common\Database\PhlixMySQLConnection;
 use Phlix\Common\Uuid;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -55,16 +53,10 @@ use Workerman\MySQL\Connection;
  */
 final class UserItemDataProfileMigrationTest extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
     /** Number of `user_item_data` rows the fixture seeds. */
     private const SEEDED_ROWS = 8;
-
-    private ?Connection $db = null;
-
-    private ?Connection $admin = null;
-
-    private string $scratchDb = '';
 
     private string $migrationsDir = '';
 
@@ -81,31 +73,16 @@ final class UserItemDataProfileMigrationTest extends TestCase
     {
         parent::setUp();
 
-        // S126 gate: skip when MySQL is genuinely absent, fail when it is present
-        // but unusable. Deliberately NOT wrapped in try/catch.
-        $this->requireHealthyDatabase('skipping S79 user_item_data profile migration test. Runs in CI.');
-
-        $host = IntegrationDbGuard::host();
-        $port = IntegrationDbGuard::port();
-        $user = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $this->scratchDb = 'phlix_s79_' . str_replace('-', '', substr(Uuid::v4(), 0, 13));
-
-        // ⚠ Deliberately NOT wrapped in try/catch. A MySQL that is reachable but
-        // refuses `CREATE DATABASE` is exactly the "reachable but UNUSABLE"
-        // condition S126 exists to make LOUD — turning it into a skip here would
-        // reintroduce that defect in a new spelling, and
-        // `tests/Unit/Support/IntegrationDbGuardAdoptionTest` flags the shape.
-        // The genuine-absence case is already handled by the gate above.
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-
-        $this->db = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
+        // H-08: gate + scratch create share UsesScratchDatabase; the S126 law
+        // (skip on genuine absence, LOUD on reachable-but-unusable, never a
+        // try/catch around CREATE DATABASE) is enforced trait-side. The scratch
+        // name now uses the canonical random_bytes(6) hex (was a UUID slice —
+        // same 12-hex-char shape, uniqueness law unchanged).
+        $this->openScratchDatabase('skipping S79 user_item_data profile migration test. Runs in CI.', 's79');
 
         $this->migrationsDir = sys_get_temp_dir() . '/' . $this->scratchDb . '-migrations';
         mkdir($this->migrationsDir, 0o755, true);
+        $this->registerScratchDir($this->migrationsDir);
         copy($this->migrationFilePath(), $this->migrationsDir . '/100_user_item_data_profile_id.sql');
 
         $this->buildPreMigrationSchema();
@@ -114,23 +91,8 @@ final class UserItemDataProfileMigrationTest extends TestCase
 
     protected function tearDown(): void
     {
-        if ($this->migrationsDir !== '' && is_dir($this->migrationsDir)) {
-            foreach ((array) glob($this->migrationsDir . '/*') as $file) {
-                if (is_string($file)) {
-                    unlink($file);
-                }
-            }
-            rmdir($this->migrationsDir);
-        }
-
-        $admin = $this->admin;
-        if ($admin !== null && $this->scratchDb !== '') {
-            $admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-        }
-
-        $this->db = null;
-        $this->admin = null;
-        $this->scratchDb = '';
+        $this->cleanupScratchDatabase();
+        $this->migrationsDir = '';
 
         parent::tearDown();
     }
@@ -397,8 +359,7 @@ final class UserItemDataProfileMigrationTest extends TestCase
      */
     public function testTheNoOrphanGuardRedensTheRunAndPassesWhenThereAreNoOrphans(): void
     {
-        $guardDir = $this->migrationsDir . '-guard';
-        mkdir($guardDir, 0o755, true);
+        $guardDir = $this->scratchFixDir('guard');
         file_put_contents($guardDir . '/900_orphan_guard.sql', $this->orphanGuardStatements());
 
         // A table shaped like the mid-migration state: profile_id present, still
@@ -438,13 +399,7 @@ final class UserItemDataProfileMigrationTest extends TestCase
             'the SAME guard statements must pass cleanly once every row has a profile'
         );
         $this->assertSame(MigrationRunner::EXIT_SUCCESS, MigrationRunner::exitCodeFor($clean));
-
-        foreach ((array) glob($guardDir . '/*') as $file) {
-            if (is_string($file)) {
-                unlink($file);
-            }
-        }
-        rmdir($guardDir);
+        // The guard dir is registered with the trait — tearDown sweeps it.
     }
 
     // ---- helpers -------------------------------------------------------------
@@ -459,7 +414,7 @@ final class UserItemDataProfileMigrationTest extends TestCase
 
     private function migrationFilePath(): string
     {
-        return dirname(__DIR__, 3) . '/migrations/100_user_item_data_profile_id.sql';
+        return self::scratchMigrationPath('100_user_item_data_profile_id.sql');
     }
 
     /**

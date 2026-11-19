@@ -52,9 +52,7 @@ namespace Phlix\Tests\Integration\Auth;
 
 use Phlix\Auth\TokenSessionRepository;
 use Phlix\Common\Database\MigrationRunner;
-use Phlix\Common\Database\PhlixMySQLConnection;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -63,39 +61,33 @@ use Workerman\MySQL\Connection;
  */
 final class TokenSessionFamilyMigration127RealDbTest extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
     private const MIGRATION = '127_auth_token_sessions.sql';
     private const MIGRATION_128 = '128_auth_refresh_grants_expiry.sql';
 
-    private ?Connection $db = null;
-    private ?string $scratchDb = null;
-    /** @var list<string> */
-    private array $fixDirs = [];
+    /**
+     * Fix-dir label uniquifier for in-test replay calls (per-test instance).
+     */
+    private int $migrationRuns = 0;
 
+    /**
+     * H-08 behavior-tightening (disclosed): this file was the one divergent
+     * prologue — $_ENV-based credentials that DEFAULTED DB_PASSWORD to
+     * 'root', so an unauthenticated server was silently targeted instead of
+     * honestly skipped. It now shares UsesScratchDatabase: raw getenv with
+     * an EMPTY password default; an unusable server fails the S126 probe and
+     * the suite skips. The DB-level charset clause also goes: migration 127
+     * pins ENGINE/CHARSET at table level on both tables (128 only ALTERs
+     * them), so the database default never reached a declared object.
+     */
     protected function setUp(): void
     {
         parent::setUp();
-        $this->requireHealthyDatabase('skipping the CP-029 migration-127 real-MySQL proof. Runs in CI.');
 
-        $baseDb = $_ENV['DB_DATABASE'] ?? 'phlix_test';
-        $this->scratchDb = 'phlix_s127_' . bin2hex(random_bytes(4));
-
-        $admin = new PhlixMySQLConnection(
-            IntegrationDbGuard::host(),
-            IntegrationDbGuard::port(),
-            $_ENV['DB_USER'] ?? 'root',
-            $_ENV['DB_PASSWORD'] ?? 'root',
-            (string) $baseDb
-        );
-        $admin->query('CREATE DATABASE `' . $this->scratchDb . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
-
-        $this->db = new PhlixMySQLConnection(
-            IntegrationDbGuard::host(),
-            IntegrationDbGuard::port(),
-            $_ENV['DB_USER'] ?? 'root',
-            $_ENV['DB_PASSWORD'] ?? 'root',
-            (string) $this->scratchDb
+        $this->openScratchDatabase(
+            'skipping the CP-029 migration-127 real-MySQL proof. Runs in CI.',
+            's127'
         );
 
         // The FK target: migration 127 references users(id) only, so the
@@ -114,24 +106,7 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
 
     protected function tearDown(): void
     {
-        if ($this->scratchDb !== null) {
-            $admin = new PhlixMySQLConnection(
-                IntegrationDbGuard::host(),
-                IntegrationDbGuard::port(),
-                $_ENV['DB_USER'] ?? 'root',
-                $_ENV['DB_PASSWORD'] ?? 'root',
-                (string) ($_ENV['DB_DATABASE'] ?? 'phlix_test')
-            );
-            $admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-            $this->scratchDb = null;
-        }
-        foreach ($this->fixDirs as $dir) {
-            foreach (glob($dir . '/*.sql') ?: [] as $f) {
-                unlink($f);
-            }
-            @rmdir($dir);
-        }
-        $this->fixDirs = [];
+        $this->cleanupScratchDatabase();
 
         parent::tearDown();
     }
@@ -144,10 +119,10 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
      */
     private function apply127(): array
     {
-        $fixDir = sys_get_temp_dir() . '/phlix-s127-fix-' . bin2hex(random_bytes(3));
-        mkdir($fixDir, 0777, true);
-        $this->fixDirs[] = $fixDir;
-        copy(dirname(__DIR__, 3) . '/migrations/' . self::MIGRATION, $fixDir . '/' . self::MIGRATION);
+        // H-08: canonical fix-dir shape (0o755, shared per-test salt, counter
+        // label); the old '/phlix-s127-fix-<r3>' names are throwaway.
+        $this->migrationRuns++;
+        $fixDir = $this->scratchFixDir('fix-' . self::MIGRATION . '-' . $this->migrationRuns, [self::MIGRATION]);
 
         $db = $this->db;
         if (!$db instanceof Connection) {
@@ -166,10 +141,8 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
      */
     private function apply128(): array
     {
-        $fixDir = sys_get_temp_dir() . '/phlix-s128-fix-' . bin2hex(random_bytes(3));
-        mkdir($fixDir, 0777, true);
-        $this->fixDirs[] = $fixDir;
-        copy(dirname(__DIR__, 3) . '/migrations/' . self::MIGRATION_128, $fixDir . '/' . self::MIGRATION_128);
+        $this->migrationRuns++;
+        $fixDir = $this->scratchFixDir('fix-' . self::MIGRATION_128 . '-' . $this->migrationRuns, [self::MIGRATION_128]);
 
         $db = $this->db;
         if (!$db instanceof Connection) {

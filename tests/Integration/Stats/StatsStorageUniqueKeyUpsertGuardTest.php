@@ -13,13 +13,11 @@ namespace Phlix\Tests\Integration\Stats;
 
 use Phlix\Admin\DashboardService;
 use Phlix\Common\Database\MigrationRunner;
-use Phlix\Common\Database\PhlixMySQLConnection;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Streaming\StreamManager;
 use Phlix\Session\SessionManager;
 use Phlix\Stats\StatsCollector;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use Throwable;
@@ -69,7 +67,7 @@ use Workerman\MySQL\Connection;
  */
 final class StatsStorageUniqueKeyUpsertGuardTest extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
     /** Lane survival token (S114). Code-resident by design; never prose. */
     public const string SURVIVAL_TOKEN = 'S114STATSUPSERTX3F6';
@@ -92,12 +90,6 @@ final class StatsStorageUniqueKeyUpsertGuardTest extends TestCase
 
     private const T2 = '2032-04-05 06:07:09';
 
-    private ?Connection $db = null;
-
-    private ?Connection $admin = null;
-
-    private string $scratchDb = '';
-
     private string $preDir = '';
 
     private string $fixDir = '';
@@ -106,51 +98,16 @@ final class StatsStorageUniqueKeyUpsertGuardTest extends TestCase
     {
         parent::setUp();
 
-        // S126 gate: skip on genuine absence, LOUD on reachable-but-unusable.
-        $this->requireHealthyDatabase('skipping the S114 stats_storage unique-key proof. Runs in CI.');
+        // H-08: gate + scratch create + fix-dir dirs share UsesScratchDatabase.
+        $this->openScratchDatabase('skipping the S114 stats_storage unique-key proof. Runs in CI.', 's114');
 
-        $host = IntegrationDbGuard::host();
-        $port = IntegrationDbGuard::port();
-        $user = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $rand = bin2hex(random_bytes(6));
-        $this->scratchDb = 'phlix_s114_' . $rand;
-
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-        $this->db = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
-
-        $this->preDir = sys_get_temp_dir() . '/phlix-s114-pre-' . $rand;
-        $this->fixDir = sys_get_temp_dir() . '/phlix-s114-fix-' . $rand;
-        mkdir($this->preDir, 0o755, true);
-        mkdir($this->fixDir, 0o755, true);
-        copy($this->migrationPath(self::MIGRATION_019), $this->preDir . '/' . self::MIGRATION_019);
-        copy($this->migrationPath(self::MIGRATION_086), $this->preDir . '/' . self::MIGRATION_086);
-        copy($this->migrationPath(self::MIGRATION_105), $this->fixDir . '/' . self::MIGRATION_105);
+        $this->preDir = $this->scratchFixDir('pre', [self::MIGRATION_019, self::MIGRATION_086]);
+        $this->fixDir = $this->scratchFixDir('fix', [self::MIGRATION_105]);
     }
 
     protected function tearDown(): void
     {
-        foreach ([$this->preDir, $this->fixDir] as $dir) {
-            if ($dir !== '' && is_dir($dir)) {
-                foreach ((array) glob($dir . '/*') as $file) {
-                    if (is_string($file)) {
-                        unlink($file);
-                    }
-                }
-                rmdir($dir);
-            }
-        }
-
-        if ($this->admin !== null && $this->scratchDb !== '') {
-            $this->admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-        }
-
-        $this->db = null;
-        $this->admin = null;
-        $this->scratchDb = '';
+        $this->cleanupScratchDatabase();
         $this->preDir = '';
         $this->fixDir = '';
 
@@ -742,14 +699,9 @@ final class StatsStorageUniqueKeyUpsertGuardTest extends TestCase
         return $db;
     }
 
-    private function migrationPath(string $basename): string
-    {
-        return dirname(__DIR__, 3) . '/migrations/' . $basename;
-    }
-
     private function migrationSql(string $basename): string
     {
-        $sql = file_get_contents($this->migrationPath($basename));
+        $sql = file_get_contents(self::scratchMigrationPath($basename));
         $this->assertIsString($sql, $basename . ' must be readable');
 
         return $sql;

@@ -11,11 +11,15 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Support;
 
+use FilesystemIterator;
 use LogicException;
 use Phlix\Common\Database\PhlixMySQLConnection;
 use Phlix\Tests\Support\Database\IntegrationDbGuard;
 use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
+use SplFileInfo;
 
 /**
  * Shape proofs for {@see UsesScratchDatabase} — the H-08 scratch prologue.
@@ -213,6 +217,36 @@ final class UsesScratchDatabaseTest extends TestCase
             [$scratchName]
         );
         $this->assertSame([], $survivors);
+    }
+
+    /**
+     * H-08 drift tripwire: the migration-127 test once resolved credentials
+     * through the $_ENV superglobal AND defaulted DB_PASSWORD to 'root' — an
+     * idiom that silently targets an unauthenticated server instead of making
+     * the S126 probe skip honestly. It must never resurface in a non-Support
+     * test: canonical resolution is getenv-shaped, trait-side.
+     */
+    public function testNoNonSupportTestReadsDbCredentialsViaEnvSuperglobal(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)
+        );
+
+        $offenders = [];
+        foreach ($iterator as $file) {
+            if (!$file instanceof SplFileInfo || $file->getExtension() !== 'php') {
+                continue;
+            }
+            if (str_contains($file->getPathname(), '/Support/')) {
+                continue;
+            }
+            if (preg_match('/\$_ENV\s*\[\s*[\x27"]DB_/', (string) file_get_contents($file->getPathname())) === 1) {
+                $offenders[] = $file->getFilename();
+            }
+        }
+
+        $this->assertSame([], $offenders, 'DB credentials must be resolved via UsesScratchDatabase::scratchCredentials(), not $_ENV (H-08)');
     }
 
     /**

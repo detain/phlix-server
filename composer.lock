@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "1bd6e7e1fad1f22d9ee3c1c174312b57",
+    "content-hash": "157a2fe3d148da7c0cdaa3477e00621f",
     "packages": [
         {
             "name": "brick/math",
@@ -418,16 +418,16 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.56.0",
+            "version": "v0.57.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "785e80509b8040dbc919f17095afd3bbb091312a"
+                "reference": "8fb7e70926bec94e392f566751c0c04ec045d254"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/785e80509b8040dbc919f17095afd3bbb091312a",
-                "reference": "785e80509b8040dbc919f17095afd3bbb091312a",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/8fb7e70926bec94e392f566751c0c04ec045d254",
+                "reference": "8fb7e70926bec94e392f566751c0c04ec045d254",
                 "shasum": ""
             },
             "require": {
@@ -461,9 +461,9 @@
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — bundled I/O is confined to the Arr/ namespace: the blocking CurlArrTransport default (CLI/test posture) and TrashGuidesProvider's own blocking stream fetches (no transport seam there); event-loop consumers should inject an async ArrTransportInterface unless their runtime hooks curl (phlix-hub's S425 position).",
             "support": {
                 "issues": "https://github.com/detain/phlix-shared/issues",
-                "source": "https://github.com/detain/phlix-shared/tree/v0.56.0"
+                "source": "https://github.com/detain/phlix-shared/tree/v0.57.0"
             },
-            "time": "2026-11-19T18:32:18+00:00"
+            "time": "2026-11-19T22:21:50+00:00"
         },
         {
             "name": "directorytree/ldaprecord",

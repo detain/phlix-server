@@ -137,17 +137,37 @@ final class PasswordHasherMintSiteCensusTest extends TestCase
     {
         $hits = $this->collectPrimitiveCallSites();
 
-        $this->assertArrayHasKey(
+        // Wave-S1 (phlix-shared v0.56.0 adoption): the three primitives moved
+        // into the shared SSOT and src/Auth/PasswordHasher.php became a thin
+        // delegate. The census law is unchanged in effect — first-party src
+        // holds ZERO primitive call sites — but the scanner sanity arm now
+        // reads the shared class, which is where the estate's only
+        // password_*() calls legitimately live.
+        $this->assertArrayNotHasKey(
             self::SSOT_RELATIVE_PATH,
             $hits,
-            'The scan must actually find PasswordHasher\'s own primitive calls — an empty '
-                . 'census here means the token walk broke, not that the law holds.'
+            'src/Auth/PasswordHasher.php must stay a pure delegate — any real '
+                . 'password_*() call returning there bypasses the shared SSOT.'
         );
+
+        $sharedSsot = \dirname(__DIR__, 3) . '/vendor/detain/phlix-shared/src/Auth/PasswordHasher.php';
+        $this->assertFileExists($sharedSsot, 'The shared PasswordHasher is the post-v0.56.0 primitive home.');
+
+        $tokens = token_get_all((string) file_get_contents($sharedSsot));
+        $primitiveLines = [];
+        foreach ($tokens as $token) {
+            if (\is_array($token) && $token[0] === T_STRING && \in_array($token[1], self::GUARDED_FUNCTIONS, true)) {
+                $primitiveLines[] = $token[2];
+            }
+        }
+
         $this->assertCount(
-            3,
-            $hits[self::SSOT_RELATIVE_PATH],
-            'PasswordHasher is exactly three primitive calls (hash/verify/needsRehash); a '
-                . 'different count means the class shape drifted away from the estate contract.'
+            4,
+            $primitiveLines,
+            'The shared SSOT is exactly four primitive tokens (hash, verify x2 — the B-06 '
+                . 'unknown-user burn arm and the real verify — needsRehash); a different count '
+                . 'means the class shape drifted away from the estate contract or this scan '
+                . 'broke (empty means the walk is dead, not that the law holds).'
         );
     }
 }

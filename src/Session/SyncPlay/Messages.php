@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Session\SyncPlay;
 
+use Phlix\Shared\Security\CredentialDigest;
+
 /**
  * Messages - WebSocket message types for SyncPlay protocol
  *
@@ -945,7 +947,7 @@ final class Messages
      */
     private static function hashPassword(string $password): string
     {
-        return hash('sha256', $password);
+        return CredentialDigest::digest($password);
     }
 
     /**

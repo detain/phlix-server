@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Auth;
 
 use Phlix\Admin\SettingsRepository;
+use Phlix\Shared\Security\OriginPolicy;
 
 /**
  * Single source of truth for the auth-cookie issuance policy (COOKIE-DESIGN.md
@@ -52,13 +53,10 @@ final class CookiePolicy
     public const COOKIE_INSECURE_KEY = 'auth.cookie.insecure';
 
     /** Cookie custody class — mirrors contracts COOKIE_MODE.COOKIE (src/auth.ts). */
-    public const MODE_COOKIE = 'cookie';
+    public const MODE_COOKIE = OriginPolicy::MODE_COOKIE;
 
     /** Bearer custody class — mirrors contracts COOKIE_MODE.BEARER (src/auth.ts). */
-    public const MODE_BEARER = 'bearer';
-
-    /** Hostnames that satisfy the §2.4 localhost limb (any port). */
-    private const LOCALHOST_HOSTS = ['localhost', '127.0.0.1', '::1'];
+    public const MODE_BEARER = OriginPolicy::MODE_BEARER;
 
     /**
      * @param SettingsRepository|null $settings Live settings store; null in
@@ -209,19 +207,7 @@ final class CookiePolicy
         ?string $hostHeader,
         ?string $secFetchSite,
     ): string {
-        if (is_string($deviceTypeHeader) && $deviceTypeHeader !== '') {
-            return self::MODE_BEARER;
-        }
-
-        if (is_string($originHeader) && $originHeader !== '' && !self::originIsSameSite($originHeader, $hostHeader)) {
-            return self::MODE_BEARER;
-        }
-
-        $browserClass = $formEraBrowser
-            || (is_string($originHeader) && $originHeader !== '')
-            || (is_string($secFetchSite) && strtolower($secFetchSite) === 'same-origin');
-
-        return $browserClass ? self::MODE_COOKIE : self::MODE_BEARER;
+        return OriginPolicy::custodyMode($formEraBrowser, $deviceTypeHeader, $originHeader, $hostHeader, $secFetchSite);
     }
 
     /**
@@ -230,13 +216,7 @@ final class CookiePolicy
      */
     public static function isHttpsForwarded(?string $forwardedProto): bool
     {
-        if (!is_string($forwardedProto) || $forwardedProto === '') {
-            return false;
-        }
-
-        $first = strtolower(trim(explode(',', $forwardedProto)[0]));
-
-        return $first === 'https';
+        return OriginPolicy::httpsForwardedValue($forwardedProto);
     }
 
     /**
@@ -245,11 +225,7 @@ final class CookiePolicy
      */
     public static function isLocalhostHost(?string $hostHeader): bool
     {
-        if (!is_string($hostHeader) || $hostHeader === '') {
-            return false;
-        }
-
-        return in_array(self::hostOf($hostHeader), self::LOCALHOST_HOSTS, true);
+        return OriginPolicy::localhostHost($hostHeader);
     }
 
     /**
@@ -260,58 +236,7 @@ final class CookiePolicy
      */
     public static function originIsSameSite(string $origin, ?string $hostHeader): bool
     {
-        $parts = parse_url($origin);
-        if (!is_array($parts)) {
-            return false;
-        }
-
-        $scheme = strtolower($parts['scheme'] ?? '');
-        if ($scheme !== 'http' && $scheme !== 'https') {
-            return false;
-        }
-
-        $originHost = strtolower($parts['host'] ?? '');
-        $originHost = str_starts_with($originHost, '[') && str_ends_with($originHost, ']')
-            ? substr($originHost, 1, -1)
-            : $originHost;
-        if ($originHost === '') {
-            return false;
-        }
-
-        $hostParts = is_string($hostHeader) ? parse_url('//' . $hostHeader) : false;
-        if (!is_array($hostParts)) {
-            return false;
-        }
-
-        $requestHost = self::hostOf($hostHeader);
-        if ($originHost !== $requestHost) {
-            return false;
-        }
-
-        $originPort = $parts['port'] ?? self::defaultPort($scheme);
-        $requestPort = $hostParts['port'] ?? self::defaultPort($scheme);
-
-        return $originPort === $requestPort;
-    }
-
-    /** Default port used when a side omits the :port (URL normalization). */
-    private static function defaultPort(string $scheme): int
-    {
-        return $scheme === 'https' ? 443 : 80;
-    }
-
-    /**
-     * Lowercased hostname of a Host header value, :port stripped and bracketed
-     * IPv6 literals unwrapped (parse_url keeps the brackets on both forms).
-     */
-    private static function hostOf(string $hostHeader): string
-    {
-        $parts = parse_url('//' . $hostHeader);
-        $host = strtolower(is_array($parts) ? ($parts['host'] ?? '') : '');
-
-        return str_starts_with($host, '[') && str_ends_with($host, ']')
-            ? substr($host, 1, -1)
-            : $host;
+        return OriginPolicy::originIsSameSite($origin, $hostHeader);
     }
 
     /**
@@ -351,109 +276,6 @@ final class CookiePolicy
         ?string $host,
         ?string $secFetchSite
     ): bool {
-        // (1) CP-009 belt (hub arm order mirrored exactly: belt first).
-        if ($secFetchSite !== null && strtolower(trim($secFetchSite)) === 'cross-site') {
-            return false;
-        }
-
-        // (2) Neither header present — refuse, fail-closed (ratified server
-        // law; native clients ride the bearer carrier, never this one).
-        if ($origin === null && $referer === null) {
-            return false;
-        }
-
-        // (3) M-SERVER-76 (W-min109): a literal 'null' Origin is the
-        // opaque-origin marker (sandboxed iframes and a few privacy contexts)
-        // — a state-changing cookie-authenticated request that cannot name
-        // its origin is refused outright. The old law SKIPPED the Origin leg
-        // for 'null', which meant 'Origin: null' arriving WITHOUT a Referer
-        // reached the accept tail unopposed; same-site protection then rested
-        // entirely on a header the client never sent. Refusing here is the
-        // fail-closed tightening the review asked for; the consequence (such
-        // iframe-nested writes stop working) is disclosed in the changelog.
-        if ($origin === 'null') {
-            return false;
-        }
-
-        // (4) Server host parts (unparseable Host falls back to the raw value
-        // as the host — matches nothing a browser can send: fail-CLOSED).
-        $serverHostParts = self::stateChangingHostParts($host ?? '');
-
-        // (5) Referer arm: an unparseable Referer is refused outright, then
-        // the exact-host + both-or-neither-port law applies.
-        if ($referer !== null) {
-            $refererParts = parse_url($referer);
-            if (!is_array($refererParts)) {
-                return false;
-            }
-            $refererHost = $refererParts['host'] ?? '';
-            $refererPort = $refererParts['port'] ?? null;
-
-            if (!self::stateChangingHostsMatch($refererHost, $refererPort, $serverHostParts)) {
-                return false;
-            }
-        }
-
-        // (6) Origin arm ('null' refused above; the empty string keeps its
-        // skip — M-SERVER-76 names only the literal 'null').
-        if ($origin !== null && $origin !== '') {
-            $originParts = parse_url($origin);
-            if (!is_array($originParts)) {
-                return false;
-            }
-            $originHost = $originParts['host'] ?? '';
-            $originPort = $originParts['port'] ?? null;
-
-            if (!self::stateChangingHostsMatch($originHost, $originPort, $serverHostParts)) {
-                return false;
-            }
-        }
-
-        // (7) Every present arm agreed.
-        return true;
-    }
-
-    /**
-     * Parse a Host header into host/port for the state-changing law.
-     *
-     * @return array{host: string, port: int|null}
-     */
-    private static function stateChangingHostParts(string $hostHeader): array
-    {
-        $parts = parse_url('http://' . $hostHeader);
-        if (!is_array($parts)) {
-            return ['host' => $hostHeader, 'port' => null];
-        }
-
-        return [
-            'host' => $parts['host'] ?? $hostHeader,
-            'port' => $parts['port'] ?? null,
-        ];
-    }
-
-    /**
-     * Byte-exact host equality plus the both-or-neither port rule — no
-     * suffix matching ("evil-example.com" never matches "example.com") and no
-     * default-port normalization ("host:80" never impersonates bare "host").
-     *
-     * @param array{host: string, port: int|null} $serverHostParts
-     */
-    private static function stateChangingHostsMatch(
-        string $originHost,
-        ?int $originPort,
-        array $serverHostParts
-    ): bool {
-        if ($originHost !== $serverHostParts['host']) {
-            return false;
-        }
-
-        $originHasPort = $originPort !== null;
-        $serverHasPort = $serverHostParts['port'] !== null;
-
-        if ($originHasPort !== $serverHasPort) {
-            return false;
-        }
-
-        return !$originHasPort || $originPort === $serverHostParts['port'];
+        return OriginPolicy::stateChangingRequestOriginAllowed($origin, $referer, $host, $secFetchSite);
     }
 }

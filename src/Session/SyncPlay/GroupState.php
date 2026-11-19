@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Session\SyncPlay;
 
+use Phlix\Shared\Security\CredentialDigest;
+
 /**
  * GroupState - Manages state for a SyncPlay group
  *
@@ -350,7 +352,7 @@ class GroupState
             return true;
         }
 
-        return hash_equals($this->passwordHash, hash('sha256', $password));
+        return CredentialDigest::match($password, $this->passwordHash);
     }
 
     /**
@@ -1384,6 +1386,6 @@ class GroupState
      */
     public static function hashPassword(string $password): string
     {
-        return hash('sha256', $password);
+        return CredentialDigest::digest($password);
     }
 }

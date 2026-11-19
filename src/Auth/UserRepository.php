@@ -15,6 +15,8 @@ use Phlix\Auth\Dto\UserRow;
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
 use Phlix\Plugins\ThemeRegistryFleetSync;
+use Phlix\Shared\Auth\PasswordHasher as SharedHasher;
+use Phlix\Shared\Security\CredentialDigest;
 use Phlix\Theming\BuiltInThemes;
 use Phlix\Theming\ThemeSourceRegistry;
 use Workerman\MySQL\Connection;
@@ -1174,9 +1176,7 @@ class UserRepository
      * lockstep with any change to the canonical options; PasswordHasherTest
      * pins the embedded parameters against the SSOT constant.
      */
-    private const TIMING_BURN_DUMMY_HASH =
-        '$argon2id$v=19$m=65536,t=4,p=1$ajhMV1lZWk0wNUZYMUJJeA'
-        . '$GnAZV0jZAc3B24RwsTj5qLoSiy6ITh4BFMMHxFIDdSQ';
+    private const TIMING_BURN_DUMMY_HASH = SharedHasher::TIMING_BURN_DUMMY_HASH;
 
     /**
      * Whether the user has a usable LOCAL password sign-in method.
@@ -1391,7 +1391,7 @@ class UserRepository
         // migration 009. Computed once and reused for BOTH the username and
         // email fallbacks below so every email-less external user gets a
         // distinct, deterministic value.
-        $identityHash = hash('sha256', $provider . "\0" . $externalId);
+        $identityHash = CredentialDigest::digest($provider . "\0" . $externalId);
 
         // `users.username` is NOT NULL + UNIQUE (migration 001). The old
         // fallback 'user_' . substr($externalId, 0, 16) collides whenever two

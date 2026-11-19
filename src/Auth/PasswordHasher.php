@@ -11,8 +11,16 @@ declare(strict_types=1);
 
 namespace Phlix\Auth;
 
+use Phlix\Shared\Auth\PasswordHasher as SharedHasher;
+
 /**
  * Single source of truth for password-quality hashing (B-06, 2026-11-19).
+ *
+ * Wave-S1 (v0.56.0 adoption): the primitives themselves now live in the
+ * shared estate SSOT {@see \Phlix\Shared\Auth\PasswordHasher}; this class is
+ * the in-repo delegation surface preserving the ratified signatures and the
+ * canonical options shape. The mint-site census
+ * (tests/Unit/Auth/PasswordHasherMintSiteCensusTest.php) pins the law.
  *
  * Before this class every ARGON2ID mint in the repo was a bare
  * `password_hash(..., PASSWORD_ARGON2ID)` call: nine call sites estate-wide,
@@ -69,11 +77,7 @@ final class PasswordHasher
      *
      * @var array{memory_cost: int, time_cost: int, threads: int}
      */
-    public const ARGON2ID_OPTIONS = [
-        'memory_cost' => 65536,
-        'time_cost' => 4,
-        'threads' => 1,
-    ];
+    public const ARGON2ID_OPTIONS = SharedHasher::ARGON2ID_OPTIONS;
 
     /** Pure static surface — this class is not instantiable. */
     private function __construct()
@@ -89,7 +93,7 @@ final class PasswordHasher
      */
     public static function hash(string $password): string
     {
-        return password_hash($password, PASSWORD_ARGON2ID, self::ARGON2ID_OPTIONS);
+        return SharedHasher::hash($password);
     }
 
     /**
@@ -101,7 +105,7 @@ final class PasswordHasher
      */
     public static function verify(string $password, string $hash): bool
     {
-        return password_verify($password, $hash);
+        return SharedHasher::verify($password, $hash);
     }
 
     /**
@@ -111,6 +115,6 @@ final class PasswordHasher
      */
     public static function needsRehash(string $hash): bool
     {
-        return password_needs_rehash($hash, PASSWORD_ARGON2ID, self::ARGON2ID_OPTIONS);
+        return SharedHasher::needsRehash($hash);
     }
 }

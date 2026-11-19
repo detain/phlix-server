@@ -13,6 +13,7 @@ namespace Phlix\Server\Http;
 
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\CookiePolicy;
+use Phlix\Shared\Security\OriginPolicy;
 use Phlix\Server\Http\Controllers\AuthController;
 
 /**
@@ -176,7 +177,7 @@ final class RequestAuthenticator
         // Only check state-changing methods that are CSRF-exposed. (GET keeps
         // exactly ONE exception downstream: the forced-logout link leg,
         // review minor 21 — named at its single call site in HttpHandler.)
-        if (!in_array($request->method, ['POST', 'PUT', 'DELETE', 'PATCH'], true)) {
+        if (!OriginPolicy::stateChangingMethod($request->method)) {
             return true;
         }
 

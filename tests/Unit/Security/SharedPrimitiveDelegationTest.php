@@ -12,10 +12,17 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Security;
 
 use InvalidArgumentException;
+use Phlix\Auth\CookiePolicy;
 use Phlix\Auth\JwtHandler;
+use Phlix\Auth\PasswordHasher;
+use Phlix\Plugins\OAuth2\StateCorrelation;
+use Phlix\Session\SyncPlay\GroupState;
 use Phlix\Plugins\OAuth2\Pkce;
+use Phlix\Shared\Auth\PasswordHasher as SharedHasher;
 use Phlix\Shared\Auth\SessionFamily;
+use Phlix\Shared\Security\CredentialDigest;
 use Phlix\Shared\Security\Ed25519Pem;
+use Phlix\Shared\Security\OriginPolicy;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
@@ -183,5 +190,95 @@ final class SharedPrimitiveDelegationTest extends TestCase
             }
             $this->assertSame($legacy, $current);
         }
+    }
+
+    /**
+     * Leg S1.3 characterization pins — the OriginPolicy/CredentialDigest/
+     * PasswordHasher delegations must reproduce the server's ratified bytes.
+     */
+    public function testCookiePolicyScalarArmsMatchOriginPolicy(): void
+    {
+        foreach ([null, '', 'https', 'HTTPS', 'https, http', 'http'] as $proto) {
+            $this->assertSame(OriginPolicy::httpsForwardedValue($proto), CookiePolicy::isHttpsForwarded($proto));
+        }
+        foreach ([null, '', 'localhost', 'LOCALHOST:8443', '127.0.0.1', '[::1]:9000', 'example.com'] as $host) {
+            $this->assertSame(OriginPolicy::localhostHost($host), CookiePolicy::isLocalhostHost($host));
+        }
+        foreach (['http://localhost', 'http://localhost:80', 'https://localhost:443', 'http://[::1]', 'app://host', 'not a url', 'http://example.com:8080'] as $origin) {
+            foreach (['localhost', 'example.com:8080', 'EXAMPLE.COM', '', null] as $host) {
+                $this->assertSame(OriginPolicy::originIsSameSite($origin, $host), CookiePolicy::originIsSameSite($origin, $host));
+            }
+        }
+        $this->assertSame(OriginPolicy::MODE_COOKIE, CookiePolicy::MODE_COOKIE);
+        $this->assertSame(OriginPolicy::MODE_BEARER, CookiePolicy::MODE_BEARER);
+    }
+
+    public function testStrictSameSiteLawMatchesSharedAcrossBeltMatrix(): void
+    {
+        foreach (['http://localhost', 'null', '', null, 'http://example.com'] as $origin) {
+            foreach ([null, '', 'null', 'http://localhost/', 'garbage url'] as $referer) {
+                foreach (['localhost', 'example.com:8080', null, ''] as $host) {
+                    foreach ([null, 'cross-site', 'SAME-ORIGIN', 'junk'] as $site) {
+                        $this->assertSame(
+                            OriginPolicy::stateChangingRequestOriginAllowed($origin, $referer, $host, $site),
+                            CookiePolicy::stateChangingRequestOriginAllowed($origin, $referer, $host, $site)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    public function testCustodyModeDelegatesValueForValue(): void
+    {
+        $policy = new CookiePolicy(null);
+        foreach ([true, false] as $formEra) {
+            foreach (['roku', ''] as $device) {
+                foreach (['http://localhost', '', 'http://evil.example'] as $origin) {
+                    foreach ([null, 'same-origin', 'cross-site'] as $site) {
+                        $this->assertSame(
+                            OriginPolicy::custodyMode($formEra, $device, $origin, 'localhost', $site),
+                            $policy->custodyMode($formEra, $device, $origin, 'localhost', $site)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    public function testStateChangingVerbGateMatchesSharedPredicate(): void
+    {
+        foreach (['POST', 'PUT', 'DELETE', 'PATCH', 'GET', 'HEAD', 'OPTIONS', 'post', 'CONNECT'] as $method) {
+            $this->assertSame(
+                in_array($method, ['POST', 'PUT', 'DELETE', 'PATCH'], true),
+                OriginPolicy::stateChangingMethod($method)
+            );
+        }
+    }
+
+    public function testCredentialDigestReproducesLegacySha256Sites(): void
+    {
+        $this->assertSame('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', CredentialDigest::digest(''));
+        $this->assertSame(hash('sha256', "oidc\0ext.id"), CredentialDigest::digest("oidc\0ext.id"));
+        $this->assertTrue(CredentialDigest::match('pw', CredentialDigest::digest('pw')));
+        $this->assertFalse(CredentialDigest::match('pw2', CredentialDigest::digest('pw')));
+        $this->assertSame(CredentialDigest::digest('state-secret'), StateCorrelation::fingerprint('state-secret'));
+        $this->assertSame(CredentialDigest::digest('group-pw'), GroupState::hashPassword('group-pw'));
+    }
+
+    public function testPasswordHasherShimPreservesCanonicalCostShape(): void
+    {
+        $this->assertSame(SharedHasher::ARGON2ID_OPTIONS, PasswordHasher::ARGON2ID_OPTIONS);
+        $this->assertSame(
+            ['memory_cost' => 65536, 'time_cost' => 4, 'threads' => 1],
+            PasswordHasher::ARGON2ID_OPTIONS
+        );
+        $hash = PasswordHasher::hash('delegation-pin-password');
+        $this->assertStringStartsWith('$argon2id$v=19$m=65536,t=4,p=1$', $hash);
+        $this->assertTrue(PasswordHasher::verify('delegation-pin-password', $hash));
+        $this->assertFalse(PasswordHasher::verify('wrong', $hash));
+        $this->assertFalse(PasswordHasher::needsRehash($hash));
+        $this->assertTrue(PasswordHasher::needsRehash(password_hash('x', PASSWORD_BCRYPT)));
+        $this->assertStringStartsWith('$argon2id$v=19$m=65536,t=4,p=1$', SharedHasher::TIMING_BURN_DUMMY_HASH);
     }
 }

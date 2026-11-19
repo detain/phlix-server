@@ -14,6 +14,7 @@ namespace Phlix\Plugins\OAuth2;
 use Phlix\Common\Token;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Shared\Security\CredentialDigest;
 
 /**
  * Binds an issued OAuth2/OIDC `state` to the BROWSER that started the flow.
@@ -75,7 +76,7 @@ final class StateCorrelation
      */
     public static function fingerprint(string $secret): string
     {
-        return hash('sha256', $secret);
+        return CredentialDigest::digest($secret);
     }
 
     /**

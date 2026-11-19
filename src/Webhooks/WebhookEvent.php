@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Webhooks;
 
 use DateTimeImmutable;
+use Phlix\Shared\Security\Hmac;
 
 /**
  * An immutable webhook event plus its delivery signing helpers.
@@ -124,7 +125,7 @@ class WebhookEvent
      */
     public function getSignature(string $secret): string
     {
-        return 'sha256=' . hash_hmac('sha256', $this->serializedPayload(), $secret);
+        return Hmac::compute($this->serializedPayload(), $secret, Hmac::SEPARATOR_EQUALS);
     }
 
     /**
@@ -171,7 +172,7 @@ class WebhookEvent
         }
 
         if ($legacyHeader !== null && $legacyHeader !== '') {
-            return hash_equals('sha256=' . hash_hmac('sha256', $body, $secret), $legacyHeader);
+            return Hmac::verify($body, $legacyHeader, $secret, Hmac::SEPARATOR_EQUALS);
         }
 
         return false;

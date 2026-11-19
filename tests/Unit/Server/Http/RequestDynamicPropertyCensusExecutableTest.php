@@ -1385,15 +1385,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   plus five middleware files — incl the OPDS challenge header-order leg; the
     //   extinction BATCH_THREE census rides the pre-existing InlineErrorEnvelope-
     //   ExtinctionTest, no new file).
-    // Pin: 2203 tracked at stage time (git ls-files '*.php'), +1 mine = 2204. The disk
-    //   walk shows 2207: three foreign sibling tests sit on top (SRV-CENSUS2
-    //   SharedDelegationCensusTest + its staged-uncommitted WebAuthnLegacyDecodeParity-
-    //   Test, DECODE-ADOPT SmartPlaylistDecodeInboundTest) — those lanes rotate their
-    //   own at their own commits; named, not absorbed. Reads/writes legs stay RED and
-    //   UNROTATED: measured zero own-delta (no $request-> line added or removed across
-    //   the six converted files); foreign churn 517 vs 512 / 1315 vs 1274 untouched per
-    //   law.
-    private const EXPECTED_PHP_FILES = 2204;
+    // Pin: 2203 tracked at the B4-3/3 tree; +1 from DECODE-ADOPT's
+    //   SmartPlaylistDecodeInboundTest.php (landed as commit 7506f306 immediately
+    //   before this staging WITHOUT its own staircase row — their lane's pin
+    //   rotation was still in flight; their +1 is carried here, attributed),
+    //   +1 mine = 2205. The disk walk shows 2207: two foreign sibling tests sit
+    //   on top (SRV-CENSUS2 SharedDelegationCensusTest untracked + its staged-
+    //   uncommitted WebAuthnLegacyDecodeParityTest) — those lanes rotate their
+    //   own at their own commits; named, not absorbed. Reads/writes legs stay
+    //   RED and UNROTATED: measured zero own-delta (no $request-> line added or
+    //   removed across the six converted files); foreign churn 517 vs 512 /
+    //   1315 vs 1274 untouched per law.
+    private const EXPECTED_PHP_FILES = 2205;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -8,11 +8,15 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MovieMetadataResolver;
+use Phlix\Media\Metadata\FuzzyMatcher;
+use Phlix\Media\Metadata\RatingService;
+use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Media\Metadata\Rating;
 use Phlix\Media\Metadata\RatingSource;
 use Phlix\Media\Metadata\RatingType;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
+use Workerman\MySQL\Connection;
 
 /**
  * F2 caller-side rating persistence: the matcher (which owns the media_item_id)
@@ -203,6 +207,152 @@ final class LibraryMetadataMatcherPluginRatingsTest extends TestCase
             return ['ok', $rating->toArray(), $rating->createdAt->getTimestamp(), $rating->updatedAt->getTimestamp()];
         } catch (\Throwable $error) {
             return ['throw', get_class($error), 0, 0];
+        }
+    }
+
+    /**
+     * E-09 cohort 5a (W5): legacy-oracle vectors for the getManualOverride
+     * fold leg (sibling placement: no dedicated FuzzyMatcher suite exists;
+     * named in the src E-09 comment). The is_scalar legs are pre-fold
+     * shapes kept verbatim; only the numeric confidence ternary was
+     * folded. Full return shape pinned per vector.
+     */
+    public function testManualOverrideRowDecodeIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            [
+                'media_item_id' => 'm-1',
+                'confidence' => '0.92',
+                'matched_by' => 'fuzzy',
+                'created_at' => '2026-01-01 00:00:00',
+            ],
+            ['media_item_id' => 5, 'confidence' => 10, 'matched_by' => true, 'created_at' => null],
+            ['media_item_id' => 2.5, 'confidence' => 'abc', 'matched_by' => 'x', 'created_at' => 'y'],
+            ['media_item_id' => 'm-2', 'matched_by' => 'user', 'created_at' => 'z'],
+            [
+                'media_item_id' => ['a'],
+                'confidence' => [1],
+                'matched_by' => ['b'],
+                'created_at' => ['c'],
+            ],
+        ];
+
+        foreach ($vectors as $row) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+            $matcher = new FuzzyMatcher($db, $this->createMock(TmdbProvider::class));
+
+            $expected = [
+                'media_item_id' => is_scalar($row['media_item_id'] ?? null)
+                    ? (string) ($row['media_item_id'] ?? null)
+                    : '',
+                'confidence' => is_numeric($row['confidence'] ?? null)
+                    ? (float) $row['confidence']
+                    : 0.0,
+                'matched_by' => is_scalar($row['matched_by'] ?? null)
+                    ? (string) ($row['matched_by'] ?? null)
+                    : 'user',
+                'created_at' => is_scalar($row['created_at'] ?? null)
+                    ? (string) ($row['created_at'] ?? null)
+                    : '',
+            ];
+
+            self::assertSame($expected, $matcher->getManualOverride('tmdb', 'p-1'));
+        }
+    }
+
+    /**
+     * E-09 cohort 5a (W5): legacy-oracle vectors for the RatingService
+     * aggregate() fold legs (sibling placement: no dedicated RatingService
+     * suite exists; named in the src E-09 comment). upsert is overridden
+     * to capture the call args instead of writing; the weighted-average
+     * and vote-sum math below transcribes the pre-fold ternaries verbatim
+     * from git show 1d509d91:src/Media/Metadata/RatingService.php.
+     */
+    public function testAggregateRowDecodeLegsAreByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var list<list<array<string, mixed>>> $feeds */
+        $feeds = [
+            [],
+            [['score' => '4.5', 'votes' => 3], ['score' => 2.75, 'votes' => '5']],
+            [['score' => 'abc', 'votes' => 2], ['score' => null, 'votes' => null]],
+            [['score' => 1e1, 'votes' => 0]],
+            [['votes' => 7]],
+            [[], ['score' => '7.25']],
+            [['score' => 5, 'votes' => -2], ['score' => 5, 'votes' => -2]],
+        ];
+
+        foreach ($feeds as $feed) {
+            $recorder = new \stdClass();
+            $recorder->args = null;
+
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturnCallback(
+                /** @param mixed $params */
+                static function (mixed $sql, $params = []) use ($feed): array {
+                    return str_contains((string) $sql, 'metadata_ratings') ? $feed : [];
+                }
+            );
+
+            $service = new class ($db, $recorder) extends RatingService {
+                private \stdClass $laneRecorder;
+
+                public function __construct(Connection $db, \stdClass $recorder)
+                {
+                    parent::__construct($db);
+                    $this->laneRecorder = $recorder;
+                }
+
+                public function upsert(
+                    string $mediaItemId,
+                    RatingSource $source,
+                    RatingType $ratingType,
+                    float $score,
+                    ?int $votes = null
+                ): Rating {
+                    $this->laneRecorder->args = func_get_args();
+                    throw new \RuntimeException('stop-after-capture');
+                }
+            };
+
+            $expectedScore = 0.0;
+            $expectedWeight = 0.0;
+            $expectedVotes = 0;
+            foreach ($feed as $row) {
+                $score = is_numeric($row['score'] ?? null) ? (float) $row['score'] : 0.0;
+                $votes = isset($row['votes']) && is_int($row['votes']) ? $row['votes'] : 1;
+                $expectedScore += $score * $votes;
+                $expectedWeight += $votes;
+                $expectedVotes += isset($row['votes']) && is_int($row['votes'])
+                    ? $row['votes']
+                    : 0;
+            }
+
+            $threw = false;
+            try {
+                $service->aggregate('m-1');
+            } catch (\RuntimeException $exception) {
+                $threw = true;
+            }
+
+            if ($feed === [] || $expectedWeight <= 0.0) {
+                self::assertNull($recorder->args);
+                self::assertFalse($threw);
+                continue;
+            }
+
+            self::assertTrue($threw);
+            self::assertSame(
+                [
+                    'm-1',
+                    RatingSource::Aggregate,
+                    RatingType::Average,
+                    round($expectedScore / $expectedWeight, 1),
+                    $expectedVotes,
+                ],
+                $recorder->args
+            );
         }
     }
 }

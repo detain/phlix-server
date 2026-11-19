@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Metadata;
 
+use Phlix\Common\Util\RowMap;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
@@ -239,9 +240,15 @@ final class FuzzyMatcher
             return null;
         }
 
+        // E-09 cohort 5a: RowMap fold of the numeric confidence leg (default
+        // transcribed); the is_scalar legs are a different pre-fold shape,
+        // kept as-is here. Pinned by the legacy-oracle vectors in
+        // tests/Unit/Media/Metadata/LibraryMetadataMatcherPluginRatingsTest.php
+        // (sibling placement: no dedicated FuzzyMatcher suite exists).
+        $row = RowMap::fromMixed($row);
         return [
             'media_item_id' => is_scalar($row['media_item_id'] ?? null) ? (string) $row['media_item_id'] : '',
-            'confidence' => is_numeric($row['confidence'] ?? null) ? (float) $row['confidence'] : 0.0,
+            'confidence' => RowMap::floatFromNumeric($row, 'confidence', 0.0),
             'matched_by' => is_scalar($row['matched_by'] ?? null) ? (string) $row['matched_by'] : 'user',
             'created_at' => is_scalar($row['created_at'] ?? null) ? (string) $row['created_at'] : '',
         ];

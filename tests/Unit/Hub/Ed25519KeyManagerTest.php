@@ -136,6 +136,113 @@ class Ed25519KeyManagerTest extends TestCase
         $this->assertNotEmpty($kid1);
     }
 
+    /**
+     * B-07 divergence 1 (bug SRV-2.1): the server carried a wall-clock fallback —
+     * getKid() on a path whose key file does not (yet) exist minted
+     * `gmdate('Y-m-d\TH:i:s\Z')` and memoized it. The hub fixed this law long
+     * ago (its class header narrates the production symptom: every restart
+     * re-labelled the same persisted key, spurging ENROLLMENT_TOKEN_EXPIRED);
+     * this test pins the ported law server-side: the kid is ALWAYS the
+     * deterministic fingerprint base64url(SHA-256(raw public key)[0:8]) —
+     * resolving it before keygen materializes (and persists) the key, so the
+     * stamp can never be minted or served.
+     */
+    public function test_kid_resolved_before_keygen_is_the_fingerprint_not_a_wall_clock_stamp(): void
+    {
+        $manager = new Ed25519KeyManager($this->keyPath);
+        $kid = $manager->getKid();
+
+        // (1) The old-law shape must not appear: an ISO-8601 second-stamp.
+        $this->assertDoesNotMatchRegularExpression(
+            '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/',
+            $kid,
+            'kid must never be a wall-clock timestamp (hub-stable-kid law)'
+        );
+
+        // (2) Lazy repair: resolving the kid persists the keypair to disk.
+        $this->assertFileExists($this->keyPath, 'kid resolution must materialize the key file');
+
+        // (3) The returned kid equals the fingerprint of the NOW-PERSISTED key,
+        //     computed independently here — not via the class under test.
+        $publicKey = sodium_crypto_sign_publickey_from_secretkey(
+            $this->secretFromNativePem((string) file_get_contents($this->keyPath))
+        );
+        $this->assertSame(self::fingerprintKid($publicKey), $kid);
+
+        // (4) Mutation proof: the equality actually bites — the kid for a
+        //     different public key must differ (kid is bound to THIS key).
+        $otherKey = sodium_crypto_sign_keypair();
+        $this->assertNotSame(
+            self::fingerprintKid(substr($otherKey, 64)),
+            $kid
+        );
+    }
+
+    /**
+     * Restart stability (the ported hub law verbatim in behavior): two manager
+     * instances on the same key file — simulating a process restart — must
+     * resolve the identical kid, and that kid must be the byte-identical
+     * fingerprint already handed to pairing/JWKS consumers before this change.
+     * This is the transition evidence that no existing pairing re-keys.
+     */
+    public function test_kid_is_stable_across_two_load_instances_and_matches_independent_fingerprint(): void
+    {
+        $boot1 = new Ed25519KeyManager($this->keyPath);
+        $keyPair = $boot1->getOrCreateKeyPair();
+        $kid1 = $boot1->getKid();
+
+        $boot2 = new Ed25519KeyManager($this->keyPath);
+        $kid2 = $boot2->getKid();
+        $kid3 = $boot2->getPublicKeyJwk()['kid'];
+
+        $expected = self::fingerprintKid($keyPair->publicKey);
+        $this->assertSame($expected, $kid1, 'first-boot kid must equal the independent fingerprint');
+        $this->assertSame($expected, $kid2, 'reloaded kid must equal the same fingerprint (no re-stamping)');
+        $this->assertSame($expected, $kid3, 'JWK kid must carry the same fingerprint');
+    }
+
+    /**
+     * Source-level pin for "no date() in the kid path": the wall-clock minter
+     * is deleted, not merely unreached — a future edit must not resurrect a
+     * time-derived kid on any path of this class.
+     */
+    public function test_key_manager_source_carries_no_wall_clock_kid_minter(): void
+    {
+        $src = file_get_contents(dirname(__DIR__, 3) . '/src/Hub/Ed25519KeyManager.php');
+        $this->assertIsString($src);
+        $this->assertStringNotContainsString('gmdate(', $src, 'no gmdate anywhere in the key manager');
+        $this->assertStringNotContainsString('date(', $src, 'no wall-clock call in the kid path');
+        $this->assertStringNotContainsString('generateKidForNow', $src, 'the timestamp-kid minter must stay deleted');
+    }
+
+    /**
+     * Extracts the 64-byte native secret from this application's own PEM label
+     * (same decode the manager does), for independent fingerprint verification.
+     */
+    private static function secretFromNativePem(string $pem): string
+    {
+        if (!preg_match('/-----BEGIN ED25519 PRIVATE KEY-----(.*?)-----END ED25519 PRIVATE KEY-----/s', $pem, $m)) {
+            self::fail('key file is not in the native format: ' . $pem);
+        }
+        $b64 = preg_replace('/\s+/', '', $m[1]);
+        $decoded = base64_decode(strtr((string) $b64, '-_', '+/'), true);
+        if ($decoded === false || strlen($decoded) < 64) {
+            self::fail('native PEM body did not decode to a 64-byte secret');
+        }
+
+        return substr($decoded, 0, 64);
+    }
+
+    /**
+     * The server kid form: base64url of the FIRST 8 BYTES of SHA-256 over the
+     * raw 32-byte public key — computed here independently of the class under
+     * test so the pin cannot drift with an implementation rewrite.
+     */
+    private static function fingerprintKid(string $publicKey): string
+    {
+        return self::base64UrlEncode(substr(hash('sha256', $publicKey, true), 0, 8));
+    }
+
     public function test_getCurrentPrivateKey_returns_64_bytes(): void
     {
         $manager = new Ed25519KeyManager($this->keyPath);

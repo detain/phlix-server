@@ -21,8 +21,18 @@ use RuntimeException;
  * libsodium-compatible sodium_crypto_sign_* API. Keys are stored in
  * PEM format at the path supplied to the constructor.
  *
- * Key ID format: ISO 8601 timestamp of the key's creation date.
- * This makes key IDs deterministic and sortable.
+ * Key ID format: the deterministic fingerprint base64url(SHA-256(raw public
+ * key)[0:8]) — NOT a wall-clock timestamp. Because the private key is
+ * persisted and reloaded, the kid is STABLE across restarts and changes only
+ * when the key itself rotates. An earlier version fell back to
+ * `gmdate`-formatted second-resolution stamps whenever the kid was resolved
+ * before the key file existed, so the same key could be served under two
+ * different ids; consumers that registered the pairing-time kid (the hub peer registry, the
+ * `/.well-known/jwks.json` surface) then saw re-labelling churn — the exact
+ * failure mode the sibling phlix-hub key manager documented and fixed
+ * (spurious ENROLLMENT_TOKEN_EXPIRED on every restart). Porting the hub law:
+ * kid resolution materializes the keypair on demand ({@see getKid()}), so a
+ * time-derived id can never be minted.
  *
  * @package Phlix\Hub
  * @since 0.11.0
@@ -32,7 +42,7 @@ final class Ed25519KeyManager
     /** @var string Path to the PEM-encoded private key file */
     private string $keyPath;
 
-    /** @var string|null Cached kid from loaded key metadata */
+    /** @var string|null kid resolved once from the key's public half (deterministic fingerprint) */
     private ?string $kid = null;
 
     /**
@@ -136,22 +146,20 @@ final class Ed25519KeyManager
     /**
      * Returns the current key ID (kid) for the JWK.
      *
-     * @return string ISO 8601 timestamp used as the key ID.
+     * The kid is the deterministic fingerprint of the key's public half
+     * ({@see extractKidFromPublicKey()}), resolved once and memoized. When the
+     * key file does not exist yet, resolving the kid materializes the keypair
+     * (via {@see getOrCreateKeyPair()}) so there is exactly one kid law on
+     * every path — a wall-clock placeholder is never minted, which keeps the
+     * id stable across restarts and identical to what pairing and the JWKS
+     * surface publish.
+     *
+     * @return string The key ID (base64url of the first 8 bytes of the
+     *                SHA-256 digest of the raw public key).
      */
     public function getKid(): string
     {
-        if ($this->kid !== null) {
-            return $this->kid;
-        }
-
-        if (file_exists($this->keyPath)) {
-            $keyPair = $this->loadKeyPair();
-            $this->kid = $this->extractKidFromPublicKey($keyPair->publicKey);
-        } else {
-            $this->kid = $this->generateKidForNow();
-        }
-
-        return $this->kid;
+        return $this->kid ??= $this->extractKidFromPublicKey($this->getOrCreateKeyPair()->publicKey);
     }
 
     /**
@@ -456,9 +464,12 @@ final class Ed25519KeyManager
     /**
      * Extracts the key ID from a public key using its SHA-256 digest.
      *
-     * The kid is the base64url-encoded first 8 bytes of the SHA-256
-     * digest of the public key. This is deterministic and unique
-     * (collision-resistant enough for key identification).
+     * This is THE kid law (SRV-2.1, ported from the hub key manager): the kid
+     * is the base64url-encoded first 8 bytes of the SHA-256 digest of the
+     * public key. Deterministic — the same key always yields the same id, so
+     * nothing a consumer (hub peer registry, JWKS fetcher) stored under a kid
+     * survives re-labelling. The former timestamp-based fallback minter was
+     * deleted: see the class header for the churn it caused.
      *
      * @param string $publicKey 32-byte Ed25519 public key.
      *
@@ -467,16 +478,6 @@ final class Ed25519KeyManager
     private function extractKidFromPublicKey(string $publicKey): string
     {
         return $this->base64UrlEncode(substr(hash('sha256', $publicKey, true), 0, 8));
-    }
-
-    /**
-     * Generates a kid for a new key based on the current timestamp.
-     *
-     * @return string ISO 8601 timestamp string.
-     */
-    private function generateKidForNow(): string
-    {
-        return gmdate('Y-m-d\TH:i:s\Z');
     }
 
     /**

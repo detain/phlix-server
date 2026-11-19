@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ruleset name="Phlix-Server">
+    <description>
+        PSR-12 for detain/phlix-server — the bare-run convenience config: a plain
+        `phpcs` (or `composer cs`) from the repo root re-checks the strict src/
+        corpus with zero flags, matching what CI's src leg enforces.
+
+        RELATIONSHIP TO THE CI GATE (T-08 port of the hub shape, 2026-11-19).
+        .github/workflows/coding-standards.yml is the authority and stays on its
+        two EXPLICIT invocations (frozen wave law — this file rewires nothing):
+
+            reproduced by this file: phpcs --standard=PSR12 --colors src/
+            separate config, named:  phpcs --standard=phpcs-tests.xml --colors
+
+        WHY THE TESTS CORPUS IS NOT A &lt;file&gt; HERE. tests/ runs under
+        phpcs-tests.xml, whose allowances (two sniff exclusions, two time-boxed
+        per-file carve-outs, and an exit-code-only warnings waiver) are
+        measured, single-sourced there — and pinned by
+        tests/Unit/Support/StaticAnalysisScopeTest.php. Mirroring a target list
+        here would create a SECOND source of truth that drifts the moment one
+        side is amended. The zero-argument bare run therefore checks src/ — the
+        corpus that carries no allowances — and `composer cs-tests` covers
+        tests/ by naming the dedicated config, exactly as CI does.
+
+        WHY scripts/ IS NOT A &lt;file&gt; HERE. The CI step comment declares
+        scripts/ (and bin/, migrations/, public/, config/) unsniffed, widening
+        only via "a separate atomic change with its own baseline to reflow
+        first" (the hub S299 lesson: a green gate over a tree that was never
+        linted is theater). Measured at b7b3ace8: `phpcs --standard=PSR12
+        scripts/` exits 2 with 7 errors and 35 warnings across 19 of its 45
+        files. Admitting scripts/ here would make the bare run red today;
+        "fixing" that by excluding sniffs would launder a real baseline into a
+        convenience config — ceiling-silence law: refused. Widening stays the
+        atomic change CI says it is, reflow first, here and in the src leg
+        together.
+
+        NO `-n` EVER. No &lt;arg value="n"&gt; or `np` flag in this file and none
+        in the CI invocations (hub S333's origin: `-n` on a PSR12 ruleset
+        silently hid warnings for months; S109's: the same flag hid 8 real
+        src/ warnings). Warnings still fail this strict corpus on the exit
+        code — src/ carries 0 errors AND 0 warnings at b7b3ace8 (rc=0, 37.5s
+        full walk), so there is nothing here needing a waiver.
+
+        (The XML comment form is deliberately unused for this doctrine: XML
+        comments cannot contain double hyphens, and the commands quoted above
+        are the point of the record. phpcs-tests.xml set the precedent by
+        documenting inside the description element.)
+    </description>
+
+    <file>src</file>
+
+    <arg name="colors"/>
+    <arg name="extensions" value="php"/>
+
+    <rule ref="PSR12"/>
+</ruleset>

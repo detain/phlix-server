@@ -113,6 +113,13 @@
             "ext-zlib": "8.3.0"
         }
     },
+    "scripts": {
+        "test": "phpunit",
+        "stan": "phpstan analyse --no-progress",
+        "stan-tests": "phpstan analyse -c phpstan-tests.neon --no-progress",
+        "cs": "phpcs",
+        "cs-tests": "phpcs --standard=phpcs-tests.xml"
+    },
     "extra": {
         "phlix": {
             "minHubVersion": "1.0.0",

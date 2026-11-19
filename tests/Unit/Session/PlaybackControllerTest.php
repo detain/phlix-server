@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Session;
 use Phlix\Session\PlaybackController;
 use Phlix\Session\SessionManager;
 use PHPUnit\Framework\TestCase;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 
 final class PlaybackControllerTest extends TestCase
@@ -443,5 +444,105 @@ final class PlaybackControllerTest extends TestCase
     public function record(string $query, array $params): void
     {
         $this->captured = ['query' => $query, 'params' => $params];
+    }
+    public function testControllerRowDecodeLegsAreByteIdenticalToLegacyAcrossVectors(): void
+    {
+        // E-09 cohort 5a (PlaybackController): the pre-fold strict-guard
+        // ternaries of finalizeWatchedForUser() (session_id leg) and
+        // getContinueWatching() (position/duration ticks + media_item_id legs)
+        // transcribed verbatim from the parent tree.
+        $sessionVectors = ['sess-1', '', 5, null, '5.0', 7];
+        foreach ($sessionVectors as $sessionId) {
+            $row = ['session_id' => $sessionId, 'position_ticks' => 123];
+            $dispatches = 0;
+            $dispatcher = $this->createMock(EventDispatcherInterface::class);
+            $dispatcher->method('dispatch')->willReturnCallback(
+                static function (mixed $event) use (&$dispatches): mixed {
+                    $dispatches++;
+                    return $event;
+                }
+            );
+            $controller = new PlaybackController(
+                $this->captureConnection([$row]),
+                $this->createMock(SessionManager::class),
+                null,
+                $dispatcher
+            );
+            $legacyVisible = is_string($row['session_id'] ?? null) && $row['session_id'] !== '';
+            $controller->finalizeWatchedForUser('user-1', 'media-1');
+            $this->assertSame($legacyVisible ? 1 : 0, $dispatches);
+        }
+        // Missing-key arm: ??-guarded on both sides, safe vector.
+        $missingRow = ['position_ticks' => 123];
+        $dispatches = 0;
+        $dispatcher = $this->createMock(EventDispatcherInterface::class);
+        $dispatcher->method('dispatch')->willReturnCallback(
+            static function (mixed $event) use (&$dispatches): mixed {
+                $dispatches++;
+                return $event;
+            }
+        );
+        (new PlaybackController(
+            $this->captureConnection([$missingRow]),
+            $this->createMock(SessionManager::class),
+            null,
+            $dispatcher
+        ))->finalizeWatchedForUser('user-1', 'media-1');
+        $this->assertSame(0, $dispatches);
+
+        $tickVectors = [
+            ['position_ticks' => 900, 'duration_ticks' => 4500],
+            ['position_ticks' => '900', 'duration_ticks' => '4500'],
+            ['position_ticks' => 900.9, 'duration_ticks' => 4500.4],
+            ['position_ticks' => true, 'duration_ticks' => false],
+            ['position_ticks' => null, 'duration_ticks' => null],
+            ['position_ticks' => 'x', 'duration_ticks' => '1e3'],
+        ];
+        foreach ($tickVectors as $index => $ticks) {
+            $row = array_merge([
+                'id' => 'ps-1',
+                'media_item_id' => 'm-1',
+                'name' => 'Dune',
+                'type' => 'movie',
+                'metadata_json' => '{}',
+            ], $ticks);
+            $controller = new PlaybackController(
+                $this->captureConnection([$row]),
+                $this->createMock(SessionManager::class)
+            );
+            $result = $controller->getContinueWatching('user-1', 10);
+            $legacyPosition = is_numeric($row['position_ticks'] ?? null) ? intval($row['position_ticks']) : 0;
+            $legacyDuration = is_numeric($row['duration_ticks'] ?? null) ? intval($row['duration_ticks']) : 0;
+            $legacyMediaItemId = is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '';
+            $this->assertSame(
+                [
+                    'media_item_id' => $legacyMediaItemId,
+                    'position_ticks' => $legacyPosition,
+                    'duration_ticks' => $legacyDuration,
+                ],
+                [
+                    'media_item_id' => $result[0]['media_item_id'],
+                    'position_ticks' => $result[0]['position_ticks'],
+                    'duration_ticks' => $result[0]['duration_ticks'],
+                ],
+                "tick vector $index"
+            );
+        }
+        // Empty media_item_id leg: value flows through unchanged (no skip arm).
+        $row = [
+            'id' => 'ps-2',
+            'media_item_id' => '',
+            'name' => 'Dune',
+            'type' => 'movie',
+            'position_ticks' => 9,
+            'duration_ticks' => 10,
+            'metadata_json' => '{}',
+        ];
+        $controller = new PlaybackController(
+            $this->captureConnection([$row]),
+            $this->createMock(SessionManager::class)
+        );
+        $result = $controller->getContinueWatching('user-1', 10);
+        $this->assertSame('', $result[0]['media_item_id']);
     }
 }

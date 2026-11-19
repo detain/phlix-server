@@ -349,7 +349,10 @@ class PlaybackController
         }
 
         foreach ($rows as $row) {
-            $sessionId = is_string($row['session_id'] ?? null) ? $row['session_id'] : '';
+            // E-09 cohort 5a: RowMap fold of the pre-fold strict-guard ternaries
+            // (fallbacks transcribed); byte-identity pinned by the legacy-oracle
+            // vectors in tests/Unit/Session/PlaybackControllerTest.php.
+            $sessionId = RowMap::str($row, 'session_id', '');
             if ($sessionId === '') {
                 continue;
             }
@@ -544,9 +547,9 @@ class PlaybackController
 
             // Re-attach playback-specific fields the shaper doesn't carry.
             // Use type checks to satisfy PHPStan
-            $positionTicks = is_numeric($row['position_ticks'] ?? null) ? intval($row['position_ticks']) : 0;
-            $durationTicks = is_numeric($row['duration_ticks'] ?? null) ? intval($row['duration_ticks']) : 0;
-            $mediaItemId = is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '';
+            $positionTicks = RowMap::intFromNumeric($row, 'position_ticks', 0);
+            $durationTicks = RowMap::intFromNumeric($row, 'duration_ticks', 0);
+            $mediaItemId = RowMap::str($row, 'media_item_id', '');
             $shaped['position_ticks'] = $positionTicks;
             $shaped['duration_ticks'] = $durationTicks;
             $shaped['media_item_id'] = $mediaItemId;

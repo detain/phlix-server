@@ -18,6 +18,7 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Process\Bounded;
+use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -182,9 +183,7 @@ class BackupManager
                 'checksum_sha256' => $this->rowString($row, 'checksum_sha256'),
                 'is_s3' => $this->rowBool($row, 'is_s3'),
                 'created_at' => $this->rowString($row, 'created_at'),
-                'expires_at' => isset($row['expires_at'])
-                    ? $this->rowString($row, 'expires_at')
-                    : null,
+                'expires_at' => RowMap::nullableStringFromScalar($row, 'expires_at'),
             ];
         }, $rows);
     }

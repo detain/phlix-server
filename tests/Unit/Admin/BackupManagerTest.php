@@ -437,4 +437,46 @@ class BackupManagerTest extends TestCase
             'a missing file has no marker'
         );
     }
+
+    /**
+     * E-09 cohort-5b oracle: the `expires_at` leg of listBackups() across the
+     * driver-reachable domain (the nullableStringFromScalar fold is
+     * value-identical here: SQL NULL and a missing key hydrate to null,
+     * scalars cast, non-scalars collapse to ''). Bool FALSE is deliberately
+     * NOT a vector: rowString() renders it '0' where the accessor would give
+     * '', a divergence reachable only through a non-datetime value — it is
+     * disclosed and is precisely why the rowString() helper stays for its
+     * other (NOT NULL column) sites. Green before AND after the fold.
+     */
+    public function testListBackupsExpiresAtColumnGrammar(): void
+    {
+        $base = [
+            'id' => 'backup-grammar',
+            'label' => 'Grammar',
+            'file_path' => '/var/phlix/backups/grammar.tar.gz',
+            'size_bytes' => 1,
+            'checksum_sha256' => 'abc',
+            'is_s3' => false,
+            'created_at' => '2024-01-01 00:00:00',
+        ];
+
+        $vectors = [
+            [['expires_at' => '2026-01-02 03:04:05'], '2026-01-02 03:04:05'],
+            [['expires_at' => null], null],
+            [[], null],
+            [['expires_at' => '7'], '7'],
+            [['expires_at' => ['nested']], ''],
+            [['expires_at' => true], '1'],
+            [['expires_at' => 1.25], '1.25'],
+        ];
+
+        foreach ($vectors as $i => [$expires, $expected]) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$base + $expires]);
+
+            $backups = (new BackupManager($db))->listBackups();
+
+            $this->assertSame($expected, $backups[0]['expires_at'], 'vector ' . $i);
+        }
+    }
 }

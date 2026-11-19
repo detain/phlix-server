@@ -25,6 +25,8 @@ namespace Phlix\Tests\Unit\Server\WebPortal;
 use Phlix\Auth\AuthManager;
 use Phlix\Common\Http\PageLimit;
 use Phlix\Media\ChapterSearchService;
+use Phlix\Common\Util\RowMap;
+use Phlix\Media\MarkerType;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Markers\MarkerService;
@@ -247,5 +249,62 @@ final class WebPortalRouterSearchTotalTest extends TestCase
 
         self::assertSame(400, $response->statusCode);
         self::assertSame([], $recorded);
+    }
+
+    /**
+     * E-09 cohort 5a (W5): legacy-oracle vectors for the chapter-marker
+     * row-decode fold leg (sibling placement: no dedicated
+     * ChapterSearchService suite exists; named in the src E-09 comment).
+     * Vectors carry every key the pre-fold block reads directly
+     * (failOnWarning law). The host feed is non-empty per vector so the
+     * fold leg executes; the shaped return is driven by hydrated items
+     * (empty here), and the fold is additionally pinned by direct
+     * expression equality against the transcribed ternary.
+     */
+    public function testMarkerRowDecodeLegIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            [
+                'media_item_id' => 'm-1',
+                'start_time_ms' => 0,
+                'end_time_ms' => 5,
+                'duration_ms' => 5,
+                'label' => 'Cold open',
+            ],
+            ['media_item_id' => 9, 'start_time_ms' => 1, 'end_time_ms' => 2, 'duration_ms' => 1],
+            [
+                'media_item_id' => null,
+                'start_time_ms' => 1,
+                'end_time_ms' => 2,
+                'duration_ms' => 1,
+                'label' => 'x',
+            ],
+            [
+                'media_item_id' => 'm-2',
+                'start_time_ms' => 3,
+                'end_time_ms' => 4,
+                'duration_ms' => 1,
+                'label' => null,
+            ],
+            ['start_time_ms' => 3, 'end_time_ms' => 4, 'duration_ms' => 1],
+        ];
+
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('findByIds')->willReturn([]);
+
+        foreach ($vectors as $row) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+            $service = new ChapterSearchService($db, $itemRepo);
+
+            self::assertSame(
+                [],
+                $service->searchByMarkerProximity(MarkerType::Intro, 5000, 300, 'user-1', 10)
+            );
+
+            $legacy = is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '';
+            self::assertSame($legacy, RowMap::str($row, 'media_item_id', ''));
+        }
     }
 }

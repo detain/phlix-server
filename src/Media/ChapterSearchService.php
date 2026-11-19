@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media;
 
+use Phlix\Common\Util\RowMap;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
 use Workerman\MySQL\Connection;
@@ -107,7 +108,12 @@ final class ChapterSearchService
         // Merge marker info into each item
         $markerMap = [];
         foreach ($rows as $row) {
-            $id = is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '';
+            // E-09 cohort 5a: RowMap fold (str default '' transcribed; the
+            // direct marker reads below are pre-fold shapes kept as-is).
+            // Pinned by the legacy-oracle vectors in
+            // tests/Unit/Server/WebPortal/WebPortalRouterSearchTotalTest.php
+            // (sibling placement: no dedicated ChapterSearchService suite).
+            $id = RowMap::str($row, 'media_item_id', '');
             $markerMap[$id] = [
                 'start_time_ms' => $row['start_time_ms'],
                 'end_time_ms' => $row['end_time_ms'],

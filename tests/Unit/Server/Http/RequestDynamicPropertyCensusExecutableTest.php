@@ -1343,7 +1343,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   (no further new files), the fold census test asserting base-only constants
     //   rides with it.
     // Pin: 2190 tracked at stage time +1 = 2191.
-    private const EXPECTED_PHP_FILES = 2196;
+    private const EXPECTED_PHP_FILES = 2198;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

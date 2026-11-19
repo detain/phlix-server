@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Markers\Fingerprinting;
 
+use Phlix\Common\Process\Bounded;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -68,48 +69,41 @@ class ChromaPrintShelled implements ChromaPrintInterface
 
         $this->logger->debug('Running fpcalc', ['command' => $cmd]);
 
-        $descriptorSpec = [
-            0 => ['pipe', 'r'],
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w'],
-        ];
+        // E-12: bounded capture-of-both-streams proc_open grammar lives in the
+        // Bounded SSOT. The stdin pipe keeps its historical shape (handed to the
+        // child already closed) and the stdout read timeout is preserved.
+        $result = Bounded::capture(
+            $cmd,
+            null,
+            Bounded::PIPE,
+            Bounded::PIPE,
+            Bounded::PIPE,
+            self::TIMEOUT_SECONDS
+        );
 
-        $process = proc_open($cmd, $descriptorSpec, $pipes);
-
-        if (!is_resource($process)) {
+        if ($result === null) {
             throw new ChromaPrintFingerprintFailedException(
                 sprintf('Failed to start fpcalc process for %s', $path)
             );
         }
 
-        stream_set_timeout($pipes[1], self::TIMEOUT_SECONDS);
-
-        $stdout = stream_get_contents($pipes[1]);
-        $stderr = stream_get_contents($pipes[2]);
-
-        fclose($pipes[0]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-
-        $exitCode = proc_close($process);
-
-        if ($exitCode !== 0) {
+        if ($result->exitCode !== 0) {
             $this->logger->error('fpcalc failed', [
                 'path' => $path,
-                'exit_code' => $exitCode,
-                'stderr' => $stderr,
+                'exit_code' => $result->exitCode,
+                'stderr' => $result->stderr,
             ]);
             throw new ChromaPrintFingerprintFailedException(
                 sprintf(
                     'fpcalc exited with code %d for %s: %s',
-                    $exitCode,
+                    $result->exitCode,
                     $path,
-                    trim($stderr ?: 'Unknown error')
+                    trim($result->stderr ?: 'Unknown error')
                 )
             );
         }
 
-        $fingerprint = $this->parseFingerprintOutput($stdout);
+        $fingerprint = $this->parseFingerprintOutput($result->stdout);
 
         if ($fingerprint === '') {
             throw new ChromaPrintFingerprintFailedException(

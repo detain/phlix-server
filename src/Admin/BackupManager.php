@@ -17,6 +17,7 @@ use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Process\Bounded;
 use Phlix\Common\Uuid;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -620,31 +621,24 @@ class BackupManager
         ?string $stdinFile = null,
         ?string $stdoutFile = null
     ): array {
-        $descriptors = [
-            0 => $stdinFile === null ? ['file', '/dev/null', 'r'] : ['file', $stdinFile, 'r'],
-            1 => $stdoutFile === null ? ['file', '/dev/null', 'w'] : ['file', $stdoutFile, 'w'],
-            2 => ['pipe', 'w'],
-        ];
-
-        $process = proc_open(
+        // E-12: Bounded capture grammar. The password rides the child ENV only
+        // (MYSQL_PWD) — never argv, never a captured stream; BoundedResult
+        // carries no command/env fields, so it cannot leak the secret.
+        $result = Bounded::capture(
             $argv,
-            $descriptors,
-            $pipes,
-            null,
-            ['MYSQL_PWD' => $password, 'PATH' => '/usr/bin:/bin']
+            ['MYSQL_PWD' => $password, 'PATH' => '/usr/bin:/bin'],
+            $stdinFile ?? '/dev/null',
+            $stdoutFile ?? '/dev/null',
+            Bounded::PIPE
         );
 
-        if (!is_resource($process)) {
+        if ($result === null) {
             throw new \RuntimeException('Unable to start ' . $argv[0] . ' — proc_open failed.');
         }
 
-        $stderr = stream_get_contents($pipes[2]);
-        fclose($pipes[2]);
-        $returnCode = proc_close($process);
-
         return [
-            'exit_code' => $returnCode,
-            'stderr' => is_string($stderr) ? trim($stderr) : '',
+            'exit_code' => $result->exitCode,
+            'stderr' => trim($result->stderr),
         ];
     }
 

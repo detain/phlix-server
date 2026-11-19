@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\LiveTv\Tuners\Dvbt;
 
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Process\Bounded;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -323,8 +324,9 @@ class DvbtSignalEngine
     public function stopStreaming($process): void
     {
         if (is_resource($process)) {
-            proc_terminate($process, SIGTERM);
-            proc_close($process);
+            // E-12: terminate+reap pair lives in the Bounded SSOT (plain
+            // SIGTERM, no escalation — the historical site shape).
+            Bounded::terminate($process, SIGTERM);
             // SH-018: remove the per-stream temp file we allocated for this
             // exact process handle (the old predictable name made this a
             // no-op implicitly; with unique temps, stopping must clean up).

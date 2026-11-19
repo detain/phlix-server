@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Common\Database;
 
 use Phlix\Common\Database\PooledMySQLConnection;
+use Phlix\Common\Logger\LoggerFactory;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -229,6 +230,165 @@ final class PooledMySQLConnectionTest extends TestCase
             'the evicted dead connection must be closeConnection()\'d, not merely dropped (FD-churn fix)'
         );
         self::assertSame(0, $created[1]->closes, 'the fresh connection must not itself be closed');
+    }
+
+    /**
+     * TXMUTEX-A A5 (2026-11-21) — server port of hub's throw-safe deferred release.
+     *
+     * The deferred arm of the lease has already unset `leases`/`txPending` by
+     * the time it runs `rollBackTrans()`. If the rollback THROWS (the socket
+     * died mid-transaction), the pre-fix arm let the exception escape and never
+     * reached `idle->push()` — the slot counted in `created` was stranded
+     * permanently, and the pool exhausted itself one connection at a time.
+     * Hub's arm retired the connection instead; the server must too.
+     *
+     * Coroutine A opens a transaction on the only slot, arms a double whose
+     * `rollBackTrans()` throws, and exits — the deferred arm must absorb the
+     * throw, close the connection, release the created slot, and NOT push.
+     * Coroutine B then opens a fresh second connection and runs its query.
+     * Pre-fix the throw escapes the defer and B never gets a connection at all.
+     */
+    #[RequiresPhpExtension('swoole')]
+    public function testThrowingRollbackOnReleaseRetiresTheConnectionInsteadOfStrandingTheSlot(): void
+    {
+        if (!extension_loaded('swoole')) {
+            $this->markTestSkipped('Swoole extension required');
+        }
+
+        /** @var list<object{alive: bool, closes: int, rollbackThrows: bool, ownLog: list<string>}> $created */
+        $created = [];
+        $factory = static function () use (&$created): Connection {
+            $conn = new class extends Connection {
+                public bool $alive = true;
+                public int $closes = 0;
+                public bool $rollbackThrows = false;
+                /** @var list<string> */
+                public array $ownLog = [];
+
+                public function __construct()
+                {
+                    // Deliberately NOT calling parent::__construct() — no
+                    // real socket, mirroring PooledMySQLConnection itself.
+                }
+
+                /**
+                 * @param string                        $query
+                 * @param array<int|string, mixed>|null  $params
+                 * @param int                            $fetchmode
+                 * @return mixed
+                 */
+                public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
+                {
+                    $this->ownLog[] = 'query:' . $query;
+                    if ($query === 'SELECT 1') {
+                        if (!$this->alive) {
+                            throw new \RuntimeException('server has gone away');
+                        }
+                        return [['1' => 1]];
+                    }
+                    return [];
+                }
+
+                public function beginTrans(): bool
+                {
+                    $this->ownLog[] = 'begin';
+                    return true;
+                }
+
+                public function rollBackTrans(): bool
+                {
+                    $this->ownLog[] = 'rollback';
+                    if ($this->rollbackThrows) {
+                        throw new \RuntimeException('rollback exploded');
+                    }
+                    return true;
+                }
+
+                public function closeConnection(): void
+                {
+                    $this->closes++;
+                }
+            };
+            $created[] = $conn;
+            return $conn;
+        };
+
+        // maxSize=1 with a short acquire timeout: a stranded slot would show up
+        // as a bounded 'pool exhausted' throw for B instead of a hang.
+        $pool = new PooledMySQLConnection('h', 3306, 'u', 'p', 'db', 1, 'utf8mb4', $factory, 0.5);
+
+        // Isolate the arm's warning: point the singleton logger at a temp
+        // stream handler (the estate test idiom, cf. the admin controller
+        // tests) so the retirement notice lands in a file we can assert on
+        // instead of php://stdout — any stray output fails this suite.
+        $dir = sys_get_temp_dir() . '/txmutex_a5_' . uniqid('', true);
+        mkdir($dir, 0775, true);
+        $logPath = $dir . '/app.log';
+        file_put_contents(
+            $dir . '/logger.php',
+            "<?php\nreturn [\n"
+            . "    'handlers' => [\n"
+            . "        'file' => [\n"
+            . "            'type' => 'stream',\n"
+            . "            'path' => " . var_export($logPath, true) . ",\n"
+            . "            'level' => 'debug',\n"
+            . "        ],\n"
+            . "    ],\n"
+            . "];\n",
+        );
+        LoggerFactory::init($dir . '/logger.php');
+
+        try {
+            // Coroutine A opens the transaction and exits — its deferred release
+            // runs during the first Event::wait() drain.
+            \Swoole\Coroutine\go(static function () use ($pool, &$created): void {
+                $pool->beginTrans();
+                // S128 (see the eviction test above): the object shape is read-only
+                // to PHPStan, and arming the throwing rollback IS the simulation.
+                // @phpstan-ignore assign.propertyReadOnly
+                $created[0]->rollbackThrows = true;
+            });
+            \Swoole\Event::wait();
+
+            self::assertCount(1, $created, 'coroutine A must have opened exactly one connection');
+            self::assertSame(
+                1,
+                $created[0]->closes,
+                'a rollback that threw on release must RETIRE the connection via closeConnection(), not strand it (A5)'
+            );
+            self::assertContains('rollback', $created[0]->ownLog, 'the deferred arm must have attempted the rollback');
+            self::assertStringContainsString(
+                'PooledMySQLConnection: rollback on release threw; retiring connection: rollback exploded',
+                (string) file_get_contents($logPath),
+                'the retirement must be announced on the database log channel (hub-parity warning)'
+            );
+
+            // The retirement released the created slot, so B opens a fresh
+            // connection rather than timing out on an exhausted pool.
+            \Swoole\Coroutine\go(static function () use ($pool): void {
+                $pool->query('SELECT B');
+            });
+            \Swoole\Event::wait();
+
+            self::assertCount(2, $created, 'the retired slot must be refillable: coroutine B opens a fresh connection');
+            self::assertContains(
+                'query:SELECT B',
+                $created[1]->ownLog,
+                'coroutine B must run on the replacement connection'
+            );
+            self::assertNotContains(
+                'query:SELECT B',
+                $created[0]->ownLog,
+                'the retired connection must never serve another query'
+            );
+            self::assertSame(0, $created[1]->closes, 'the fresh connection must not itself be closed');
+        } finally {
+            LoggerFactory::reset();
+            foreach (glob($dir . '/*') ?: [] as $file) {
+                @unlink($file);
+            }
+            @rmdir($dir);
+        }
     }
 
     /**

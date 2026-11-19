@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Common\Database;
 
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\LogChannels;
 use Workerman\MySQL\Connection;
 
 /**
@@ -396,9 +398,38 @@ final class PooledMySQLConnection extends Connection
                 }
                 // Never return a dirty (open-transaction) connection to the pool.
                 // Rollback any uncommitted transaction before reuse — an interrupted
-                // coroutine must not poison the next lessee.
+                // coroutine must not poison the next lessee. But the rollback itself
+                // can throw (the socket may have died mid-transaction) or report
+                // failure, and a throw here would strand the lease slot entirely:
+                // `leases`/`txPending` are already unset above and the idle channel
+                // never receives the connection, shrinking the pool by one for good.
+                // Hub's deferred arm grew exactly this guard; the server mirrors it
+                // (TXMUTEX-A A5, 2026-11-21): a rollback that throws or fails RETIRES
+                // the connection (best-effort close, release the created slot)
+                // instead of pushing a corpse or losing the slot.
                 if ($hadPendingTx) {
-                    $released->rollBackTrans();
+                    $rolledBack = false;
+                    try {
+                        $rolledBack = $released->rollBackTrans() !== false;
+                    } catch (\Throwable $e) {
+                        try {
+                            LoggerFactory::get(LogChannels::DATABASE)->warning(
+                                'PooledMySQLConnection: rollback on release threw; retiring connection: '
+                                . $e->getMessage()
+                            );
+                        } catch (\Throwable) {
+                            // logging is best-effort
+                        }
+                    }
+                    if (!$rolledBack) {
+                        try {
+                            $released->closeConnection();
+                        } catch (\Throwable) {
+                            // the socket may already be dead
+                        }
+                        $this->created--;
+                        return;
+                    }
                 }
                 $this->idle->push($released);
             });

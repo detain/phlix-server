@@ -182,7 +182,7 @@ final class RelayMessageFramerWireCorpusTest extends TestCase
      * truncation bounds 65534/65535 exceed their sources and substr cannot
      * extend a string, so the last two payloads measure 512B/768B (ramp x2
      * and x3), NOT the uint16 caps. Cap-boundary coverage lives in the
-     * dedicated max-size/oversized-rejection tests below; changing these
+     * dedicated max-size/oversized-rejection tests above; changing these
      * bounds would change the pinned digest and belongs to the three-file
      * disclosure ritual, never to a labels fix.
      *

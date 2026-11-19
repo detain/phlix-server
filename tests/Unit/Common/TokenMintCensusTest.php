@@ -52,7 +52,6 @@ final class TokenMintCensusTest extends TestCase
      * @var array<string, string>
      */
     private const ALLOWED_RAW_MINT_FILES = [
-        'Auth/JwtHandler.php' => 'jti mint frozen to review-loop changes (SRV-1); shape-identical Token::jti() swap is the banked follow-up',
         'Dlna/ContentDirectory.php' => '6-byte DLNA object-id wire shape, not security state (CSPRNG already ratified by SRV-2.2)',
         'Dlna/DlnaDevice.php' => '6-byte DLNA device-serial wire shape, not security state (CSPRNG already ratified by SRV-2.2)',
         'Plugins/Installer/HttpInstaller.php' => 'temp extraction-dir collision suffix, not security state',

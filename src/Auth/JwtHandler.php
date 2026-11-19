@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Auth;
 
+use Phlix\Common\Token;
 use Phlix\Shared\Auth\JwtClaims;
 
 /**
@@ -258,7 +259,7 @@ class JwtHandler
             'iat' => $now,
             'exp' => $now + $this->refreshTtl(),
             'type' => 'refresh',
-            'jti' => bin2hex(random_bytes(16)),
+            'jti' => Token::jti(),
         ]);
 
         return $this->encode($payload);

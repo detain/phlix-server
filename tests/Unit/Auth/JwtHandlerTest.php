@@ -4,6 +4,7 @@ namespace Phlix\Tests\Unit\Auth;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\JwtHandler;
+use Phlix\Common\Token;
 
 class JwtHandlerTest extends TestCase
 {
@@ -76,6 +77,32 @@ class JwtHandlerTest extends TestCase
         $jti = $payload['jti'];
         $this->assertIsString($jti);
         $this->assertEquals(32, strlen($jti)); // 16 bytes = 32 hex chars
+    }
+
+    /**
+     * SRV-TINIES item-1 (ruling (ii)) — WIDTH LAW for the delegated mint: the
+     * refresh `jti` is minted by {@see Token::jti()} and must stay exactly
+     * 32 lowercase hex chars. auth_refresh_grants.jti is a CHAR(32) PRIMARY
+     * KEY (migration 127), so a wider shape (e.g. a prefixed mint) overflows
+     * the column under MySQL strict mode — this pin is what forbids that at
+     * the wire boundary. Green before AND after the swap: the delegation
+     * itself is census-proven (TokenMintCensusTest allowlist retirement).
+     */
+    public function testRefreshTokenJtiKeepsTheChar32WireShapeOfTokenJti(): void
+    {
+        $first = $this->jwtHandler->validateToken($this->jwtHandler->createRefreshToken('user-123'));
+        $second = $this->jwtHandler->validateToken($this->jwtHandler->createRefreshToken('user-123'));
+
+        $jti = $first['jti'];
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $jti);
+
+        // Equivalence class with the policy generator itself.
+        $policy = Token::jti();
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $policy);
+        $this->assertSame(strlen($policy), strlen($jti));
+
+        // Uniqueness: two mints never collide on the grant primary key.
+        $this->assertNotSame($jti, $second['jti']);
     }
 
     public function testTokenWithCustomClaims(): void

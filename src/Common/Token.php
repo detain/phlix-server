@@ -56,8 +56,9 @@ use InvalidArgumentException;
  * - `prefixed()` — caller-declared budget under a literal wire prefix, for
  *   shapes consumers parse by prefix: the `'phlix-'` newsletter MIME
  *   boundary and the `'sp_'` SyncPlay group id.
- * - `jti()` — 16 bytes. JWT id claims; shape-identical to the frozen
- *   `JwtHandler` mint so the banked follow-up swap cannot move wire bytes.
+ * - `jti()` — 16 bytes. JWT id claims; shape-identical to the `JwtHandler`
+ *   mint it now performs (the banked follow-up swap landed) — wire bytes never
+ *   moved, which is the width law: auth_refresh_grants.jti is CHAR(32).
  * - `tmpSuffix()` — 8 bytes. Temp-file / atomic-write collision suffixes.
  *   NOT security state — nothing secret is named by it; it lives here so
  *   the one remaining hex-mint family in `src/` is generated from the same
@@ -68,8 +69,6 @@ use InvalidArgumentException;
  *
  * - DLNA object-id / device-serial hex suffixes (`Dlna/*`) — UPnP wire
  *   vocabulary shapes, entropy source already ratified CSPRNG by SRV-2.2.
- * - The `JwtHandler` jti site — file frozen to review-loop changes; the
- *   one-line `Token::jti()` swap is a banked follow-up.
  * - `SyncPlayBridge`'s per-boot tripwire secret — security state, but it
  *   belongs to its owning lane; a named generator will replace it there.
  * - `BootIdentity`'s process label — observability only, gates nothing.
@@ -101,7 +100,7 @@ final readonly class Token
     /** OAuth2 state-correlation browser-binding secret budget. */
     private const CORRELATION_BYTES = 32;
 
-    /** JWT id-claim budget (matches the frozen JwtHandler shape). */
+    /** JWT id-claim budget (16 bytes = the 32-char CHAR(32) grant-PK wire shape). */
     private const JTI_BYTES = 16;
 
     /** Temp-file collision-suffix budget. */
@@ -176,7 +175,8 @@ final readonly class Token
     }
 
     /**
-     * JWT id claim (16 bytes — shape-identical to the frozen JwtHandler mint).
+     * JWT id claim (16 bytes — the JwtHandler refresh-mint shape: 32 lowercase
+     * hex, width-pinned against the CHAR(32) auth_refresh_grants.jti PK).
      */
     public static function jti(): string
     {

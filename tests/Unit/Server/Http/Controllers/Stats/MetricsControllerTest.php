@@ -229,4 +229,118 @@ final class MetricsControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('data', $body);
     }
+
+    // -- SRV-3.1 (bug #7) bounded-parameter pins ---------------------------------
+    //
+    // Same Workerman-resident-memory law as the pagination ceiling at
+    // \Phlix\Common\Http\PageLimit: every caller-supplied number here flows
+    // into repository scans/loops with NO upper bound today, so one admin-page
+    // refresh can pin a worker scanning years of buckets. The caps are the
+    // named MAX_* constants on the controller; valid in-range values and the
+    // documented body channel stay byte-identical (pinned above and below).
+
+    public function testSnapshotCapsOversizedWindow(): void
+    {
+        $repo = $this->mockRepo();
+        $repo->expects($this->once())
+            ->method('snapshot')
+            ->with(604800)
+            ->willReturn([]);
+
+        $controller = new MetricsController($repo);
+        $request = new Request();
+        $request->body = ['window' => '999999999'];
+
+        $controller->snapshot($request, []);
+    }
+
+    public function testHistoryCapsOversizedMinutesAndResolution(): void
+    {
+        $repo = $this->mockRepo();
+        $repo->expects($this->once())
+            ->method('history')
+            ->with(10080, 86400)
+            ->willReturn([]);
+
+        $controller = new MetricsController($repo);
+        $request = new Request();
+        $request->body = ['minutes' => '999999999', 'resolution' => '999999999'];
+
+        $controller->history($request, []);
+    }
+
+    public function testConnectionsCapsOversizedTtl(): void
+    {
+        $repo = $this->mockRepo();
+        $repo->expects($this->once())
+            ->method('liveConnections')
+            ->with(604800)
+            ->willReturn([]);
+
+        $controller = new MetricsController($repo);
+        $request = new Request();
+        $request->body = ['ttl' => '999999999'];
+
+        $controller->connections($request, []);
+    }
+
+    public function testRoutesCapsOversizedMinutesAndLimit(): void
+    {
+        $repo = $this->mockRepo();
+        $repo->expects($this->once())
+            ->method('topRoutes')
+            ->with(10080, 100)
+            ->willReturn([]);
+
+        $controller = new MetricsController($repo);
+        $request = new Request();
+        $request->body = ['minutes' => '999999999', 'limit' => '1000000'];
+
+        $controller->routes($request, []);
+    }
+
+    public function testQueryChannelParametersAreHonored(): void
+    {
+        $repo = $this->mockRepo();
+        $repo->expects($this->once())
+            ->method('snapshot')
+            ->with(120)
+            ->willReturn([]);
+
+        $controller = new MetricsController($repo);
+        $request = new Request();
+        $request->query = ['window' => '120'];
+
+        $controller->snapshot($request, []);
+    }
+
+    public function testNonNumericParametersFallBackToDefaults(): void
+    {
+        $repo = $this->mockRepo();
+        $repo->expects($this->once())
+            ->method('history')
+            ->with(60, 60)
+            ->willReturn([]);
+
+        $controller = new MetricsController($repo);
+        $request = new Request();
+        $request->body = ['minutes' => 'not-a-number', 'resolution' => ''];
+
+        $controller->history($request, []);
+    }
+
+    public function testZeroAndNegativeParametersClampToOne(): void
+    {
+        $repo = $this->mockRepo();
+        $repo->expects($this->once())
+            ->method('topRoutes')
+            ->with(1, 1)
+            ->willReturn([]);
+
+        $controller = new MetricsController($repo);
+        $request = new Request();
+        $request->body = ['minutes' => '-5', 'limit' => '0'];
+
+        $controller->routes($request, []);
+    }
 }

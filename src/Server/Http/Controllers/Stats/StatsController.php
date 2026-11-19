@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers\Stats;
 
 use DateTime;
+use Phlix\Common\Http\PageLimit;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Stats\StatsCollector;
@@ -70,6 +71,12 @@ final class StatsController
      * `GET /api/v1/admin/stats/top-users?limit=10&since=2024-01-01` →
      * `200 { "data": [{user_id, total_watch_time, play_count}, ...] }`
      *
+     * The `limit` passes through {@see PageLimit::clamp()} with a default of
+     * 10: an unclamped value reaches `getTopUsers()`'s `LIMIT ?` binding, and
+     * under Workerman (resident memory) that is an unbounded-scan / OOM
+     * vector against every other user of the worker, not a "big page".
+     * Values in `[1, PageLimit::MAX]` behave exactly as before.
+     *
      * @param Request              $request The HTTP request (query.limit, query.since)
      * @param array<string,string> $params  Path parameters (unused)
      *
@@ -77,7 +84,7 @@ final class StatsController
      */
     public function topUsers(Request $request, array $params): Response
     {
-        $limit = $this->parseInt($request->input('limit', '10'));
+        $limit = PageLimit::clamp($this->rawParam($request, 'limit'), 10);
         $since = $request->input('since');
         $sinceDate = $since !== null ? $this->parseDate($since) : null;
 
@@ -92,6 +99,9 @@ final class StatsController
      * `GET /api/v1/admin/stats/top-media?limit=10&since=2024-01-01` →
      * `200 { "data": [{media_item_id, play_count, total_duration}, ...] }`
      *
+     * The `limit` is clamped by {@see PageLimit::clamp()} for the same
+     * resident-worker law documented on {@see self::topUsers()}.
+     *
      * @param Request              $request The HTTP request (query.limit, query.since)
      * @param array<string,string> $params  Path parameters (unused)
      *
@@ -99,7 +109,7 @@ final class StatsController
      */
     public function topMedia(Request $request, array $params): Response
     {
-        $limit = $this->parseInt($request->input('limit', '10'));
+        $limit = PageLimit::clamp($this->rawParam($request, 'limit'), 10);
         $since = $request->input('since');
         $sinceDate = $since !== null ? $this->parseDate($since) : null;
 
@@ -160,19 +170,20 @@ final class StatsController
     }
 
     /**
-     * Parse an integer from a string-ish input, with a default of 10.
+     * Read a numeric parameter across BOTH documented channels: the query
+     * string wins when present (the `?limit=` surface every endpoint doc
+     * advertises — `Request::input()` alone never saw it), then the decoded
+     * body (the channel that actually carried admin-UI values pre-fix), else
+     * null so the caller's declared default applies.
      *
-     * @param mixed $input Anything; values that filter_var cannot
-     *                     coerce to int fall back to 10.
+     * Coercion and bounds are deliberately NOT decided here — that is
+     * {@see PageLimit}'s job, so this controller cannot drift from the one
+     * pagination policy.
      *
-     * @return int Parsed integer
+     * @return mixed Raw request value or null.
      */
-    private function parseInt(mixed $input): int
+    private function rawParam(Request $request, string $key): mixed
     {
-        if (!is_scalar($input)) {
-            return 10;
-        }
-        $parsed = filter_var((string) $input, FILTER_VALIDATE_INT);
-        return $parsed !== false ? $parsed : 10;
+        return $request->query[$key] ?? $request->input($key);
     }
 }

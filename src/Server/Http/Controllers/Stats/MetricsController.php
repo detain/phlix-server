@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Stats;
 
+use Phlix\Common\Http\PageLimit;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Stats\Metrics\MetricsRepositoryInterface;
@@ -34,6 +35,25 @@ use Phlix\Stats\Metrics\MetricsRepositoryInterface;
  */
 final class MetricsController
 {
+    /**
+     * Largest look-back a caller may ask the metrics repository to scan:
+     * 7 days in minutes — the metrics retention default
+     * ({@see \Phlix\Stats\Metrics\MetricsFlushService} `retention_days`, 7).
+     * Anything beyond the retention window is guaranteed-empty scan work on a
+     * RESIDENT Workerman worker, which is the same hazard class the
+     * pagination ceiling at {@see PageLimit::MAX} exists for.
+     */
+    public const MAX_LOOKBACK_MINUTES = 10080;
+
+    /** Largest live-rate window: 7 days of seconds (per-bucket sample loop). */
+    public const MAX_WINDOW_SECONDS = 604800;
+
+    /** Largest connection-liveness TTL: 7 days of seconds. */
+    public const MAX_TTL_SECONDS = 604800;
+
+    /** Largest history bucket width: 1 day of seconds (bucketing granularity). */
+    public const MAX_RESOLUTION_SECONDS = 86400;
+
     public function __construct(
         private readonly MetricsRepositoryInterface $repo,
     ) {
@@ -53,7 +73,7 @@ final class MetricsController
      */
     public function snapshot(Request $request, array $params): Response
     {
-        $window = max(1, $this->parseInt($request->input('window'), 60));
+        $window = $this->queryBoundedInt($request, 'window', 60, self::MAX_WINDOW_SECONDS);
         $data = $this->repo->snapshot($window);
 
         return (new Response())->json(['success' => true, 'data' => $data]);
@@ -74,8 +94,8 @@ final class MetricsController
      */
     public function history(Request $request, array $params): Response
     {
-        $minutes = max(1, $this->parseInt($request->input('minutes'), 60));
-        $resolution = max(1, $this->parseInt($request->input('resolution'), 60));
+        $minutes = $this->queryBoundedInt($request, 'minutes', 60, self::MAX_LOOKBACK_MINUTES);
+        $resolution = $this->queryBoundedInt($request, 'resolution', 60, self::MAX_RESOLUTION_SECONDS);
         $data = $this->repo->history($minutes, $resolution);
 
         return (new Response())->json(['success' => true, 'data' => $data]);
@@ -94,7 +114,7 @@ final class MetricsController
      */
     public function connections(Request $request, array $params): Response
     {
-        $ttl = max(1, $this->parseInt($request->input('ttl'), 15));
+        $ttl = $this->queryBoundedInt($request, 'ttl', 15, self::MAX_TTL_SECONDS);
         $data = $this->repo->liveConnections($ttl);
 
         return (new Response())->json(['success' => true, 'data' => $data]);
@@ -115,27 +135,41 @@ final class MetricsController
      */
     public function routes(Request $request, array $params): Response
     {
-        $minutes = max(1, $this->parseInt($request->input('minutes'), 15));
-        $limit = max(1, $this->parseInt($request->input('limit'), 20));
+        $minutes = $this->queryBoundedInt($request, 'minutes', 15, self::MAX_LOOKBACK_MINUTES);
+        // `limit` is a page size bound into a `LIMIT`, so it rides the ONE
+        // pagination policy ([PageLimit::MIN, PageLimit::MAX]), not a bespoke
+        // ceiling; default stays 20.
+        $limit = PageLimit::clamp($this->rawParam($request, 'limit'), 20);
         $data = $this->repo->topRoutes($minutes, $limit);
 
         return (new Response())->json(['success' => true, 'data' => $data]);
     }
 
     /**
-     * Parse an integer from a mixed input with a default fallback.
+     * Read a caller-supplied parameter across BOTH documented channels: the
+     * query string wins when present (the `?window=`/`?minutes=` surfaces the
+     * endpoint docs advertise — `Request::input()` alone never saw them),
+     * then the decoded body (the channel that actually carried admin-UI
+     * values pre-fix), else null so the action's declared default applies.
      *
-     * @param mixed $input
-     * @param int   $default
-     *
-     * @return int
+     * @return mixed Raw request value or null.
      */
-    private function parseInt(mixed $input, int $default): int
+    private function rawParam(Request $request, string $key): mixed
     {
-        if (!is_scalar($input)) {
-            return $default;
-        }
-        $parsed = filter_var((string) $input, FILTER_VALIDATE_INT);
-        return $parsed !== false ? $parsed : $default;
+        return $request->query[$key] ?? $request->input($key);
+    }
+
+    /**
+     * Bounded integer parameter: shared coercion ({@see PageLimit::coerce()}
+     * — the one `is_numeric ? (int) : default` rule the codebase standardized
+     * on), then clamped into `[1, $max]`. Invalid/missing falls back to the
+     * action's default exactly as the removed hand-rolled `parseInt()` ladder
+     * did; the `$max` ceiling is what it never had.
+     */
+    private function queryBoundedInt(Request $request, string $key, int $default, int $max): int
+    {
+        $value = PageLimit::coerce($this->rawParam($request, $key), $default);
+
+        return min(max(1, $value), $max);
     }
 }

@@ -13,6 +13,7 @@ namespace Phlix\Webhooks;
 
 use DateTimeImmutable;
 use JsonSerializable;
+use Phlix\Common\Util\RowMap;
 
 /**
  * Database-backed webhook event record.
@@ -67,9 +68,14 @@ final class WebhookEventRecord implements JsonSerializable
             $createdAt = new DateTimeImmutable();
         }
 
+        // E-09: strict-int id and strict-string event_type via the
+        // RowMap convention table; the payload JSON/array fold and the
+        // temporal fallback stay hand-rolled verbatim (out of the scalar
+        // pilot). Byte-identity pin:
+        // tests/Unit/Webhooks/WebhookRecordsFromRowByteIdentityTest.php.
         return new self(
-            id: is_int($row['id'] ?? null) ? (int) $row['id'] : 0,
-            eventType: is_string($row['event_type'] ?? null) ? (string) $row['event_type'] : '',
+            id: RowMap::int($row, 'id', 0),
+            eventType: RowMap::str($row, 'event_type', ''),
             payload: $payload,
             createdAt: $createdAt,
         );

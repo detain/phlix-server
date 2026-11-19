@@ -1301,7 +1301,9 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   value-coercion convention table joins the corpus.
     // +1 (SRV-ROWMAP commit 2): tests/Unit/Collections/CollectionFromRowByteIdentityTest.php
     //   — the legacy-narrowing oracle pin for Collection::fromRow.
-    // Pinned to the TRACKED set after this commit: git ls-files '*.php' = 2175. The six
+    // +1 (SRV-ROWMAP commit 3): tests/Unit/Webhooks/WebhookRecordsFromRowByteIdentityTest.php
+    //   — the trio's legacy-oracle pin.
+    // Pinned to the TRACKED set after this commit: git ls-files '*.php' = 2176. The six
     // untracked src/Common/Process WIP files of the live SRV-PROCESS lane remain excluded
     // (disk inflation, not tracked truth — same discipline as every step above). Reads/writes
     // legs stay RED: SRV-ROWMAP speaks on zero Request roots.

@@ -13,6 +13,7 @@ namespace Phlix\Webhooks;
 
 use DateTimeImmutable;
 use JsonSerializable;
+use Phlix\Common\Util\RowMap;
 
 /**
  * Database-backed webhook subscription record.
@@ -73,11 +74,18 @@ final class WebhookSubscriptionRecord implements JsonSerializable
             $updatedAt = new DateTimeImmutable();
         }
 
+        // E-09: scalar columns now flow through the RowMap convention
+        // table with EXPLICIT per-column defaults, reproducing this
+        // record's legacy strictness (a numeric-string id yields 0 — the
+        // drift-vs-Collection law, preserved; see
+        // tests/Unit/Webhooks/WebhookRecordsFromRowByteIdentityTest.php).
+        // The events JSON decode and the temporal fallbacks are outside
+        // the scalar-accessor pilot and stay hand-rolled verbatim.
         return new self(
-            id: is_int($row['id'] ?? null) ? (int) $row['id'] : 0,
-            url: is_string($row['url'] ?? null) ? (string) $row['url'] : '',
+            id: RowMap::int($row, 'id', 0),
+            url: RowMap::str($row, 'url', ''),
             events: is_array($events) ? array_filter($events, 'is_string') : [],
-            isActive: (bool) ($row['is_active'] ?? true),
+            isActive: RowMap::boolFromCast($row, 'is_active', true),
             createdAt: $createdAt,
             updatedAt: $updatedAt,
         );

@@ -13,6 +13,7 @@ namespace Phlix\Webhooks;
 
 use DateTimeImmutable;
 use JsonSerializable;
+use Phlix\Common\Util\RowMap;
 
 /**
  * Database-backed webhook delivery record.
@@ -117,15 +118,22 @@ final class WebhookDeliveryRecord implements JsonSerializable
             $nextRetryAt = null;
         }
 
+        // E-09: strict-int ids (numeric strings collapse to the explicit
+        // defaults, attempt defaulting to 1 — transcribed, not
+        // harmonized), strict strings for url/status, and the
+        // isset()-guard on response_code expressed as the nullable-strict
+        // accessor (missing key, SQL NULL, and non-int all hydrate null —
+        // identical set). Temporal branches stay hand-rolled verbatim
+        // (out of the scalar pilot); byte-identity pin:
+        // tests/Unit/Webhooks/WebhookRecordsFromRowByteIdentityTest.php.
         return new self(
-            id: is_int($row['id'] ?? null) ? (int) $row['id'] : 0,
-            eventId: is_int($row['event_id'] ?? null) ? (int) $row['event_id'] : 0,
-            webhookUrl: is_string($row['webhook_url'] ?? null) ? (string) $row['webhook_url'] : '',
-            attempt: is_int($row['attempt'] ?? null) ? (int) $row['attempt'] : 1,
-            status: is_string($row['status'] ?? null) ? (string) $row['status'] : self::STATUS_PENDING,
-            responseCode: isset($row['response_code']) && is_int($row['response_code']) ? (int) $row['response_code'] :
-                null,
-            responseBody: is_string($row['response_body'] ?? null) ? (string) $row['response_body'] : null,
+            id: RowMap::int($row, 'id', 0),
+            eventId: RowMap::int($row, 'event_id', 0),
+            webhookUrl: RowMap::str($row, 'webhook_url', ''),
+            attempt: RowMap::int($row, 'attempt', 1),
+            status: RowMap::str($row, 'status', self::STATUS_PENDING),
+            responseCode: RowMap::nullableInt($row, 'response_code'),
+            responseBody: RowMap::nullableStr($row, 'response_body'),
             nextRetryAt: $nextRetryAt,
             createdAt: $createdAt,
             deliveredAt: $deliveredAt,

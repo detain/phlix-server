@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library\Dto;
 
+use Phlix\Common\Util\RowMap;
+
 /**
  * Typed value object representing a hydrated row from `media_items`.
  *
@@ -51,11 +53,14 @@ final class MediaItemRow
      */
     public static function fromRow(array $row): self
     {
-        $id = is_string($row['id'] ?? null) ? $row['id'] : '';
-        $libraryId = is_string($row['library_id'] ?? null) ? $row['library_id'] : '';
-        $name = is_string($row['name'] ?? null) ? $row['name'] : '';
-        $type = is_string($row['type'] ?? null) ? $row['type'] : '';
-        $path = is_string($row['path'] ?? null) ? $row['path'] : '';
+        // E-09 cohort 5a: RowMap fold of the pre-fold ??-guarded strict
+        // ternaries (fallbacks transcribed); byte-identity pinned by the
+        // legacy-oracle vectors in tests/Unit/Media/Library/Dto/MediaItemRowTest.php.
+        $id = RowMap::str($row, 'id', '');
+        $libraryId = RowMap::str($row, 'library_id', '');
+        $name = RowMap::str($row, 'name', '');
+        $type = RowMap::str($row, 'type', '');
+        $path = RowMap::str($row, 'path', '');
 
         $metadata = self::decodeMetadata($row['metadata'] ?? ($row['metadata_json'] ?? null));
         $row['metadata'] = $metadata;

@@ -1396,7 +1396,20 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   RED and UNROTATED: measured zero own-delta (no $request-> line added or
     //   removed across the six converted files); foreign churn 517 vs 512 /
     //   1315 vs 1274 untouched per law.
-    private const EXPECTED_PHP_FILES = 2206;
+    //
+    // Staircase continued -- SRV-CENSUS2 (shared-wave delegation census rebaseline).
+    // +1 mine: tests/Unit/Security/SharedDelegationCensusTest.php (exact 68-site/
+    //   11-family forward pins + carrier/member tables + import-completeness leg +
+    //   quote-agnostic token grammar laws with two rent entries; teeth proven by
+    //   executed M1/M2 mutants and a live staged-revert detection, register
+    //   /tmp/opencode/refactor-exec-1119/SRV-CENSUS2.md). The staged
+    //   WebAuthnLegacyDecodeParityTest named foreign (not absorbed) in the row
+    //   above carried its own +1 when it landed at ee9f1c4c (number-only bump
+    //   there; attributed here for the staircase record): 2205 + 1 theirs + 1
+    //   mine = 2207 tracked at this commit. Reads/writes legs stay RED and
+    //   UNROTATED: zero own-delta (src untouched); foreign 517 vs 512 / 1315 vs
+    //   1274 per law.
+    private const EXPECTED_PHP_FILES = 2207;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

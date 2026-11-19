@@ -51,6 +51,38 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Shared primitives now come from phlix-shared v0.56.0.** The dependency pin
+  moved `^0.55.0` → `^0.56.0` and the server's duplicated crypto/encoding/
+  policy code became thin delegates: base64url, Ed25519 PEM build/parse and key
+  fingerprints, PKCE S256 challenges, the password-hash SSOT wrapper, the
+  same-site/CSP custody origin grammar (`CookiePolicy` lost ~180 lines to
+  `OriginPolicy`), credential digests (identity hashes, state fingerprint,
+  SyncPlay group-password hash), the relay frame codec (`RelayMessageFramer`
+  seams delegate to `FrameCodec`; the three-repo wire-corpus pins stayed
+  byte-identical), the SyncPlay message-type catalog (the 19 `Messages::TYPE_*`
+  constants are aliases of `SyncPlayDialect`), and the legacy webhook signature
+  header (`sha256=<hex>` sites delegate to `Hmac` with `SEPARATOR_EQUALS`;
+  the V2 `t=…,v1=…` construction stays in-repo). Every delegation was
+  byte-parity-proven against a pre-adoption harness and pinned by
+  characterization tests (`SharedPrimitiveDelegationTest`,
+  `WebhookLegacySignatureBytesTest`); no wire byte, exit code, or signature
+  value changed. Deliberately NOT delegated (disclosed divergences, held for
+  owner ruling / v0.57): the JWT codec (shared enforces a 32-byte secret floor
+  the server's test-fallback handlers do not), `Messages::nowMs` (shared
+  `Clock` rounds where the server truncates — O-9), the relay reconnect ladder
+  (shared `Backoff` int-rounds; server logs float seconds), and the TMDB env
+  fallback (`?:` swallows a literal `0` key). Host validation stays on
+  `HostnameCandidateSanitizer` (v0.57 charter: align with `HostGrammar`).
+  [Wave-S1 S1.1-S1.3, S1.5, S1.7, S1.10 / refactor SHARED-056]
+- **Last.fm/transcoding env knobs read through the estate bool grammar.**
+  `LASTFM_ENABLED`, `LASTFM_SUBMIT_NOW_PLAYING` and `PREFER_HDR_OUTPUT` used
+  hand-rolled `filter_var(getenv(…) ?: …)` lines; they now call
+  `EnvConfig::bool`/`boolOptOut` like every other knob. Real-word spellings
+  (`0/1/true/false/on/off`, padded) answer identically; junk or whitespace on
+  the opt-out-shaped now-playing knob now answers its documented default ON
+  and announces itself instead of silently turning the feature off — the same
+  convergence SRV-ENVBOOL ratified for the relay TLS knobs. [Wave-S1 S1.5 / E-04]
+
 - **MySQL error-code detection lives in one place.** New
   `Phlix\Common\Database\MysqlError` (`driverCode()` over `errorInfo` or a
   rendered SQLSTATE segment, `isDuplicateKey()`, `isDeadlock()`, named 1062 /

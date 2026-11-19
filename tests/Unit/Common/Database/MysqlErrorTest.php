@@ -38,6 +38,9 @@ final class MysqlErrorTest extends TestCase
         ];
     }
 
+    /**
+     * @param array<array-key,mixed> $errorInfo
+     */
     #[\PHPUnit\Framework\Attributes\DataProvider('errorInfoShapes')]
     public function testDriverCodeReadsErrorInfoArrays(array $errorInfo, ?int $expected): void
     {
@@ -56,11 +59,15 @@ final class MysqlErrorTest extends TestCase
     {
         return [
             'vendor re-wrap duplicate' => [
-                "SQL:INSERT INTO users (username, email) VALUES (?, ?) SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'bob' for key 'users.username'",
+                "SQL:INSERT INTO users (username, email) VALUES (?, ?) "
+                . "SQLSTATE[23000]: Integrity constraint violation: 1062 "
+                . "Duplicate entry 'bob' for key 'users.username'",
                 1062,
             ],
             'vendor re-wrap deadlock' => [
-                'SQL:DELETE FROM stats_library_changes WHERE id IN (?) SQLSTATE[40001]: Serialization failure: 1213 Deadlock found when trying to get lock; try restarting transaction',
+                'SQL:DELETE FROM stats_library_changes WHERE id IN (?) '
+                . 'SQLSTATE[40001]: Serialization failure: 1213 Deadlock found '
+                . 'when trying to get lock; try restarting transaction',
                 1213,
             ],
             'MigrationRunner segment 1050' => [
@@ -84,7 +91,8 @@ final class MysqlErrorTest extends TestCase
                 null,
             ],
             'payload digits before the real segment cannot forge' => [
-                'SQL:SELECT * FROM t WHERE id = 1213 SQLSTATE[HY000]: General error: 1064 You have an error in your SQL syntax',
+                'SQL:SELECT * FROM t WHERE id = 1213 '
+                . 'SQLSTATE[HY000]: General error: 1064 You have an error in your SQL syntax',
                 1064,
             ],
             'echoed decoy after an anchored driver segment cannot win' => [
@@ -126,9 +134,11 @@ final class MysqlErrorTest extends TestCase
     public function testTheClassIsFinalAndUninstantiable(): void
     {
         $reflection = new ReflectionClass(MysqlError::class);
+        $constructor = $reflection->getConstructor();
 
         self::assertTrue($reflection->isFinal());
-        self::assertTrue($reflection->getConstructor()->isPrivate());
+        self::assertNotNull($constructor);
+        self::assertTrue($constructor->isPrivate());
     }
 
     public function testTheNamedVocabularyIsPinned(): void

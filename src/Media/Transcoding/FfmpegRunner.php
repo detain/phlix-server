@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Transcoding;
 
 use Phlix\Common\Env\EnvConfig;
+use Phlix\Common\Process\Detached;
 use Phlix\Media\Streaming\Trickplay\TrickplayArtefacts;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
@@ -1250,7 +1251,7 @@ class FfmpegRunner
             return 0;
         }
 
-        return (int) trim($pid);
+        return Detached::pidFromLaunch($pid);
     }
 
     /**
@@ -1310,6 +1311,8 @@ class FfmpegRunner
      *
      * @since 0.25.0
      * @since SV-4.2 Applies transcode_timeout wrapper.
+     *
+     * @see \Phlix\Common\Process\Detached::buildLaunch() E-12 canonical grammar.
      */
     public function buildDetachedCommand(
         string $command,
@@ -1317,26 +1320,16 @@ class FfmpegRunner
         array $trailingCmds = [],
         int $timeoutSecs = 0
     ): string {
-        $then = 'touch ' . escapeshellarg($outDir . '/.complete');
-        foreach ($trailingCmds as $trailing) {
-            if (is_string($trailing) && $trailing !== '') {
-                $then .= '; ' . $trailing;
-            }
-        }
-        $inner = 'if ' . $command . '; then ' . $then
-            . '; else touch ' . escapeshellarg($outDir . '/.failed') . '; fi';
-
-        // SV-4.2: wrap in timeout to enforce transcode_timeout
-        if ($timeoutSecs > 0) {
-            $inner = 'timeout ' . (int) $timeoutSecs . ' sh -c ' . escapeshellarg($inner);
-        } else {
-            $inner = 'sh -c ' . escapeshellarg($inner);
-        }
-
-        return sprintf(
-            'nohup %s > %s 2>&1 & echo $!',
-            $inner,
-            escapeshellarg($outDir . '/ffmpeg.log')
+        // E-12: the sentinel if/then/else + trailing-chain + timeout/nohup grammar
+        // is the shared spawn SSOT; this site opts INTO sentinels by passing
+        // $outDir. Pinned byte-for-byte against the pre-migration capture by
+        // tests/Unit/Common/Process/SpawnSiteCorpusTest.php.
+        return Detached::buildLaunch(
+            $command,
+            $outDir . '/ffmpeg.log',
+            $timeoutSecs,
+            $outDir,
+            $trailingCmds
         );
     }
 
@@ -1354,13 +1347,8 @@ class FfmpegRunner
      */
     public function isProcessRunning(int $pid): bool
     {
-        if ($pid <= 0) {
-            return false;
-        }
-        if (function_exists('posix_kill')) {
-            return posix_kill($pid, 0);
-        }
-        return is_dir('/proc/' . $pid);
+        // E-12: pid-liveness probe lives in the spawn-grammar SSOT.
+        return Detached::isAlive($pid);
     }
 
     /**
@@ -2068,6 +2056,25 @@ class FfmpegRunner
     }
 
     /**
+     * E-12: the canonical fit-scale filter fragment (both original call sites
+     * were byte-identical; folded without touching an emitted byte).
+     */
+    private static function scaleToFitFilter(int $width, int $height): string
+    {
+        return "scale={$width}:{$height}:force_original_aspect_ratio=decrease:force_divisible_by=2";
+    }
+
+    /**
+     * E-12: canonical `-vf` assembly for a composed filter list.
+     *
+     * @param array<int, string> $filters
+     */
+    private static function videoFilterArg(array $filters): string
+    {
+        return ' -vf "' . implode(',', $filters) . '"';
+    }
+
+    /**
      * Builds an FFmpeg command that produces ONE on-demand HLS segment.
      *
      * This backs the seek-aware VOD pipeline: instead of a single linear encode
@@ -2274,10 +2281,10 @@ class FfmpegRunner
                 $filters[] = $subtitleBurnInFilter;
             }
             if ($width !== null && $height !== null) {
-                $filters[] = "scale={$width}:{$height}:force_original_aspect_ratio=decrease:force_divisible_by=2";
+                $filters[] = self::scaleToFitFilter($width, $height);
             }
             if (!empty($filters)) {
-                $cmd .= ' -vf "' . implode(',', $filters) . '"';
+                $cmd .= self::videoFilterArg($filters);
             }
             // IDR at the segment start → independently decodable, frame-aligned segment.
             // MUST be `eq(n,0)` (frame INDEX zero), not `gte(t,0)`: `t >= 0` holds for
@@ -2714,7 +2721,7 @@ class FfmpegRunner
         $width = self::paramInt($params, 'width');
         $height = self::paramInt($params, 'height');
         if ($width !== null && $height !== null) {
-            $filters[] = "scale={$width}:{$height}:force_original_aspect_ratio=decrease:force_divisible_by=2";
+            $filters[] = self::scaleToFitFilter($width, $height);
         }
 
         // Upload the (system-memory) frames to a HW surface for encoders that
@@ -2727,7 +2734,7 @@ class FfmpegRunner
         }
 
         if (!empty($filters)) {
-            $cmd .= ' -vf "' . implode(',', $filters) . '"';
+            $cmd .= self::videoFilterArg($filters);
         }
 
         // IDR at the segment start for independently decodable segments. `eq(n,0)`

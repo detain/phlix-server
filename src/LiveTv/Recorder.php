@@ -14,6 +14,7 @@ namespace Phlix\LiveTv;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Process\Detached;
 use Phlix\Common\Uuid;
 use Phlix\LiveTv\Dto\RowAccess;
 use Phlix\LiveTv\Dto\RowQuery;
@@ -1206,30 +1207,29 @@ class Recorder
      * @return int The child PID (0 if the spawn failed)
      *
      * @since SV-3.1 f-b
+     *
+     * @see \Phlix\Common\Process\Detached::buildLaunch() E-12 canonical grammar.
      */
     protected function launchDetached(string $ffmpegCmd, string $logFile): int
     {
         // SV-4.2: wrap in timeout to enforce transcode_timeout (7200s default) so
         // a never-stopped capture cannot hold a tuner / run unbounded.
         $timeoutSecs = $this->getTranscodeTimeout();
-        $timeoutCmd = $timeoutSecs > 0
-            ? 'timeout ' . (int) $timeoutSecs . ' sh -c ' . escapeshellarg($ffmpegCmd)
-            : 'sh -c ' . escapeshellarg($ffmpegCmd);
 
+        // E-12: the nohup/timeout/`echo $!` grammar is the shared spawn SSOT.
+        // This site deliberately stays SENTINELESS: $sentinelOutDir is not passed,
+        // so no .complete/.failed files ever appear in the recording subtree
+        // (adding them would change the on-disk footprint of a capture).
         // nohup so SIGHUP doesn't kill ffmpeg when the PHP shell returns.
         // Redirect both stdout+stderr to the log file.
-        $full = sprintf(
-            'nohup %s > %s 2>&1 & echo $!',
-            $timeoutCmd,
-            escapeshellarg($logFile)
-        );
+        $full = Detached::buildLaunch($ffmpegCmd, $logFile, $timeoutSecs);
 
         $pidStr = shell_exec($full);
         if (!is_string($pidStr) || trim($pidStr) === '') {
             return 0;
         }
 
-        return (int) trim($pidStr);
+        return Detached::pidFromLaunch($pidStr);
     }
 
     /**

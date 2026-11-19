@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Network;
 
 use Phlix\Common\Net\SsrfGuard;
+use Phlix\Common\Runtime\WorkerContext;
 
 /**
  * The one home of local-address discovery for the port-forwarding clients — SH-007.
@@ -87,15 +88,15 @@ final class LocalAddressProbe
     /**
      * Returns true if Swoole coroutine context is active.
      *
-     * `class_exists` rather than `extension_loaded` because the guards at the
-     * call sites pair it with `class_exists(Swoole\Coroutine\Socket::class)`:
-     * the question asked is "is the coroutine API present and are we inside a
-     * coroutine", not "is the .so loaded".
+     * E-18: delegates to {@see WorkerContext::inCoroutine()} — the single
+     * settled predicate. The historical local copy asked "is the coroutine API
+     * present and are we inside a coroutine" (not "is the .so loaded"), which
+     * is precisely the form the SSOT adopted; the full union-semantics
+     * analysis lives in the WorkerContext class docblock.
      */
     public static function inCoroutine(): bool
     {
-        return class_exists(\Swoole\Coroutine::class)
-            && \Swoole\Coroutine::getCid() > 0;
+        return WorkerContext::inCoroutine();
     }
 
     /**

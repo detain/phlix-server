@@ -73,4 +73,83 @@ final class WorkerContextTest extends TestCase
             'Outside a coroutine the client must take the blocking postCurl() path (empty-URL sentinel).'
         );
     }
+
+    /**
+     * E-18: LocalAddressProbe's historical second copy of the predicate must
+     * now be a delegate, not a re-derivation — the file may not mention
+     * getCid() at all once settled.
+     */
+    public function testLocalAddressProbeDelegatesToWorkerContext(): void
+    {
+        $source = file_get_contents(dirname(__DIR__, 4) . '/src/Network/LocalAddressProbe.php');
+        $this->assertIsString($source);
+        $this->assertStringContainsString(
+            'WorkerContext::inCoroutine()',
+            $source,
+            'LocalAddressProbe::inCoroutine() must delegate to the SSOT (E-18).'
+        );
+        $this->assertStringNotContainsString(
+            'getCid',
+            $source,
+            'No second inline predicate may survive in LocalAddressProbe (E-18).'
+        );
+    }
+
+    /**
+     * E-18: the three Network clients that carried verbatim private delegate
+     * copies must now route through WorkerContext (their private inCoroutine()
+     * methods keep existing — the SH-007 surface test pins that — but their
+     * bodies point at the SSOT).
+     */
+    public function testNetworkDelegatesRouteThroughWorkerContext(): void
+    {
+        foreach (['StunClient', 'UpnpIgdClient', 'PortForwardService'] as $carrier) {
+            $source = file_get_contents(dirname(__DIR__, 4) . '/src/Network/' . $carrier . '.php');
+            $this->assertIsString($source);
+            $this->assertStringContainsString(
+                'WorkerContext::inCoroutine()',
+                $source,
+                $carrier . ' must delegate to WorkerContext (E-18).'
+            );
+            $this->assertStringNotContainsString(
+                'LocalAddressProbe::inCoroutine()',
+                $source,
+                $carrier . ' must not keep the old LocalAddressProbe hop (E-18).'
+            );
+        }
+    }
+
+    /**
+     * E-18: RelayConsumer's inline coroutine bypass (the Channel-vs-synchronous
+     * dispatch fork) is the sixth copy; it must read the SSOT predicate. Touch
+     * is deliberately one expression — the relay file is high-traffic.
+     */
+    public function testRelayConsumerBypassUsesWorkerContext(): void
+    {
+        $source = file_get_contents(dirname(__DIR__, 4) . '/src/Hub/RelayConsumer.php');
+        $this->assertIsString($source);
+        $this->assertStringContainsString(
+            'WorkerContext::inCoroutine()',
+            $source,
+            'RelayConsumer must read the SSOT predicate (E-18).'
+        );
+        $this->assertStringNotContainsString(
+            'Coroutine::getCid',
+            $source,
+            'RelayConsumer must not keep its own getCid() copy (E-18).'
+        );
+    }
+
+    /**
+     * E-18 behavior on this host: no Swoole at all — every migrated carrier
+     * must agree with the SSOT and report false. The union semantics only
+     * diverge from either original under a runtime that defines the
+     * Swoole coroutine API without loading the extension; nothing here does
+     * (see the WorkerContext class docblock for the settle analysis).
+     */
+    public function testAllCarriersAgreeFalseOnPlainRuntime(): void
+    {
+        $this->assertFalse(WorkerContext::inCoroutine());
+        $this->assertFalse(\Phlix\Network\LocalAddressProbe::inCoroutine());
+    }
 }

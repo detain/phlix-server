@@ -46,15 +46,28 @@ final class WorkerContext
      * the async Channel path only when this returns true, and the blocking
      * client otherwise (never spin, never touch a Channel out of a coroutine).
      *
-     * Returns false when the Swoole extension is absent (plain CLI/PHPUnit),
+     * Returns false when the Swoole coroutine API is absent (plain CLI/PHPUnit),
      * where there are no coroutines at all.
+     *
+     * E-18 settle — this is now the ONE coroutine predicate. LocalAddressProbe
+     * carried a second copy gated on `class_exists(Swoole\Coroutine)` instead
+     * of `extension_loaded('swoole')`. The union semantics asked for
+     * (`extension_loaded || class_exists`, then `getCid() > 0`) reduce exactly
+     * to the `class_exists` gate: a loaded extension always registers its
+     * classes (so `extension_loaded` alone never answers true where
+     * `class_exists` answers false), while the converse divergence — a
+     * userland `Swoole\Coroutine` without the extension — answers true under
+     * `class_exists` and can only ever FATAL under `extension_loaded` + a real
+     * call, never true. The repo defines no such stub and depends on no
+     * userland Swoole polyfill (grep: zero `namespace Swoole` declarations in
+     * src/tests, zero swoole packages in composer.json), so the two original
+     * gates are behavior-identical on every reachable runtime and the settled
+     * form adopts the stricter-true one that both this class's consumers and
+     * the migrated Network/relay carriers already compute identically.
      */
     public static function inCoroutine(): bool
     {
-        if (! \extension_loaded('swoole')) {
-            return false;
-        }
-
-        return \Swoole\Coroutine::getCid() > 0;
+        return class_exists(\Swoole\Coroutine::class)
+            && \Swoole\Coroutine::getCid() > 0;
     }
 }

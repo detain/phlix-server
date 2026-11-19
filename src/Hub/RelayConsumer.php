@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub;
 
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Runtime\WorkerContext;
 use Phlix\Server\Http\Request as ServerRequest;
 use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Response as ServerResponse;
@@ -2011,7 +2012,9 @@ final class RelayConsumer
         // On timeout the child is ORPHANED by design: the Channel has capacity 1
         // so its eventual push never blocks and the coroutine exits cleanly; the
         // late result is simply discarded (the hub already got its 504).
-        if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
+        //
+        // E-18: the gate is the shared WorkerContext predicate, not a local copy.
+        if (WorkerContext::inCoroutine()) {
             // $this->httpDispatcher is guaranteed non-null here because
             // onHttpRequest returns early when it is null.
             /** @var callable(ServerRequest): ServerResponse $dispatcher */

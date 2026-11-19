@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Network;
 
+use Phlix\Common\Runtime\WorkerContext;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Socket;
@@ -52,12 +53,13 @@ class StunClient
     /**
      * Returns true if Swoole coroutine context is active.
      *
-     * SH-007: delegates to {@see LocalAddressProbe::inCoroutine()} — verbatim
-     * copy of the identical body all four carriers had.
+     * SH-007: delegates to {@see WorkerContext::inCoroutine()} — the one
+     * settled predicate (E-18: the old hop through LocalAddressProbe now reads
+     * the SSOT directly).
      */
     private static function inCoroutine(): bool
     {
-        return LocalAddressProbe::inCoroutine();
+        return WorkerContext::inCoroutine();
     }
 
 

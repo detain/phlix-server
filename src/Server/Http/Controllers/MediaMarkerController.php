@@ -16,6 +16,7 @@ use Phlix\Media\MarkerType;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\RequestContext;
+use Phlix\Shared\Support\Json;
 
 final readonly class MediaMarkerController
 {
@@ -84,7 +85,17 @@ final readonly class MediaMarkerController
         // body lives on the Request (Workerman CLI SAPI — there is no CGI
         // php://input here), so the old file_get_contents read always saw an
         // empty string and the endpoint could never parse a real JSON body.
-        $decoded = json_decode($request->rawBody, true);
+        try {
+            // DECODE-ADOPT (wave-5): shared inbound seam. Malformed -> null ->
+            // the existing 'Invalid JSON body' 400, byte-identical. Over-depth
+            // rethrows; the site keeps its own bad-body answer (the structural
+            // class was ALSO a 400 here via the old null-collapse — no posture
+            // minted where a wire contract exists) and logs the real cause.
+            $decoded = Json::decodeInbound($request->rawBody);
+        } catch (\JsonException $e) {
+            error_log('[media-markers] request body exceeded the shared parse-depth ceiling: ' . $e->getMessage());
+            $decoded = null;
+        }
         if (!is_array($decoded)) {
             return (new Response())->status(400)->json(['error' => 'Invalid JSON body']);
         }

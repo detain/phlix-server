@@ -254,4 +254,41 @@ class MessageHandlerFrameShapeTest extends TestCase
     {
         return ['zero' => [0], 'negative' => [-1]];
     }
+
+    // -----------------------------------------------------------------
+    // DECODE-ADOPT (wave-5): handle()'s frame decode moves onto the shared
+    // inbound seam with a site-local depth catch — the count=1 WS worker has
+    // no barrier at WebSocketServer::onMessage, so the structural class must
+    // answer the SAME legacy 'Invalid message format' frame the site already
+    // commits to (W2 doctrine). Zero wire flip; the pins below govern both
+    // sides of the migration.
+    // -----------------------------------------------------------------
+
+    public function testHandleAnswersLegacyErrorFrameForOverDepthPayload(): void
+    {
+        $connection = $this->createConnection();
+        $handler = $this->createMessageHandler();
+
+        $handler->handle($connection, str_repeat('[', 600) . str_repeat(']', 600));
+
+        $this->assertCount(1, $this->sentMessages);
+        $this->assertSame('error', $this->sentMessages[0]['type'] ?? null);
+        $this->assertSame(
+            'Invalid message format',
+            $this->sentMessages[0]['data']['message'] ?? null,
+            'the depth class must keep the deprecated-envelope answer',
+        );
+    }
+
+    public function testHandleAnswersLegacyErrorFrameForMalformedPayload(): void
+    {
+        $connection = $this->createConnection();
+        $handler = $this->createMessageHandler();
+
+        $handler->handle($connection, '{bad');
+
+        $this->assertCount(1, $this->sentMessages);
+        $this->assertSame('error', $this->sentMessages[0]['type'] ?? null);
+        $this->assertSame('Invalid message format', $this->sentMessages[0]['data']['message'] ?? null);
+    }
 }

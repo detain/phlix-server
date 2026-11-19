@@ -15,6 +15,7 @@ use Phlix\Common\Uuid;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Shared\Support\Json;
 use Workerman\MySQL\Connection;
 
 /**
@@ -93,14 +94,12 @@ final class SmartPlaylistController
         $libraryId = is_string($data['library_id']) ? $data['library_id'] : '';
         $rulesJsonInput = $data['rules_json'];
 
-        // Validate JSON
+        // Validate JSON (DECODE-ADOPT wave-5: shared inbound seam; see
+        // rulesGateRejection() for the answer space + disclosed 'null' flip).
         if (is_string($rulesJsonInput)) {
-            json_decode($rulesJsonInput);
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                error_log('[smart-playlist] invalid rules_json from client: ' . json_last_error_msg());
-                return (new Response())->status(400)->json([
-                    'error' => 'The playlist rules are not valid JSON',
-                ]);
+            $rejection = $this->rulesGateRejection($rulesJsonInput);
+            if ($rejection !== null) {
+                return $rejection;
             }
         }
 
@@ -179,14 +178,12 @@ final class SmartPlaylistController
 
         $data = $request->body;
 
-        // Validate JSON if provided
+        // Validate JSON if provided (DECODE-ADOPT wave-5: shared inbound seam;
+        // see rulesGateRejection() — same gate, same answer space as create()).
         if (isset($data['rules_json']) && is_string($data['rules_json'])) {
-            json_decode($data['rules_json']);
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                error_log('[smart-playlist] invalid rules_json from client: ' . json_last_error_msg());
-                return (new Response())->status(400)->json([
-                    'error' => 'The playlist rules are not valid JSON',
-                ]);
+            $rejection = $this->rulesGateRejection($data['rules_json']);
+            if ($rejection !== null) {
+                return $rejection;
             }
         }
 
@@ -278,7 +275,7 @@ final class SmartPlaylistController
         $rulesJsonData = $data['rules_json'] ?? null;
         $rules = match (true) {
             is_array($rulesJsonData) => $rulesJsonData,
-            is_string($rulesJsonData) => json_decode($rulesJsonData, true) ?: null,
+            is_string($rulesJsonData) => $this->decodePreviewRules($rulesJsonData),
             default => null,
         };
         if ($rules === null) {
@@ -314,6 +311,72 @@ final class SmartPlaylistController
             'matched_count' => count($matchedItems),
             'items' => $matchedItems,
         ]);
+    }
+
+    /**
+     * DECODE-ADOPT (wave-5): the single rules-document gate for create() and
+     * update(), replacing both sites' hand-rolled `json_decode()` +
+     * `json_last_error()` dance with the shared inbound seam.
+     *
+     * Answer space: malformed -> the seam's null -> the site's existing 400
+     * envelope (byte-identical). Structural over-depth -> the seam rethrows
+     * JsonException; the site keeps ITS OWN bad-document answer (same 400
+     * envelope — no fresh 500 posture minted where a wire contract already
+     * exists) and records the real cause in the log. Scalar-valid documents
+     * ('5', 'true') pass through exactly as before — the gate refuses
+     * unparseable rules, nothing more.
+     *
+     * Disclosed flip (unrouted endpoint — zero live-wire impact): the literal
+     * string 'null' used to sail through the last_error gate and be persisted
+     * raw as the rules document; the seam collapses it onto the bad-document
+     * arm, and a null rules document is not a usable playlist definition.
+     */
+    private function rulesGateRejection(string $rulesJsonInput): ?Response
+    {
+        try {
+            $decoded = Json::decodeInbound($rulesJsonInput);
+        } catch (\JsonException $e) {
+            error_log('[smart-playlist] rules_json exceeded the shared parse-depth ceiling: ' . $e->getMessage());
+
+            return (new Response())->status(400)->json([
+                'error' => 'The playlist rules are not valid JSON',
+            ]);
+        }
+
+        if ($decoded === null) {
+            error_log('[smart-playlist] invalid rules_json from client (undecodable or null document)');
+
+            return (new Response())->status(400)->json([
+                'error' => 'The playlist rules are not valid JSON',
+            ]);
+        }
+
+        return null;
+    }
+
+    /**
+     * Preview-path decoder: mirrors the historical `json_decode($rules, true)
+     * ?: null` falsy-collapse onto the shared seam (null/false/0/''/'0'/[]
+     * collapse to null so the caller falls back to the stored rules; truthy
+     * non-arrays still reach the explicit 'Invalid rules' 400). Over-depth
+     * keeps the SAME collapse answer but is now LOUD instead of silent.
+     *
+     * @return mixed the decoded document, or null to trigger the stored-rules fallback
+     */
+    private function decodePreviewRules(string $rulesJsonData): mixed
+    {
+        try {
+            $decoded = Json::decodeInbound($rulesJsonData);
+        } catch (\JsonException $e) {
+            error_log(
+                '[smart-playlist] preview rules_json exceeded the shared parse-depth ceiling: '
+                . $e->getMessage(),
+            );
+
+            return null;
+        }
+
+        return $decoded ?: null;
     }
 
     /**

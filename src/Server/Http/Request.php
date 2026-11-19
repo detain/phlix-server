@@ -13,6 +13,7 @@ namespace Phlix\Server\Http;
 
 use Phlix\Common\Http\PageLimit;
 use Phlix\Common\Http\TrustedProxyResolver;
+use Phlix\Shared\Support\Json;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
@@ -293,7 +294,13 @@ class Request
         $input = file_get_contents('php://input');
         $request->rawBody = $input !== false ? $input : '';
         if ($input !== false) {
-            $decoded = json_decode($input, true);
+            // DECODE-ADOPT: shared inbound seam — malformed JSON decodes to null
+            // and collapses onto the empty-body answer exactly as the historical
+            // plain decode did; a payload deeper than the named ceiling rethrows
+            // JsonException instead of laundering the structural failure into an
+            // empty body (the HTTP barrier turns it into the machine 500 envelope
+            // + operator log line). Hostile input only; no real client nests 512.
+            $decoded = Json::decodeInbound($input);
             $request->body = is_array($decoded) ? self::stringKeyedArray($decoded) : [];
         } else {
             $request->body = [];
@@ -333,7 +340,12 @@ class Request
         $request->rawBody = $rawBody;
         $contentType = $request->getHeader('Content-Type') ?? '';
         if (str_contains($contentType, 'application/json')) {
-            $decoded = json_decode($rawBody, true);
+            // DECODE-ADOPT: see fromGlobals() — malformed collapses to the empty
+            // body as before; over-depth rethrows JsonException, and because this
+            // constructor runs inside the HTTP worker's try barrier the request
+            // answers the machine 500 envelope + loud log instead of the old
+            // silent empty-body degradation.
+            $decoded = Json::decodeInbound($rawBody);
             $request->body = is_array($decoded) ? self::stringKeyedArray($decoded) : [];
         } else {
             $request->body = self::collectArrayFromWorkerman($wr->post());

@@ -184,6 +184,30 @@ final class MediaMarkerOwnershipTest extends TestCase
     }
 
     /**
+     * DECODE-ADOPT: an over-depth body keeps answering the SAME 400
+     * 'Invalid JSON body' envelope — the seam rethrows the structural class
+     * as JsonException, and the site maps it back onto its own bad-document
+     * answer (with a loud log line) rather than minting a fresh 500 posture
+     * where a wire contract for unparseable bodies already exists.
+     */
+    public function testCreateMarkerRefusesOverDepthBodyWithTheExistingEnvelope(): void
+    {
+        RequestContext::setUserId('user-1');
+        $controller = $this->createHarness();
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->rawBody = str_repeat('[', 600) . str_repeat(']', 600);
+
+        $response = $controller->createMarker($request, ['id' => self::ITEM_ID]);
+
+        $this->assertSame(400, $response->statusCode);
+        $body = json_decode((string) $response->body, true);
+        $this->assertSame('Invalid JSON body', $body['error'] ?? null);
+        $this->assertSame([], $this->insertedParams, 'an over-depth body must never reach the insert');
+    }
+
+    /**
      * Handlers that violate the `(Request, array)` convention TypeError at
      * dispatch; this file used to call the methods with bare strings, which is
      * exactly the blind spot the review named. The dispatch-level guard for ALL

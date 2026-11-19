@@ -4068,4 +4068,65 @@ class RelayConsumerTest extends TestCase
             $this->disableStreamSigning();
         }
     }
+
+    // -----------------------------------------------------------------
+    // DECODE-ADOPT (wave-5): the application/json envelope-body decode in
+    // buildRequest() moves onto the shared inbound seam with a site-local
+    // depth catch (the count=1 relay worker has no barrier; the structural
+    // class keeps the site's existing 'body stays empty' answer, now with a
+    // loud log line instead of a silent null-collapse). Zero wire flip on
+    // either class.
+    // -----------------------------------------------------------------
+
+    public function test_http_request_over_depth_json_body_forwards_empty_body_not_a_crash(): void
+    {
+        $deep = str_repeat('[', 600) . str_repeat(']', 600);
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'PUT',
+            '/api/v1/media/abc/rating',
+            '',
+            ['Content-Type' => 'application/json', 'X-Phlix-Relay-User' => 'owner-3'],
+            $deep,
+        );
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 71, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+        $this->assertSame($deep, $captured->rawBody, 'raw bytes ride to the dispatcher untouched');
+        $this->assertSame([], $captured->body, 'over-depth collapses onto the empty body exactly as today');
+    }
+
+    public function test_http_request_malformed_json_body_forwards_empty_body(): void
+    {
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'PUT',
+            '/api/v1/media/abc/rating',
+            '',
+            ['Content-Type' => 'application/json', 'X-Phlix-Relay-User' => 'owner-3'],
+            '{bad',
+        );
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 72, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+        $this->assertSame([], $captured->body);
+    }
 }

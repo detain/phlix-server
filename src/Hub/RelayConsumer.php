@@ -24,6 +24,8 @@ use Phlix\Shared\Relay\RelayHttpRequestCodec;
 use Phlix\Shared\Relay\RelayHttpRequestHead;
 use Phlix\Shared\Relay\RelayHttpResponseCodec;
 use Phlix\Shared\Relay\RelayHttpResponseHead;
+use Phlix\Shared\Support\Json;
+use JsonException;
 use RuntimeException;
 use Throwable;
 use Workerman\Connection\AsyncTcpConnection;
@@ -2163,8 +2165,22 @@ final class RelayConsumer
 
         $contentType = $this->headerValue($safeEnvelope->headers, 'content-type');
         if ($envelope->body !== '' && stripos($contentType, 'application/json') !== false) {
-            /** @var mixed $decodedBody */
-            $decodedBody = json_decode($envelope->body, true);
+            try {
+                // DECODE-ADOPT (wave-5): shared inbound seam. Malformed -> null ->
+                // body stays empty, byte-identical to the historical decode. The
+                // count=1 tunnel worker has no barrier here, so the structural
+                // over-depth class is caught and collapsed onto the SAME
+                // empty-body answer the site already commits to — loudly logged
+                // instead of silently laundering a parser ceiling hit as 'no
+                // parameters'.
+                /** @var mixed $decodedBody */
+                $decodedBody = Json::decodeInbound($envelope->body);
+            } catch (JsonException $e) {
+                $this->logger->warning('RelayConsumer: relayed request body exceeded the shared parse-depth ceiling', [
+                    'error' => $e->getMessage(),
+                ]);
+                $decodedBody = null;
+            }
             if (is_array($decodedBody)) {
                 $request->body = $this->stringKeyed($decodedBody);
             }
@@ -3719,8 +3735,13 @@ final class RelayConsumer
         }
 
         try {
+            // DECODE-ADOPT (wave-5): shared inbound seam at the site's existing
+            // depth-8 ceiling. Malformed -> null -> empty array (identical to the
+            // historical throw+catch answer); over-depth rethrows JsonException
+            // and lands in the SAME catch below — zero observable change, one
+            // fewer hand-rolled decode.
             /** @var mixed $decoded */
-            $decoded = json_decode($payload, true, 8, JSON_THROW_ON_ERROR);
+            $decoded = Json::decodeInbound($payload, 8);
         } catch (Throwable) {
             return [];
         }

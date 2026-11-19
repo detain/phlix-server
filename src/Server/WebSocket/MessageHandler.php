@@ -13,6 +13,7 @@ namespace Phlix\Server\WebSocket;
 
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
+use Phlix\Shared\Support\Json;
 
 /**
  * Handles WebSocket message routing and event dispatching.
@@ -126,11 +127,28 @@ class MessageHandler
      * @param string $data Raw message data (expected JSON)
      * @return void
      *
-     * @throws \JsonException If message is not valid JSON
+     * Never throws: the seam's structural depth class is caught locally (the
+     * count=1 WS worker has no barrier around this entry point — an escaping
+     * onMessage error is the Worker::stopAll footgun the dispatch guards below
+     * already exist to prevent), and the bad-frame answer space stays uniform.
      */
     public function handle(Connection $connection, string $data): void
     {
-        $message = json_decode($data, true);
+        try {
+            // DECODE-ADOPT (wave-5): shared inbound seam. Malformed JSON decodes
+            // to null and answers the legacy 'Invalid message format' frame
+            // below — byte-identical to the historical plain decode. Over-depth
+            // rethrows JsonException, is recorded in the websocket channel, and
+            // is collapsed onto the SAME legacy frame (the wire never carries
+            // exception text — R17-03 law).
+            $message = Json::decodeInbound($data);
+        } catch (\JsonException $e) {
+            LoggerFactory::get(LogChannels::WEBSOCKET)->error(
+                'Inbound WS frame exceeded the shared parse-depth ceiling',
+                ['error' => $e->getMessage()],
+            );
+            $message = null;
+        }
 
         if (!is_array($message) || !isset($message['type']) || !is_string($message['type'])) {
             // W2 doctrine decision (deliberate): this frame STAYS legacy. It answers

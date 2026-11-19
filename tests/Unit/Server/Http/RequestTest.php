@@ -100,4 +100,56 @@ class RequestTest extends TestCase
 
         $this->assertEquals('198.51.100.23', $request->getTrustedClientIp());
     }
+
+    // ---------------------------------------------------------------------
+    // DECODE-ADOPT (wave-5): the JSON body decode in fromWorkerman() moves
+    // onto the shared inbound seam. fromGlobals() (:296) carries the SAME
+    // textual decode expression and is migrated identically; a php://input
+    // harness is unavailable under phpunit CLI (stdin-bound), so the seam
+    // behavior is characterized through the Workerman leg.
+    // ---------------------------------------------------------------------
+
+    private static function workermanJsonRequest(string $body): \Workerman\Protocols\Http\Request
+    {
+        return new \Workerman\Protocols\Http\Request(
+            "POST /api/v1/anything HTTP/1.1\r\nHost: phlix.test\r\n"
+            . "Content-Type: application/json\r\nContent-Length: " . strlen($body) . "\r\n\r\n" . $body,
+        );
+    }
+
+    /** 600-deep nested array — past the seam's 512 named ceiling. */
+    private static function deepBody(): string
+    {
+        return str_repeat('[', 600) . str_repeat(']', 600);
+    }
+
+    public function testFromWorkermanRejectsOverDepthJsonBodyLoudly(): void
+    {
+        // RED-FIRST FLIP: today the plain decode collapses a >512-deep body onto
+        // null and the request proceeds with a SILENTLY EMPTY body (a structural
+        // parser failure laundered as 'no parameters'). After the adoption the
+        // depth class rethrows JsonException and the HTTP barrier answers the
+        // machine 500 envelope + operator log line. Hostile-only; no real client
+        // nests 512 levels.
+        $this->expectException(\JsonException::class);
+
+        Request::fromWorkerman(self::workermanJsonRequest(self::deepBody()));
+    }
+
+    public function testFromWorkermanKeepsEmptyBodyForMalformedJson(): void
+    {
+        // Characterization (zero wire flip): malformed -> null -> body [] exactly
+        // as the historical plain decode answered.
+        $request = Request::fromWorkerman(self::workermanJsonRequest('{bad'));
+
+        $this->assertSame('{bad', $request->rawBody);
+        $this->assertSame([], $request->body);
+    }
+
+    public function testFromWorkermanStillParsesValidJsonBodiesIntoTheBody(): void
+    {
+        $request = Request::fromWorkerman(self::workermanJsonRequest('{"a":1,"b":[1,2]}'));
+
+        $this->assertSame(['a' => 1, 'b' => [1, 2]], $request->body);
+    }
 }

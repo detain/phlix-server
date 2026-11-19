@@ -30,6 +30,7 @@ final class InlineErrorEnvelopeExtinctionTest extends TestCase
     private const CASTING_FILE = __DIR__ . '/../../../../src/Server/Http/Middleware/CastingEnabledMiddleware.php';
     private const PROFILES_FILE = __DIR__ . '/../../../../src/Server/Http/Controllers/ProfilesController.php';
     private const BOOK_FILE = __DIR__ . '/../../../../src/Server/Http/Controllers/BookController.php';
+    private const AUDIOBOOK_FILE = __DIR__ . '/../../../../src/Server/Http/Controllers/AudiobookController.php';
 
     /** Inline half-envelope marker: a single-key `['error' => ...]` literal. */
     private const LEGACY_MARKERS = ["'error' =>", '"error" =>'];
@@ -235,5 +236,44 @@ final class InlineErrorEnvelopeExtinctionTest extends TestCase
                 "$name Response::error seam census drifted from batch-3 ($count)",
             );
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Batch-4 (SRV-ENVELOPES-B4): AudiobookController.
+    // -----------------------------------------------------------------
+
+    public function test_batch_four_audiobook_file_exists_and_is_non_empty(): void
+    {
+        self::assertFileExists(self::AUDIOBOOK_FILE);
+        self::assertGreaterThan(0, (int) filesize(self::AUDIOBOOK_FILE));
+    }
+
+    public function test_batch_four_audiobook_has_no_inline_error_literals(): void
+    {
+        $source = (string) file_get_contents(self::AUDIOBOOK_FILE);
+        foreach (self::LEGACY_MARKERS as $marker) {
+            $hits = substr_count($source, $marker);
+            self::assertSame(
+                0,
+                $hits,
+                "legacy inline error envelope survived in AudiobookController "
+                . "($hits hits of $marker)",
+            );
+        }
+    }
+
+    public function test_batch_four_audiobook_adopted_call_counts(): void
+    {
+        // Batch-4 Audiobook census at conversion: 16 half-envelope sites
+        // (fifteen inline literals + the 416 Content-Range site whose
+        // header() hoist lives in the adoption corpus). No error() seam
+        // sites exist on this file; the Content-Range wire-order law is
+        // pinned by AudiobookInlineEnvelopeAdoptionTest.
+        $source = (string) file_get_contents(self::AUDIOBOOK_FILE);
+        self::assertSame(
+            16,
+            substr_count($source, '->errorPlain('),
+            'AudiobookController errorPlain census drifted from batch-4 (16)',
+        );
     }
 }

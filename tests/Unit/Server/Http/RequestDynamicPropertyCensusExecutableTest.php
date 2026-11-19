@@ -1367,7 +1367,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   the sibling rotates its own +1 at its own commit; named, not absorbed.
     // Reads/writes legs stay RED and UNROTATED: re-measured 514 vs 512 / 1311 vs 1274,
     //   foreign drift unchanged at this staging.
-    private const EXPECTED_PHP_FILES = 2202;
+    //
+    // Staircase continued -- SRV-ENVELOPES-B4 commit 3 of 3 (AudiobookController adoption).
+    // +1 mine: tests/Unit/Server/Http/AudiobookInlineEnvelopeAdoptionTest.php (golden
+    //   corpus for the 16 sites converted here, incl the 416 Content-Range hoist).
+    // Pin: 2202 tracked at stage time (git ls-files '*.php'), +1 mine = 2203. The disk
+    //   walk shows 2206: three foreign untracked sibling test files (ENVELOPES-b2/b3
+    //   MiddlewareErrorEnvelopeAdoptionTest, SmartPlaylistDecodeInboundTest,
+    //   SharedDelegationCensusTest) sit on top -- the siblings rotate their own at
+    //   their own commits; named, not absorbed.
+    // Reads/writes legs stay RED and UNROTATED: now 517 vs 512 / 1315 vs 1274 (foreign
+    //   middleware-decode churn advanced during this lane; untouched per law).
+    private const EXPECTED_PHP_FILES = 2203;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

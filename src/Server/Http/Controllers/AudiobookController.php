@@ -117,13 +117,13 @@ class AudiobookController
         $audiobookId = $params['id'] ?? null;
 
         if ($audiobookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Audiobook ID is required']);
+            return (new Response())->errorPlain(400, 'Audiobook ID is required');
         }
 
         $audiobook = $this->itemRepo->findById($audiobookId);
 
         if ($audiobook === null || ($audiobook['type'] ?? '') !== 'audiobook') {
-            return (new Response())->status(404)->json(['error' => 'Audiobook not found']);
+            return (new Response())->errorPlain(404, 'Audiobook not found');
         }
 
         /** @var array<string, mixed> $metadata */
@@ -176,13 +176,13 @@ class AudiobookController
         $audiobookId = $params['id'] ?? null;
 
         if ($audiobookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Audiobook ID is required']);
+            return (new Response())->errorPlain(400, 'Audiobook ID is required');
         }
 
         $audiobook = $this->itemRepo->findById($audiobookId);
 
         if ($audiobook === null || ($audiobook['type'] ?? '') !== 'audiobook') {
-            return (new Response())->status(404)->json(['error' => 'Audiobook not found']);
+            return (new Response())->errorPlain(404, 'Audiobook not found');
         }
 
         /** @var array<string, mixed> $metadata */
@@ -225,7 +225,7 @@ class AudiobookController
         $audiobookId = $params['id'] ?? null;
 
         if ($audiobookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Audiobook ID is required']);
+            return (new Response())->errorPlain(400, 'Audiobook ID is required');
         }
 
         // M-6: progress is per the request's authenticated identity (the old
@@ -233,7 +233,7 @@ class AudiobookController
         $userId = is_string($request->userId) && $request->userId !== '' ? $request->userId : null;
 
         if ($userId === null) {
-            return (new Response())->status(401)->json(['error' => 'Authentication required']);
+            return (new Response())->errorPlain(401, 'Authentication required');
         }
 
         $progress = $this->libraryManager->getProgress($userId, $audiobookId);
@@ -265,14 +265,14 @@ class AudiobookController
         $audiobookId = $params['id'] ?? null;
 
         if ($audiobookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Audiobook ID is required']);
+            return (new Response())->errorPlain(400, 'Audiobook ID is required');
         }
 
         // M-6: identity comes from the authenticated request, never a setter.
         $userId = is_string($request->userId) && $request->userId !== '' ? $request->userId : null;
 
         if ($userId === null) {
-            return (new Response())->status(401)->json(['error' => 'Authentication required']);
+            return (new Response())->errorPlain(401, 'Authentication required');
         }
 
         // M-6: $request->body is the canonical parsed JSON body (Request::$body);
@@ -338,13 +338,13 @@ class AudiobookController
         $audiobookId = $params['id'] ?? null;
 
         if ($audiobookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Audiobook ID is required']);
+            return (new Response())->errorPlain(400, 'Audiobook ID is required');
         }
 
         $audiobook = $this->itemRepo->findById($audiobookId);
 
         if ($audiobook === null || ($audiobook['type'] ?? '') !== 'audiobook') {
-            return (new Response())->status(404)->json(['error' => 'Audiobook not found']);
+            return (new Response())->errorPlain(404, 'Audiobook not found');
         }
 
         /** @var array<string, mixed> $metadata */
@@ -425,13 +425,13 @@ class AudiobookController
         $audiobookId = $params['id'] ?? null;
 
         if ($audiobookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Audiobook ID is required']);
+            return (new Response())->errorPlain(400, 'Audiobook ID is required');
         }
 
         $audiobook = $this->itemRepo->findById($audiobookId);
 
         if ($audiobook === null || ($audiobook['type'] ?? '') !== 'audiobook') {
-            return (new Response())->status(404)->json(['error' => 'Audiobook not found']);
+            return (new Response())->errorPlain(404, 'Audiobook not found');
         }
 
         $path = is_string($audiobook['path'] ?? null) ? $audiobook['path'] : '';
@@ -446,12 +446,12 @@ class AudiobookController
         // (not 403) on failure so a poisoned path cannot be used to probe the
         // filesystem.
         if (!$this->validateMediaPath($path)) {
-            return (new Response())->status(404)->json(['error' => 'Audiobook not found']);
+            return (new Response())->errorPlain(404, 'Audiobook not found');
         }
 
         $fileSize = filesize($path);
         if ($fileSize === false) {
-            return (new Response())->status(500)->json(['error' => 'Failed to get file size']);
+            return (new Response())->errorPlain(500, 'Failed to get file size');
         }
 
         $chapterParam = $request->query['chapter'] ?? null;
@@ -517,16 +517,15 @@ class AudiobookController
 
                 if ($start > $end || $start >= $fileSize) {
                     return (new Response())
-                        ->status(416)
                         ->header('Content-Range', "bytes */{$fileSize}")
-                        ->json(['error' => 'Range not satisfiable']);
+                        ->errorPlain(416, 'Range not satisfiable');
                 }
             }
         }
 
         $length = $end - $start + 1;
         if ($length < 1) {
-            return (new Response())->status(416)->json(['error' => 'Invalid range length']);
+            return (new Response())->errorPlain(416, 'Invalid range length');
         }
 
         // withFile() streams the file via the Workerman event loop (chunked

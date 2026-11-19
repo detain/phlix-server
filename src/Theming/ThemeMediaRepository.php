@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Theming;
 
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -153,13 +154,20 @@ class ThemeMediaRepository
      */
     private function rowToThemeMedia(array $row): ThemeMedia
     {
+        // E-09 cohort 5a: RowMap fold of the strict-guard ternaries (fallbacks
+        // transcribed; the asset-skip guards and the raw DateTimeImmutable ctor
+        // are pre-fold shapes kept verbatim). The feed is `SELECT * FROM
+        // theme_media`, so the pre-fold direct-access arms could not warn on a
+        // real row; the fold only removes that never-fires hazard. Byte-identity
+        // pinned by the legacy-oracle vectors in
+        // tests/Unit/Theming/ThemeMediaRepositoryTest.php.
         $audio = null;
         if (!empty($row['audio_path']) && is_string($row['audio_path'])) {
             $audio = new ThemeAudio(
                 path: $row['audio_path'],
-                url: is_string($row['audio_url']) ? $row['audio_url'] : '',
-                duration: is_int($row['audio_duration']) ? $row['audio_duration'] : 0,
-                format: is_string($row['audio_format']) ? $row['audio_format'] : ''
+                url: RowMap::str($row, 'audio_url', ''),
+                duration: RowMap::int($row, 'audio_duration', 0),
+                format: RowMap::str($row, 'audio_format', '')
             );
         }
 
@@ -167,18 +175,21 @@ class ThemeMediaRepository
         if (!empty($row['video_path']) && is_string($row['video_path'])) {
             $video = new ThemeVideo(
                 path: $row['video_path'],
-                url: is_string($row['video_url']) ? $row['video_url'] : '',
-                duration: is_int($row['video_duration']) ? $row['video_duration'] : 0,
-                width: is_int($row['video_width']) ? $row['video_width'] : 0,
-                height: is_int($row['video_height']) ? $row['video_height'] : 0,
-                format: is_string($row['video_format']) ? $row['video_format'] : ''
+                url: RowMap::str($row, 'video_url', ''),
+                duration: RowMap::int($row, 'video_duration', 0),
+                width: RowMap::int($row, 'video_width', 0),
+                height: RowMap::int($row, 'video_height', 0),
+                format: RowMap::str($row, 'video_format', '')
             );
         }
 
-        $scannedAtStr = is_string($row['scanned_at'] ?? null) ? $row['scanned_at'] : 'now';
+        // T1H half-fold: missing/NULL/non-string default to 'now'; a garbage
+        // string still throws from the ctor — exactly like the pre-fold block
+        // (a nullableDateTime here would NULL-on-garbage ≠ legacy throw).
+        $scannedAtStr = RowMap::str($row, 'scanned_at', 'now');
         $scannedAt = new \DateTimeImmutable($scannedAtStr);
 
-        $libraryId = is_string($row['library_id'] ?? null) ? $row['library_id'] : '';
+        $libraryId = RowMap::str($row, 'library_id', '');
 
         return new ThemeMedia(
             libraryId: $libraryId,

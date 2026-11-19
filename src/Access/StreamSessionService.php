@@ -14,6 +14,7 @@ namespace Phlix\Access;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -681,18 +682,13 @@ final class StreamSessionService
         foreach ($rows as $row) {
             if (is_array($row)) {
                 $streams[] = [
-                    'id' => isset($row['id']) && is_numeric($row['id']) ? (int) $row['id'] : 0,
-                    'profile_id' => isset($row['profile_id']) && is_string($row['profile_id']) ? $row['profile_id'] :
-                        '',
-                    'device_id' => isset($row['device_id']) && is_string($row['device_id']) ? $row['device_id'] : '',
-                    'session_id' => isset($row['session_id']) && is_string($row['session_id']) ? $row['session_id'] :
-                        '',
-                    'started_at' => isset($row['started_at']) && is_string($row['started_at']) ? $row['started_at'] :
-                        '',
-                    'last_heartbeat_at' => isset($row['last_heartbeat_at']) && is_string($row['last_heartbeat_at']) ?
-                        $row['last_heartbeat_at'] : '',
-                    'stream_type' => isset($row['stream_type']) && is_string($row['stream_type']) ?
-                        $row['stream_type'] : 'direct',
+                    'id' => RowMap::intFromNumeric($row, 'id', 0),
+                    'profile_id' => RowMap::str($row, 'profile_id', ''),
+                    'device_id' => RowMap::str($row, 'device_id', ''),
+                    'session_id' => RowMap::str($row, 'session_id', ''),
+                    'started_at' => RowMap::str($row, 'started_at', ''),
+                    'last_heartbeat_at' => RowMap::str($row, 'last_heartbeat_at', ''),
+                    'stream_type' => RowMap::str($row, 'stream_type', 'direct'),
                 ];
             }
         }

@@ -295,4 +295,60 @@ class StreamSessionServiceTest extends TestCase
         $this->assertTrue($swept, 'the stale sweep must run before the limit is enforced');
         $this->assertTrue($inserted);
     }
+
+    /**
+     * E-09 cohort-5b oracle: the seven column grammars of
+     * getActiveStreamsForProfile() across the driver-reachable domain. The
+     * RowMap folds (intFromNumeric + strict str defaults) are value-identical
+     * here: isset() collapses into the accessors' missing/NULL arms, and a
+     * value-NULL never passes isset() to reach the is_string() arm either.
+     * Green before AND after the fold — that is the proof.
+     */
+    public function testGetActiveStreamsColumnGrammars(): void
+    {
+        $full = [
+            'id' => '42',
+            'profile_id' => 'p-1',
+            'device_id' => 'd-1',
+            'session_id' => 's-1',
+            'started_at' => '2026-01-01 00:00:00',
+            'last_heartbeat_at' => '2026-01-01 00:00:05',
+            'stream_type' => 'hls',
+        ];
+
+        $vectors = [
+            [$full, 42, 'p-1', 'd-1', 's-1', '2026-01-01 00:00:00', '2026-01-01 00:00:05', 'hls'],
+            [['id' => 7], 7, '', '', '', '', '', 'direct'],
+            [['id' => '7.9'], 7, '', '', '', '', '', 'direct'],
+            [['id' => 'abc'], 0, '', '', '', '', '', 'direct'],
+            [['id' => null], 0, '', '', '', '', '', 'direct'],
+            [[], 0, '', '', '', '', '', 'direct'],
+            [
+                array_merge($full, ['profile_id' => 5, 'stream_type' => null]),
+                42, '', 'd-1', 's-1', '2026-01-01 00:00:00', '2026-01-01 00:00:05', 'direct',
+            ],
+        ];
+
+        foreach ($vectors as $i => [$row, $id, $profileId, $deviceId, $sessionId, $startedAt, $heartbeat, $type]) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+
+            $streams = (new StreamSessionService($db))->getActiveStreamsForProfile('p-1');
+
+            $this->assertCount(1, $streams, 'vector ' . $i);
+            $this->assertSame(
+                [
+                    'id' => $id,
+                    'profile_id' => $profileId,
+                    'device_id' => $deviceId,
+                    'session_id' => $sessionId,
+                    'started_at' => $startedAt,
+                    'last_heartbeat_at' => $heartbeat,
+                    'stream_type' => $type,
+                ],
+                $streams[0],
+                'vector ' . $i
+            );
+        }
+    }
 }

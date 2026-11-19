@@ -77,7 +77,14 @@ final class StatsController
      * vector against every other user of the worker, not a "big page".
      * Values in `[1, PageLimit::MAX]` behave exactly as before.
      *
-     * @param Request              $request The HTTP request (query.limit, query.since)
+     * `since` follows the same channel law as `limit` — query-first,
+     * body-second (SRV-3 review: the doc example and phlix-console-client
+     * both build `?since=`, and a body-only read made it dead-on-arrival).
+     * Its PARSING is unchanged: whatever channel supplies the value,
+     * {@see self::parseDate()} keeps its documented leniency, and an absent
+     * param on both channels means no filter.
+     *
+     * @param Request              $request The HTTP request (`limit`/`since` read query-first, body-second)
      * @param array<string,string> $params  Path parameters (unused)
      *
      * @return Response JSON-encoded top users list
@@ -85,7 +92,7 @@ final class StatsController
     public function topUsers(Request $request, array $params): Response
     {
         $limit = PageLimit::clamp($this->rawParam($request, 'limit'), 10);
-        $since = $request->input('since');
+        $since = $this->rawParam($request, 'since');
         $sinceDate = $since !== null ? $this->parseDate($since) : null;
 
         $topUsers = $this->collector->getTopUsers($limit, $sinceDate);
@@ -100,9 +107,11 @@ final class StatsController
      * `200 { "data": [{media_item_id, play_count, total_duration}, ...] }`
      *
      * The `limit` is clamped by {@see PageLimit::clamp()} for the same
-     * resident-worker law documented on {@see self::topUsers()}.
+     * resident-worker law documented on {@see self::topUsers()}. `since`
+     * follows the same query-first, body-second channel law documented there,
+     * with {@see self::parseDate()}'s semantics untouched.
      *
-     * @param Request              $request The HTTP request (query.limit, query.since)
+     * @param Request              $request The HTTP request (`limit`/`since` read query-first, body-second)
      * @param array<string,string> $params  Path parameters (unused)
      *
      * @return Response JSON-encoded top media list
@@ -110,7 +119,7 @@ final class StatsController
     public function topMedia(Request $request, array $params): Response
     {
         $limit = PageLimit::clamp($this->rawParam($request, 'limit'), 10);
-        $since = $request->input('since');
+        $since = $this->rawParam($request, 'since');
         $sinceDate = $since !== null ? $this->parseDate($since) : null;
 
         $topMedia = $this->collector->getTopMedia($limit, $sinceDate);
@@ -170,15 +179,16 @@ final class StatsController
     }
 
     /**
-     * Read a numeric parameter across BOTH documented channels: the query
-     * string wins when present (the `?limit=` surface every endpoint doc
-     * advertises — `Request::input()` alone never saw it), then the decoded
-     * body (the channel that actually carried admin-UI values pre-fix), else
-     * null so the caller's declared default applies.
+     * Read a request parameter across BOTH documented channels: the query
+     * string wins when present (the `?limit=` / `?since=` surface every
+     * endpoint doc advertises — `Request::input()` alone never saw it), then
+     * the decoded body (the channel that actually carried admin-UI values
+     * pre-fix), else null so the caller's declared default applies.
      *
-     * Coercion and bounds are deliberately NOT decided here — that is
-     * {@see PageLimit}'s job, so this controller cannot drift from the one
-     * pagination policy.
+     * Interpretation is deliberately NOT decided here: numeric parameters go
+     * to {@see PageLimit} (the one pagination policy), date parameters to
+     * {@see self::parseDate()} (its documented leniency unchanged). This
+     * method only fixes the CHANNEL, so every param obeys the same law.
      *
      * @return mixed Raw request value or null.
      */

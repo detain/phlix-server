@@ -213,6 +213,38 @@ final class AdminHubControllerTest extends TestCase
         self::assertTrue($body['disabled']);
     }
 
+    public function testRelayStatusEnvKillSwitchAnswersTheSharedTrimLaw(): void
+    {
+        // SRV-ENVBOOL (E-04 convergence): the hand-rolled accept list here did
+        // NOT trim, so `PHLIX_RELAY_DISABLED=" true"` answered OFF on this
+        // endpoint while RelayTunnelBoot (which trims) answered ON — drift #6
+        // of the same kill-switch. Under EnvConfig::bool() the padded truthy
+        // word disables the tunnel. Disclosed flip class: padded TRUE words only.
+        putenv('PHLIX_RELAY_DISABLED= true');
+        $body = $this->decode($this->controller()->relayStatus($this->request(), [])->body);
+        self::assertTrue($body['disabled'], 'padded truthy must mean disabled (SSOT trim law)');
+
+        // Characterization legs — answers PRESERVED from the hand-rolled era
+        // (green before and after the migration): falsy words, padding around
+        // them, empty and junk all keep the kill-switch OFF. Junk gains only a
+        // one-line error_log naming the knob (pinned by EnvConfigTest).
+        putenv('PHLIX_RELAY_DISABLED=FALSE');
+        $body = $this->decode($this->controller()->relayStatus($this->request(), [])->body);
+        self::assertFalse($body['disabled'], 'a falsy word never disabled the tunnel');
+
+        putenv('PHLIX_RELAY_DISABLED= false');
+        $body = $this->decode($this->controller()->relayStatus($this->request(), [])->body);
+        self::assertFalse($body['disabled'], 'padded falsy word keeps the falsy answer');
+
+        putenv('PHLIX_RELAY_DISABLED=');
+        $body = $this->decode($this->controller()->relayStatus($this->request(), [])->body);
+        self::assertFalse($body['disabled'], 'empty reads not-provided, default OFF');
+
+        putenv('PHLIX_RELAY_DISABLED=maybe');
+        $body = $this->decode($this->controller()->relayStatus($this->request(), [])->body);
+        self::assertFalse($body['disabled'], 'junk answers the default (now loudly)');
+    }
+
     public function testRelayStatusReportsEnrolledFromEnrollmentFile(): void
     {
         file_put_contents(

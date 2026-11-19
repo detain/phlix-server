@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub;
 
 use InvalidArgumentException;
+use Phlix\Common\Env\EnvConfig;
 use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
 use Workerman\Http\Client;
@@ -132,24 +133,18 @@ class HttpClient implements HttpClientInterface
     /**
      * Resolves the TLS-verify default from the environment.
      *
-     * Mirrors RelayConfig::getEnvBool() (explicit truthy words enable, unset
-     * defaults true) with one deliberate hardening: a value that is neither a
-     * known truthy nor a known falsy word keeps verification ON — a typo in a
-     * security switch must never silently disable TLS verification.
+     * Reads through {@see EnvConfig::boolOptOut()} with its ON default: the
+     * explicit false words (`0`/`false`/`no`/`off`, trimmed and case-folded)
+     * opt out, unset/blank keeps verification on. The former hand-rolled copy
+     * kept ANY unknown word ON so a typo in this security switch could never
+     * silently disable verification — under the shared grammar that
+     * hardening is true by construction (junk answers the default, ON) AND
+     * now loud (one error_log line naming the knob). Answers are preserved
+     * for every input; the warning is the only delta at this site.
      */
     private static function envTlsVerifyDefault(): bool
     {
-        $value = getenv(self::ENV_TLS_VERIFY);
-        if ($value === false || trim($value) === '') {
-            return true;
-        }
-
-        $normalized = strtolower(trim($value));
-        if (in_array($normalized, ['0', 'false', 'no', 'off'], true)) {
-            return false;
-        }
-
-        return true;
+        return EnvConfig::boolOptOut(self::ENV_TLS_VERIFY);
     }
 
     /**

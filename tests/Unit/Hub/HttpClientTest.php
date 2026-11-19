@@ -46,10 +46,39 @@ class HttpClientTest extends TestCase
     public function test_hub_tls_verify_typo_keeps_verification_on(): void
     {
         // A mistyped opt-out must not silently disable TLS verification.
+        // SRV-ENVBOOL: the read now goes through EnvConfig::boolOptOut() — the
+        // ANSWER is preserved for every input (this site's hand-rolled reader
+        // already trimmed and already kept unknown words ON); what is new is
+        // that the typo is now LOUD: exactly one error_log line naming the knob.
         putenv(HttpClient::ENV_TLS_VERIFY . '=flase');
-        $client = new HttpClient('https://hub.example.com');
+
+        $log = tempnam(sys_get_temp_dir(), 'phlix-hubtls-');
+        $this->assertIsString($log);
+        $previous = ini_get('error_log');
+        ini_set('error_log', $log);
+        try {
+            $client = new HttpClient('https://hub.example.com');
+        } finally {
+            ini_set('error_log', is_string($previous) ? $previous : '');
+        }
 
         $this->assertTrue($client->isTlsVerifyEnabled());
+        $written = file_get_contents($log);
+        $this->assertIsString($written);
+        $this->assertStringContainsString(HttpClient::ENV_TLS_VERIFY, $written);
+        @unlink($log);
+    }
+
+    public function test_hub_tls_verify_padded_and_blank_answers_are_preserved(): void
+    {
+        // Characterization across the SRV-ENVBOOL migration: the old reader
+        // trimmed and treated blank as "not provided", so padded falsy and
+        // whitespace-only values answer identically before and after.
+        putenv(HttpClient::ENV_TLS_VERIFY . '= 0 ');
+        $this->assertFalse((new HttpClient('https://hub.example.com'))->isTlsVerifyEnabled());
+
+        putenv(HttpClient::ENV_TLS_VERIFY . '=   ');
+        $this->assertTrue((new HttpClient('https://hub.example.com'))->isTlsVerifyEnabled());
     }
 
     public function test_hub_tls_cafile_is_configurable_via_env(): void

@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use Phlix\Common\Env\EnvConfig;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Hub\HubApplication;
@@ -1038,16 +1039,17 @@ final class AdminHubController
      *
      * The env var is an operator lever this endpoint cannot unset; it wins over
      * the persisted `relay-control.json` flag when reporting effective state.
+     * The read goes through {@see EnvConfig::bool()} — the single E-04 bool
+     * grammar (trim + case fold, true/false word sets, junk answers the default
+     * and is loud). It replaces this site's former untrimmed accept-list and
+     * with it drift #6: `PHLIX_RELAY_DISABLED=" true"` no longer answers OFF
+     * here while RelayTunnelBoot answers ON.
      *
      * @return bool `true` when the env var disables the relay tunnel.
      */
     private function relayEnvDisabled(): bool
     {
-        $value = getenv('PHLIX_RELAY_DISABLED');
-        if ($value === false) {
-            return false;
-        }
-        return in_array(strtolower($value), ['1', 'true', 'yes', 'on'], true);
+        return EnvConfig::bool('PHLIX_RELAY_DISABLED', false);
     }
 
     /**

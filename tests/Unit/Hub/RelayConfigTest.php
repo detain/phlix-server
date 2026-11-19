@@ -256,6 +256,49 @@ final class RelayConfigTest extends TestCase
         $this->assertSame('ws://hub.example.com:8802', $enabled->buildHubRelayWsUrl());
     }
 
+    // ---- SRV-ENVBOOL: E-04 convergence — getEnvBool answers under EnvConfig::bool() ----
+
+    public function test_from_env_padded_truthy_enables_under_the_trim_law(): void
+    {
+        // The hand-rolled copy did not trim: PHLIX_RELAY_ENABLED=" true" meant
+        // "not enabled" here while the same padded shape answered ON under the
+        // SSOT grammar. Disclosed flip class: padded TRUE words now enable.
+        putenv('PHLIX_RELAY_ENABLED= true');
+
+        $this->assertTrue(RelayConfig::fromEnv()->enabled, 'padded truthy must mean ON (SSOT trim law)');
+    }
+
+    public function test_from_env_junk_on_default_true_knobs_answers_securely(): void
+    {
+        // The two default-TRUE knobs used to read junk as a FALSE-spelling:
+        // PHLIX_RELAY_REQUIRE_TLS=maybe and PHLIX_RELAY_TLS_VERIFY=maybe
+        // resolved OFF at the bare truthy-word list. Under EnvConfig::bool()
+        // junk is not-an-answer and the default — the SAFE answer — wins.
+        // This is the second disclosed flip class (fail-closed direction);
+        // no deploy artifact sets either knob to junk (install.sh ships bare
+        // PHLIX_RELAY_ENABLED=1 only).
+        putenv('PHLIX_RELAY_REQUIRE_TLS=maybe');
+        $this->assertTrue(RelayConfig::fromEnv()->requireTls, 'junk must not fail-open require_tls');
+
+        putenv('PHLIX_RELAY_TLS_VERIFY=maybe');
+        $this->assertTrue(RelayConfig::fromEnv()->relayTlsVerify, 'junk must not fail-open cert verification');
+
+        putenv('PHLIX_RELAY_TLS_VERIFY= ');
+        $this->assertTrue(RelayConfig::fromEnv()->relayTlsVerify, 'whitespace reads not-provided, default ON');
+
+        putenv('PHLIX_RELAY_REQUIRE_TLS=');
+        $this->assertTrue(RelayConfig::fromEnv()->requireTls, 'empty reads not-provided, default ON');
+
+        // Characterization legs — answers PRESERVED: an explicit falsy word
+        // opts out, padded or not (the base reader also rejected both shapes
+        // as non-truthy, so both eras answer FALSE here).
+        putenv('PHLIX_RELAY_REQUIRE_TLS=0');
+        $this->assertFalse(RelayConfig::fromEnv()->requireTls);
+
+        putenv('PHLIX_RELAY_TLS_VERIFY= off');
+        $this->assertFalse(RelayConfig::fromEnv()->relayTlsVerify, 'padded falsy word opts out (trim law)');
+    }
+
     // ---- R18-17: typed env parsing (empty = unset; old `?:` falsiness preserved) ----
 
     public function test_from_env_empty_string_means_unset_for_strings(): void

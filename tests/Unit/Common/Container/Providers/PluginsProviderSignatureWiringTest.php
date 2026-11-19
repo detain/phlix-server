@@ -33,7 +33,9 @@ final class PluginsProviderSignatureWiringTest extends TestCase
         $this->savedEnv = [
             TrustedSignaturesConfig::ENV_LIST => getenv(TrustedSignaturesConfig::ENV_LIST),
             TrustedSignaturesConfig::ENV_FILE => getenv(TrustedSignaturesConfig::ENV_FILE),
+            'PHLIX_PLUGINS_REQUIRE_SIGNATURE' => getenv('PHLIX_PLUGINS_REQUIRE_SIGNATURE'),
         ];
+        putenv('PHLIX_PLUGINS_REQUIRE_SIGNATURE');
     }
 
     protected function tearDown(): void
@@ -97,6 +99,41 @@ final class PluginsProviderSignatureWiringTest extends TestCase
         $this->verifierFromContainer();
     }
 
+    public function test_padded_truthy_require_signature_enforces_under_the_trim_law(): void
+    {
+        // SRV-ENVBOOL (E-04 convergence): this knob read through the provider's
+        // hand-rolled, untrimmed copy, so `PHLIX_PLUGINS_REQUIRE_SIGNATURE=" true"`
+        // failed to flip enforcement ON. EnvConfig::bool() trims — the padded
+        // truthy word must now mean ENFORCE, and an unsigned plugin is rejected.
+        file_put_contents($this->tmpDir . '/plugin.json', '{"name":"x"}');
+        putenv('PHLIX_PLUGINS_REQUIRE_SIGNATURE= true');
+
+        $verifier = $this->verifierFromContainer();
+
+        $this->assertSame(
+            SignatureVerifier::RESULT_INVALID,
+            $verifier->verify($this->unsignedManifest(), $this->tmpDir),
+            'padded truthy must enable signature enforcement (SSOT trim law)',
+        );
+    }
+
+    public function test_padded_falsy_require_signature_stays_off(): void
+    {
+        // Characterization leg — answer PRESERVED across the migration: the old
+        // reader saw ' false' (padded) as not-truthy → OFF, and the SSOT grammar
+        // reads it as a false word → the same OFF. Green before and after.
+        file_put_contents($this->tmpDir . '/plugin.json', '{"name":"x"}');
+        putenv('PHLIX_PLUGINS_REQUIRE_SIGNATURE= false');
+
+        $verifier = $this->verifierFromContainer();
+
+        $this->assertSame(
+            SignatureVerifier::RESULT_UNSIGNED,
+            $verifier->verify($this->unsignedManifest(), $this->tmpDir),
+            'padded falsy word keeps the enforcement opt-out',
+        );
+    }
+
     private function verifierFromContainer(): SignatureVerifier
     {
         $builder = new ContainerBuilder();
@@ -118,6 +155,17 @@ final class PluginsProviderSignatureWiringTest extends TestCase
             'type' => 'notifier',
             'entry' => 'Phlix\\Tests\\Sig\\Plugin',
             'signature' => $signature,
+        ]);
+    }
+
+    private function unsignedManifest(): Manifest
+    {
+        return Manifest::fromArray([
+            'name' => 'phlix-plugin-sigwire',
+            'version' => '1.0.0',
+            'phlix_min_server_version' => '0.10.0',
+            'type' => 'notifier',
+            'entry' => 'Phlix\\Tests\\Sig\\Plugin',
         ]);
     }
 }

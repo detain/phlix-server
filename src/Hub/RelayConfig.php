@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub;
 
+use Phlix\Common\Env\EnvConfig;
+
 /**
  * Configuration for the server-side relay tunnel.
  *
@@ -141,7 +143,9 @@ final class RelayConfig
      */
     public static function fromEnv(?array $overrides = null): self
     {
-        $enabled = self::getEnvBool('PHLIX_RELAY_ENABLED', false);
+        // Boolean knobs read under the single E-04 grammar (EnvConfig::bool:
+        // trim + case fold, true/false words, junk answers the default + LOUD).
+        $enabled = EnvConfig::bool('PHLIX_RELAY_ENABLED', false);
         // R18-17: explicit typed env helpers replace the bare `getenv(...) ?:
         // default` idiom. Unset AND empty-string both mean "not provided" (the
         // `?:` chain behaved identically for those two shapes); the literal '0'
@@ -163,15 +167,15 @@ final class RelayConfig
         // hub's HUB_RELAY_TLS default (its relay listener is plaintext by
         // default). Verification stays ON by default (secure); disable it only
         // to trust a self-signed hub relay cert.
-        $relayTls = self::getEnvBool('PHLIX_RELAY_TLS', false);
-        $relayTlsVerify = self::getEnvBool('PHLIX_RELAY_TLS_VERIFY', true);
+        $relayTls = EnvConfig::bool('PHLIX_RELAY_TLS', false);
+        $relayTlsVerify = EnvConfig::bool('PHLIX_RELAY_TLS_VERIFY', true);
         $relayTlsCafile = self::envString('PHLIX_RELAY_TLS_CAFILE', self::DEFAULT_TLS_CAFILE);
         // Opt-in ACK of the plaintext-tunnel impersonation risk (M5). Silence
         // the connect-time warning ONLY when the operator explicitly sets it.
-        $allowPlaintextTunnel = self::getEnvBool('PHLIX_RELAY_ALLOW_PLAINTEXT', false);
+        $allowPlaintextTunnel = EnvConfig::bool('PHLIX_RELAY_ALLOW_PLAINTEXT', false);
         // Fail-closed plaintext refusal (R17-01). ON by default; PHLIX_RELAY_REQUIRE_TLS=0 opts out to warn-only M5
         // behavior (startup log line). When on, RelayConsumer refuses non-wss:// dials outright.
-        $requireTls = self::getEnvBool('PHLIX_RELAY_REQUIRE_TLS', true);
+        $requireTls = EnvConfig::bool('PHLIX_RELAY_REQUIRE_TLS', true);
 
         if ($overrides !== null) {
             $enabled = is_bool($overrides['enabled'] ?? null)
@@ -286,23 +290,6 @@ final class RelayConfig
             allowPlaintextTunnel: $this->allowPlaintextTunnel,
             requireTls: $this->requireTls,
         );
-    }
-
-    /**
-     * Get a boolean environment variable.
-     *
-     * @param string $key     Env var name.
-     * @param bool   $default Default value.
-     *
-     * @return bool
-     */
-    private static function getEnvBool(string $key, bool $default): bool
-    {
-        $value = getenv($key);
-        if ($value === false) {
-            return $default;
-        }
-        return in_array(strtolower($value), ['1', 'true', 'yes', 'on'], true);
     }
 
     /**

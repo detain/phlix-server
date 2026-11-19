@@ -14,6 +14,7 @@ namespace Phlix\Common\Container\Providers;
 use DI\ContainerBuilder;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Env\EnvConfig;
 use Phlix\Common\Events\ListenerRegistry;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\LogChannels;
@@ -95,7 +96,10 @@ final class PluginsProvider implements ServiceProviderInterface
             'PHLIX_PLUGINS_COMPOSER_TIMEOUT',
             ComposerRunner::DEFAULT_TIMEOUT_SECONDS,
         );
-        $requireSignature = self::envBool('PHLIX_PLUGINS_REQUIRE_SIGNATURE', false);
+        // E-04 convergence: the shared bool grammar (trim + case fold, junk
+        // answers the default loudly) — formerly this provider's own untrimmed
+        // copy, which disagreed with EnvConfig about padded spellings.
+        $requireSignature = EnvConfig::bool('PHLIX_PLUGINS_REQUIRE_SIGNATURE', false);
         $trustedSignatures = TrustedSignaturesConfig::fromEnv();
         $loggerConfigPath = $appConfig['logger_config_path'] ?? null;
 
@@ -291,19 +295,6 @@ final class PluginsProvider implements ServiceProviderInterface
     private static function resolveDefaultDir(): string
     {
         return dirname(__DIR__, 4) . DIRECTORY_SEPARATOR . self::DEFAULT_PLUGINS_DIR;
-    }
-
-    /**
-     * Read a boolean env var with the same truthy semantics used by
-     * {@see \Phlix\Common\Container\ContainerFactory::shouldCompile()}.
-     */
-    private static function envBool(string $name, bool $default): bool
-    {
-        $value = getenv($name);
-        if ($value === false) {
-            return $default;
-        }
-        return in_array(strtolower($value), ['1', 'true', 'yes', 'on'], true);
     }
 
     /**

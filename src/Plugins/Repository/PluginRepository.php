@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\Repository;
 
+use Phlix\Common\Util\RowMap;
 use DateTimeImmutable;
 use Phlix\Common\Uuid;
 use Phlix\Plugins\Exception\PluginNotFoundException;
@@ -233,12 +234,16 @@ class PluginRepository
      */
     private function hydrate(array $row): InstalledPlugin
     {
-        $manifestJson = is_string($row['manifest_json'] ?? null) ? (string) $row['manifest_json'] : '{}';
+        // E-09 cohort 5a: RowMap folds (defaults transcribed verbatim; the
+        // json walkers, the try/catch epoch arm below and the is_scalar legs
+        // are pre-fold shapes kept as-is). Byte-identity pinned by the
+        // legacy-oracle vectors in tests/Unit/Plugins/Repository/PluginRepositoryTest.php.
+        $manifestJson = RowMap::str($row, 'manifest_json', '{}');
         /** @var mixed $decodedManifest */
         $decodedManifest = json_decode($manifestJson, true);
         $manifest = Manifest::fromArray(is_array($decodedManifest) ? $decodedManifest : []);
 
-        $settingsJson = is_string($row['settings_json'] ?? null) ? (string) $row['settings_json'] : '';
+        $settingsJson = RowMap::str($row, 'settings_json', '');
         $settings = [];
         if ($settingsJson !== '') {
             /** @var mixed $decoded */
@@ -249,16 +254,18 @@ class PluginRepository
             }
         }
 
-        $installedAtRaw = is_string($row['installed_at'] ?? null)
-            ? (string) $row['installed_at']
-            : '1970-01-01 00:00:00';
+        // T1H half-fold: missing/NULL/non-string defaults to the epoch literal;
+        // a garbage string still lands in the kept try/catch epoch arm —
+        // exactly the pre-fold shape (nullableDateTime here would swallow the
+        // ctor differently, so the raw handling stays).
+        $installedAtRaw = RowMap::str($row, 'installed_at', '1970-01-01 00:00:00');
         try {
             $installedAt = new DateTimeImmutable($installedAtRaw);
         } catch (\Exception) {
             $installedAt = new DateTimeImmutable('1970-01-01 00:00:00');
         }
 
-        $name = is_string($row['name'] ?? null) ? (string) $row['name'] : $manifest->name;
+        $name = RowMap::str($row, 'name', $manifest->name);
         $idRaw = $row['id'] ?? '';
         $id = is_scalar($idRaw) ? (string) $idRaw : '';
         $enabledRaw = $row['enabled'] ?? 0;

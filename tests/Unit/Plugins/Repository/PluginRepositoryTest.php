@@ -227,4 +227,75 @@ final class PluginRepositoryTest extends TestCase
             'entry' => 'Phlix\\Foo\\Plugin',
         ]);
     }
+
+
+    public function testHydrateRowDecodeLegsAreByteIdenticalToLegacyAcrossVectors(): void
+    {
+        $repo = new PluginRepository($this->createMock(Connection::class), '/tmp/plugins');
+        $hydrate = new \ReflectionMethod(PluginRepository::class, 'hydrate');
+        $hydrate->setAccessible(true);
+
+        $manifestJson = json_encode([
+            'name' => 'mm',
+            'version' => '1.0.0',
+            'phlix_min_server_version' => '0.10.0',
+            'type' => 'notifier',
+            'entry' => 'Phlix\\Foo\\Plugin',
+        ]);
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['id' => 'p-1', 'name' => 'explicit', 'manifest_json' => $manifestJson,
+                'settings_json' => '{"a":1}', 'installed_at' => '2020-05-05 05:05:05',
+                'enabled' => 1],
+            ['id' => 'p-2', 'manifest_json' => 7, 'settings_json' => 'not-json',
+                'installed_at' => 'garbage', 'enabled' => 0],
+            ['manifest_json' => null, 'settings_json' => null,
+                'installed_at' => null, 'enabled' => null],
+            ['id' => 5, 'name' => 'db-name', 'manifest_json' => $manifestJson,
+                'settings_json' => '', 'installed_at' => '2021-01-01 00:00:00',
+                'enabled' => '1'],
+        ];
+
+        foreach ($vectors as $row) {
+            $decoded = json_decode(
+                is_string($row['manifest_json'] ?? null) ? (string) $row['manifest_json'] : '{}',
+                true
+            );
+            $manifest = Manifest::fromArray(is_array($decoded) ? $decoded : []);
+            $settingsJson = is_string($row['settings_json'] ?? null)
+                ? (string) $row['settings_json']
+                : '';
+            $settings = [];
+            if ($settingsJson !== '') {
+                $decodedSettings = json_decode($settingsJson, true);
+                if (is_array($decodedSettings)) {
+                    $settings = $decodedSettings;
+                }
+            }
+            $installedAtRaw = is_string($row['installed_at'] ?? null)
+                ? (string) $row['installed_at']
+                : '1970-01-01 00:00:00';
+            try {
+                $installedAt = new \DateTimeImmutable($installedAtRaw);
+            } catch (\Exception) {
+                $installedAt = new \DateTimeImmutable('1970-01-01 00:00:00');
+            }
+            $name = is_string($row['name'] ?? null) ? (string) $row['name'] : $manifest->name;
+            $idRaw = $row['id'] ?? '';
+            $id = is_scalar($idRaw) ? (string) $idRaw : '';
+            $enabledRaw = $row['enabled'] ?? 0;
+            $enabled = is_scalar($enabledRaw) ? (int) $enabledRaw : 0;
+
+            $plugin = $hydrate->invoke($repo, $row);
+            $this->assertSame($id, $plugin->id);
+            $this->assertSame($manifest->name, $plugin->manifest->name);
+            $this->assertSame($enabled === 1, $plugin->enabled);
+            $this->assertSame(
+                $installedAt->format(\DateTimeInterface::ATOM),
+                $plugin->installedAt->format(\DateTimeInterface::ATOM)
+            );
+            $this->assertSame($settings, $plugin->settings);
+            $this->assertSame($repo->directoryFor($name), $plugin->directory);
+        }
+    }
 }

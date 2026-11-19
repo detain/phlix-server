@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Admin;
 
+use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
 use Workerman\MySQL\Connection;
 
@@ -125,8 +126,13 @@ class SettingsRepository
             return null;
         }
 
-        $type = is_string($row['value_type'] ?? null) ? $row['value_type'] : 'string';
-        $raw  = is_string($row['setting_value'] ?? null) ? $row['setting_value'] : '';
+        // E-09 cohort 5a (W5): RowMap fold of the pre-fold strict-guard ternaries
+        // (fallbacks transcribed; byte-identity pinned by the legacy-oracle
+        // vectors in tests/Unit/Admin/SettingsRepositoryTest.php). fromMixed
+        // narrows the raw query row for the accessors; string keys preserved.
+        $row = RowMap::fromMixed($row);
+        $type = RowMap::str($row, 'value_type', 'string');
+        $raw  = RowMap::str($row, 'setting_value', '');
 
         return [
             'value'      => self::decode($raw, $type),
@@ -156,9 +162,17 @@ class SettingsRepository
             if (!is_array($row) || !is_string($row['setting_key'] ?? null)) {
                 continue;
             }
-            $type = is_string($row['value_type'] ?? null) ? $row['value_type'] : 'string';
-            $raw  = is_string($row['setting_value'] ?? null) ? $row['setting_value'] : '';
-            $out[$row['setting_key']] = self::decode($raw, $type);
+            // The pre-fold negated guard narrowed $row['setting_key'] to string;
+            // that leg is kept verbatim and its proven value is captured before
+            // the rebind so the map key stays a string offset.
+            $settingKey = $row['setting_key'];
+            // E-09 cohort 5a (W5): RowMap fold (see getOverride note); the
+            // negated setting_key control guard above is a pre-fold shape kept
+            // verbatim.
+            $row = RowMap::fromMixed($row);
+            $type = RowMap::str($row, 'value_type', 'string');
+            $raw  = RowMap::str($row, 'setting_value', '');
+            $out[$settingKey] = self::decode($raw, $type);
         }
 
         return $out;

@@ -8,6 +8,7 @@ use Phlix\Admin\SettingsRepository;
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 use Workerman\MySQL\Connection;
 
 /**
@@ -371,5 +372,59 @@ final class SettingsRepositoryTest extends TestCase
         $repo->beginTransaction();
         $repo->commitTransaction();
         $repo->rollbackTransaction();
+    }
+
+    /**
+     * E-09 cohort 5a (W5): the getOverride + getAllOverrides str-fold legs vs
+     * the pre-fold ternaries (transcribed verbatim from the parent blob) and
+     * the KEPT negated setting_key control guard.
+     */
+    public function testOverrideRowDecodeLegsAreByteIdenticalToLegacyAcrossVectors(): void
+    {
+        $decode = new ReflectionMethod(SettingsRepository::class, 'decode');
+        $decode->setAccessible(true);
+
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['setting_key' => 'k-1', 'setting_value' => 'plain', 'value_type' => 'string'],
+            ['setting_key' => 'k-2', 'setting_value' => 'true', 'value_type' => 'bool'],
+            ['setting_key' => 'k-3', 'setting_value' => '7', 'value_type' => 'int'],
+            ['setting_key' => 'k-4', 'setting_value' => null, 'value_type' => null],
+            ['setting_key' => 'k-5', 'setting_value' => 5, 'value_type' => 3],
+            ['setting_value' => 'x', 'value_type' => 'string'],
+            ['setting_key' => 'k-7'],
+        ];
+
+        foreach ($vectors as $row) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+            $repository = new SettingsRepository($db, self::FIXTURE_DIR);
+
+            $type = is_string($row['value_type'] ?? null) ? $row['value_type'] : 'string';
+            $raw  = is_string($row['setting_value'] ?? null) ? $row['setting_value'] : '';
+
+            $this->assertSame(
+                [
+                    'value' => $decode->invoke(null, $raw, $type),
+                    'value_type' => $type,
+                ],
+                $repository->getOverride('the-key'),
+                'getOverride legs for vector ' . json_encode($row)
+            );
+
+            if (!is_string($row['setting_key'] ?? null)) {
+                $this->assertSame(
+                    [],
+                    $repository->getAllOverrides(),
+                    'kept negated guard skips vector ' . json_encode($row)
+                );
+                continue;
+            }
+            $this->assertSame(
+                [$row['setting_key'] => $decode->invoke(null, $raw, $type)],
+                $repository->getAllOverrides(),
+                'getAllOverrides legs for vector ' . json_encode($row)
+            );
+        }
     }
 }

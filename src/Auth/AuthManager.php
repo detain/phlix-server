@@ -13,7 +13,7 @@ namespace Phlix\Auth;
 
 use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\Dto\UserRow;
-use Phlix\Common\Database\MysqlError;
+use Phlix\Shared\Database\MysqlError;
 use Phlix\Shared\Events\Auth\UserCreated;
 use Phlix\Shared\Events\Auth\UserLoggedIn;
 use Phlix\Shared\Events\Auth\UserLoggedOut;

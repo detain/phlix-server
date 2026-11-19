@@ -63,6 +63,7 @@ declare(strict_types=1);
 namespace Phlix\Common\Database;
 
 use PDOException;
+use Phlix\Shared\Database\MysqlError;
 use Throwable;
 use Workerman\MySQL\Connection;
 

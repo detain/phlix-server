@@ -4,21 +4,41 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Common\Database;
 
-use Phlix\Common\Database\MysqlError;
+use Phlix\Shared\Database\MysqlError;
 use PHPUnit\Framework\TestCase;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 use ReflectionClass;
 
 /**
- * Unit coverage for {@see MysqlError} — the canonical MySQL error detector
- * (refactor D-16). The shapes asserted here are the two the estate's own
+ * Unit coverage for {@see MysqlError} — the shared kernel's canonical MySQL
+ * error detector (refactor D-16, lifted to phlix-shared at v0.57.0; the
+ * server-local twin `Phlix\Common\Database\MysqlError` was retired by the
+ * v0.57 consumer wave after a 95-vector both-direction differential showed
+ * 0 deltas). The shapes asserted here are the two the estate's own
  * connection layer provably produces (raw PDOException with intact
  * errorInfo, and the vendor re-wrap carrying only message + SQLSTATE-as-int),
  * plus the MigrationRunner segment contract (anchored parse, bracketed
  * connect failures deliberately unmatched, echo decoys refused — anchored
  * segment wins, ambiguous multi-segment strings parse to nothing).
+ *
+ * The final tests additionally guard the retirement itself: the retired FQCN
+ * must stay extinct, class-exists and in source text.
  */
 final class MysqlErrorTest extends TestCase
 {
+    /**
+     * The retired server-local twin FQCN. Written as a runtime string on
+     * purpose: assembling it from parts keeps this guard file out of its own
+     * source-text extinction scan (the scan takes an explicit self-exclusion
+     * — see {@see self::SELF_PATH}) while still failing if anything else on
+     * the tree resurrects the name.
+     */
+    private const RETIRED_FQCN = 'Phlix' . '\\' . 'Common' . '\\' . 'Database' . '\\' . 'MysqlError';
+
+    /** This file — the only place the retired name may still appear. */
+    private const SELF_PATH = __DIR__ . '/MysqlErrorTest.php';
+
     /**
      * @return array<array{array<array-key,mixed>|int|null}> [errorInfo, expected]
      */
@@ -153,5 +173,64 @@ final class MysqlErrorTest extends TestCase
         self::assertSame('23000', MysqlError::SQLSTATE_INTEGRITY);
         self::assertSame('40001', MysqlError::SQLSTATE_SERIALIZATION_FAILURE);
         self::assertSame('Duplicate entry', MysqlError::DUPLICATE_ENTRY_PHRASE);
+    }
+
+    public function testTheRetiredLocalTwinStaysExtinctAsAClass(): void
+    {
+        // Autoload-aware: if any file resurrects the name where the composer
+        // psr-4 map can find it, class_exists() reloads it and this reddens.
+        self::assertFalse(
+            class_exists(self::RETIRED_FQCN, true),
+            'The server-local twin Phlix\\Common\\Database\\MysqlError was retired to the '
+            . 'shared kernel in the v0.57 consumer wave (W2) — nothing may re-create it.'
+        );
+    }
+
+    public function testTheRetiredFqcnIsExtinctFromEverySourceFile(): void
+    {
+        $root = dirname(__DIR__, 4);
+        $needle = 'Phlix' . '\\' . 'Common' . '\\' . 'Database' . '\\' . 'MysqlError';
+        $offenders = [];
+        $examined = 0;
+
+        foreach (['src', 'tests'] as $dir) {
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($root . '/' . $dir, RecursiveDirectoryIterator::SKIP_DOTS),
+            );
+
+            /** @var \SplFileInfo $file */
+            foreach ($iterator as $file) {
+                if (!$file->isFile() || $file->getExtension() !== 'php') {
+                    continue;
+                }
+                if ($file->getPathname() === self::SELF_PATH) {
+                    // This guard file names the retired FQCN in its docblock and
+                    // its runtime-string fragments — the only sanctioned seats.
+                    continue;
+                }
+
+                $examined++;
+
+                if (str_contains((string) file_get_contents($file->getPathname()), $needle)) {
+                    $offenders[] = substr($file->getPathname(), strlen($root) + 1);
+                }
+            }
+        }
+
+        // Assert own coverage: a scan that examined nothing must not pass
+        // silently (root-path bug = free green — S342 denominator law).
+        self::assertGreaterThan(
+            2000,
+            $examined,
+            'The extinction scan examined only ' . $examined . ' PHP files — the tree walk '
+            . 'is broken, which would let the retired FQCN return unnoticed.'
+        );
+
+        self::assertSame(
+            [],
+            $offenders,
+            "The retired FQCN appears in source text (" . implode(', ', $offenders) . '). '
+            . 'Repoint those consumers to Phlix\\Shared\\Database\\MysqlError instead.'
+        );
     }
 }

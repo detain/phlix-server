@@ -12,11 +12,11 @@ declare(strict_types=1);
 namespace Phlix\Media\Library;
 
 use Phlix\Collections\SmartRuleVocabulary;
-use Phlix\Common\Database\MysqlError;
 use Phlix\Common\Http\PageLimit;
 use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
 use Phlix\Server\Http\RequestContext;
+use Phlix\Shared\Database\MysqlError;
 use Phlix\Stats\StatsCollector;
 use Throwable;
 use Workerman\MySQL\Connection;

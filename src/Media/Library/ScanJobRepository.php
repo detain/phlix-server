@@ -12,10 +12,10 @@ declare(strict_types=1);
 namespace Phlix\Media\Library;
 
 use InvalidArgumentException;
-use Phlix\Common\Database\MysqlError;
 use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
+use Phlix\Shared\Database\MysqlError;
 use Workerman\MySQL\Connection;
 
 /**

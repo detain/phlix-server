@@ -1970,7 +1970,7 @@ final class PhlixMySQLConnectionTest extends TestCase
             );
             self::assertSame(
                 1062,
-                \Phlix\Common\Database\MysqlError::driverCode($caught->errorInfo),
+                \Phlix\Shared\Database\MysqlError::driverCode($caught->errorInfo),
                 'driverCode() must stay authoritative on the rethrown wrapper'
             );
             self::assertSame(23000, (int) $caught->getCode(), 'the SQLSTATE-as-int code must be preserved');

@@ -1425,7 +1425,19 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   red 2208-vs-2207 in TXMUTEX-r2-census-prerot.log, sole failure).
     //   Reads/writes legs untouched: zero own-delta (reads 517 / writes 1318
     //   are the owning cohorts' landed truth; this bump is file-count only).
-    private const EXPECTED_PHP_FILES = 2208;
+    // Staircase continued -- SRV-WAVE-AB2 W2 (shared v0.57 consumer wave). -1
+    //   mine: src/Common/Database/MysqlError.php DELETED — the server-local twin
+    //   retired onto Phlix\Shared\Database\MysqlError after a 95-vector
+    //   both-direction differential measured 0 deltas (gate log
+    //   SRVWAVE2-w2-differential.log) and an external-FQCN census found zero
+    //   code consumers of the retired name; six consumers repointed, retirement
+    //   tripwires (class_exists + scan-based FQCN text extinction with
+    //   own-coverage floor) landed in MysqlErrorTest (red-first at parent,
+    //   logs SRVWAVE2-w2-{redfirst,green}.log). Reads/writes legs untouched:
+    //   zero own-delta (no $request-> line added or removed); this bump is
+    //   file-count only (2208 → 2207, measured red-first in
+    //   SRVWAVE2-w2-census-redfirst.log).
+    private const EXPECTED_PHP_FILES = 2207;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Admin;
 
 use DateTime;
+use Phlix\Common\Util\RowMap;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Streaming\StreamManager;
 use Phlix\Media\Streaming\StreamState;
@@ -260,8 +261,14 @@ class DashboardService
                 continue;
             }
 
-            $playCount = is_int($row['play_count']) ? $row['play_count'] : 0;
-            $totalDuration = is_int($row['total_duration']) ? $row['total_duration'] : 0;
+            // E-09 cohort 5a: RowMap fold of the pre-fold strict-guard ternaries
+            // (fallbacks transcribed); byte-identity pinned by the legacy-oracle
+            // vectors in tests/Unit/Admin/DashboardServiceTest.php. The feed is
+            // StatsCollector::getTopMedia(), which re-builds every row through
+            // its own integer normalizer, so the pre-fold false arm could never
+            // fire on a real row; the fold only drops that never-fires hazard.
+            $playCount = RowMap::int($row, 'play_count', 0);
+            $totalDuration = RowMap::int($row, 'total_duration', 0);
 
             $result[] = [
                 'media_item_id' => $this->toString($row['media_item_id']),
@@ -372,12 +379,13 @@ class DashboardService
         ];
 
         foreach ($rows as $row) {
-            $totalBytes = isset($row['total_bytes'])
-                && is_numeric($row['total_bytes']) ? (int)$row['total_bytes'] : 0;
-            $cacheBytes = isset($row['transcode_cache_bytes'])
-                && is_numeric($row['transcode_cache_bytes']) ? (int)$row['transcode_cache_bytes'] : 0;
-            $itemCount = isset($row['item_count'])
-                && is_numeric($row['item_count']) ? (int)$row['item_count'] : 0;
+            // E-09 cohort 5a: RowMap fold of the isset+is_numeric ternaries (the
+            // storage snapshot rows carry stringy SUM()/COUNT() results, which
+            // intFromNumeric casts exactly like the pre-fold (int) arms). Tests:
+            // tests/Unit/Admin/DashboardServiceTest.php legacy-oracle vectors.
+            $totalBytes = RowMap::intFromNumeric($row, 'total_bytes', 0);
+            $cacheBytes = RowMap::intFromNumeric($row, 'transcode_cache_bytes', 0);
+            $itemCount = RowMap::intFromNumeric($row, 'item_count', 0);
             $mediaType = $this->toString($row['media_type']);
 
             // ACCUMULATE, never assign: see the method docblock. A second row for
@@ -508,9 +516,12 @@ class DashboardService
                 continue;
             }
 
-            $durationSecs = isset($row['duration_seconds'])
-                && is_numeric($row['duration_seconds']) ? (int)$row['duration_seconds'] : 0;
-            $completed = isset($row['completed']) && $row['completed'];
+            // E-09 cohort 5a: RowMap fold of the isset+is_numeric ternary and the
+            // isset-truthiness arm (bool && returns bool exactly as boolFromCast
+            // reads null/absent as false). Tests: tests/Unit/Admin/
+            // DashboardServiceTest.php legacy-oracle vectors.
+            $durationSecs = RowMap::intFromNumeric($row, 'duration_seconds', 0);
+            $completed = RowMap::boolFromCast($row, 'completed', false);
 
             $result[] = [
                 'id' => $this->toString($row['id']),

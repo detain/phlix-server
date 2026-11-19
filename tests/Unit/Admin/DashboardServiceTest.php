@@ -621,4 +621,234 @@ class DashboardServiceTest extends TestCase
         $this->assertSame('alice', $playbackEvent['username']);
         $this->assertSame('Test Movie', $playbackEvent['details']['media_title']);
     }
+
+    /**
+     * E-09 cohort 5a legacy oracle: the three DashboardService row-decode legs
+     * (getTopMedia int legs, getStorageSummary isset+is_numeric legs,
+     * getRecentPlaybackEvents duration/completed legs) transcribed verbatim
+     * from the 6cd39c5d state of src/Admin/DashboardService.php and compared
+     * across the type domain their feeds can deliver.
+     *
+     * @param array<string, mixed> $row
+     * @return array{play_count: int, total_duration: int}
+     */
+    private function legacyTopMediaShaping(array $row): array
+    {
+        return [
+            'play_count' => is_int($row['play_count']) ? $row['play_count'] : 0,
+            'total_duration' => is_int($row['total_duration']) ? $row['total_duration'] : 0,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return array{item_count: int, total_bytes: int, transcode_cache_bytes: int}
+     */
+    private function legacyStorageShaping(array $row): array
+    {
+        return [
+            'item_count' => isset($row['item_count']) && is_numeric($row['item_count']) ? (int)$row['item_count'] : 0,
+            'total_bytes' => isset($row['total_bytes'])
+                && is_numeric($row['total_bytes']) ? (int)$row['total_bytes'] : 0,
+            'transcode_cache_bytes' => isset($row['transcode_cache_bytes'])
+                && is_numeric($row['transcode_cache_bytes']) ? (int)$row['transcode_cache_bytes'] : 0,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return array{duration_seconds: int, completed: bool}
+     */
+    private function legacyPlaybackEventShaping(array $row): array
+    {
+        return [
+            'duration_seconds' => isset($row['duration_seconds']) && is_numeric($row['duration_seconds'])
+                ? (int)$row['duration_seconds'] : 0,
+            'completed' => isset($row['completed']) && $row['completed'],
+        ];
+    }
+
+    public function test_top_media_int_legs_are_byte_identical_to_legacy_across_vectors(): void
+    {
+        $vectors = [
+            'typed' => ['media_item_id' => 'm-1', 'play_count' => 10, 'total_duration' => 18000],
+            'nulls' => ['media_item_id' => 'm-1', 'play_count' => null, 'total_duration' => null],
+            'false-and-zero' => ['media_item_id' => 'm-1', 'play_count' => false, 'total_duration' => 0],
+            'numeric-strings-are-not-ints' => [
+                'media_item_id' => 'm-1',
+                'play_count' => '10',
+                'total_duration' => '18000',
+            ],
+            'floats-are-not-ints' => ['media_item_id' => 'm-1', 'play_count' => 10.0, 'total_duration' => 18000.0],
+            'array-values' => ['media_item_id' => 'm-1', 'play_count' => ['x'], 'total_duration' => ['y']],
+        ];
+
+        foreach ($vectors as $label => $row) {
+            $mockConnection = $this->createMockConnection();
+            $mockConnection->method('query')->willReturn([]);
+
+            $mockStatsCollector = $this->createMockStatsCollector();
+            $mockStatsCollector->method('getTopMedia')->willReturn([$row]);
+
+            $mockItemRepository = $this->createMockItemRepository();
+            $mockItemRepository->method('findByIds')->willReturn([[
+                'id' => 'm-1',
+                'name' => 'Popular Movie',
+                'type' => 'movie',
+                'metadata' => ['poster_url' => '/poster1.jpg'],
+            ]]);
+
+            $service = new DashboardService(
+                $mockStatsCollector,
+                $this->createMockSessionManager(),
+                $this->createMockStreamManager(),
+                $mockItemRepository,
+                $mockConnection
+            );
+
+            $result = $service->getTopMedia(10, 30);
+            $this->assertCount(1, $result, $label);
+            $this->assertSame($this->legacyTopMediaShaping($row), [
+                'play_count' => $result[0]['play_count'],
+                'total_duration' => $result[0]['total_duration'],
+            ], $label);
+        }
+    }
+
+    public function test_storage_summary_numeric_legs_are_byte_identical_to_legacy_across_vectors(): void
+    {
+        $full = [
+            'media_type' => 'movie',
+            'item_count' => 12,
+            'total_bytes' => 12345,
+            'transcode_cache_bytes' => 678,
+        ];
+
+        $strings = [
+            'media_type' => 'movie',
+            'item_count' => '12',
+            'total_bytes' => '12345',
+            'transcode_cache_bytes' => '-678',
+        ];
+        $floats = [
+            'media_type' => 'movie',
+            'item_count' => 1.9,
+            'total_bytes' => 12.9,
+            'transcode_cache_bytes' => true,
+        ];
+        $nulls = [
+            'media_type' => 'movie',
+            'item_count' => null,
+            'total_bytes' => null,
+            'transcode_cache_bytes' => null,
+        ];
+        $empties = ['media_type' => 'movie', 'item_count' => '', 'total_bytes' => '', 'transcode_cache_bytes' => 'abc'];
+        $missing = ['media_type' => 'movie'];
+        $partial = ['media_type' => 'movie', 'total_bytes' => 42];
+
+        $vectors = [
+            'typed' => $full,
+            'numeric-strings' => $strings,
+            'floats-and-bools' => $floats,
+            'nulls' => $nulls,
+            'non-numeric' => $empties,
+            'all-keys-missing' => $missing,
+            'partial-keys' => $partial,
+        ];
+
+        foreach ($vectors as $label => $row) {
+            $mockConnection = $this->createMockConnection();
+            $mockConnection->method('query')->willReturn([$row]);
+
+            $service = new DashboardService(
+                $this->createMockStatsCollector(),
+                $this->createMockSessionManager(),
+                $this->createMockStreamManager(),
+                $this->createMockItemRepository(),
+                $mockConnection
+            );
+
+            $result = $service->getStorageSummary();
+            $this->assertCount(1, $result['items'], $label);
+            $expected = $this->legacyStorageShaping($row);
+            $this->assertSame($expected['item_count'], $result['items'][0]['item_count'], $label);
+            $this->assertSame($expected['total_bytes'], $result['items'][0]['total_bytes'], $label);
+            $this->assertSame($expected['transcode_cache_bytes'], $result['items'][0]['transcode_cache_bytes'], $label);
+            $this->assertSame($expected['total_bytes'], $result['movie_bytes'], $label);
+        }
+    }
+
+    public function test_recent_activity_playback_legs_are_byte_identical_to_legacy_across_vectors(): void
+    {
+        $base = [
+            'id' => 'event-1',
+            'user_id' => 'user-123',
+            'media_item_id' => 'media-456',
+            'duration_seconds' => 3600,
+            'completed' => true,
+            'started_at' => '2024-01-15 10:00:00',
+            'ended_at' => '2024-01-15 11:00:00',
+        ];
+
+        $vectors = [
+            'typed' => $base,
+            'numeric-strings' => array_merge($base, ['duration_seconds' => '3600', 'completed' => '1']),
+            'decimal-string-truncates' => array_merge($base, ['duration_seconds' => '3600.9']),
+            'float-value' => array_merge($base, ['duration_seconds' => 3600.9]),
+            'zero-and-false' => array_merge($base, ['duration_seconds' => 0, 'completed' => false]),
+            'empty-string-completed' => array_merge($base, ['completed' => '']),
+            'int-completed-255' => array_merge($base, ['completed' => 255]),
+            'array-values' => array_merge($base, ['duration_seconds' => ['x'], 'completed' => [1]]),
+            'null-values' => array_merge($base, ['duration_seconds' => null, 'completed' => null]),
+            'missing-keys' => [
+                'id' => 'event-1',
+                'user_id' => 'user-123',
+                'media_item_id' => 'media-456',
+                'started_at' => '2024-01-15 10:00:00',
+                'ended_at' => '2024-01-15 11:00:00',
+            ],
+        ];
+
+        foreach ($vectors as $label => $row) {
+            $mockConnection = $this->createMockConnection();
+            $mockConnection->method('query')->willReturnCallback(
+                function (string $sql) use ($row): array {
+                    if (strpos($sql, 'stats_playback_events') !== false) {
+                        return [$row];
+                    }
+                    if (strpos($sql, 'FROM users') !== false) {
+                        return [['id' => 'user-123', 'username' => 'alice']];
+                    }
+                    return [];
+                }
+            );
+
+            $mockItemRepository = $this->createMockItemRepository();
+            $mockItemRepository->method('findByIds')->willReturn([[
+                'id' => 'media-456',
+                'name' => 'Test Movie',
+                'metadata' => [],
+            ]]);
+
+            $service = new DashboardService(
+                $this->createMockStatsCollector(),
+                $this->createMockSessionManager(),
+                $this->createMockStreamManager(),
+                $mockItemRepository,
+                $mockConnection
+            );
+
+            $events = $service->getRecentActivity(20);
+            $playback = null;
+            foreach ($events as $event) {
+                if ($event['event_type'] === 'playback_completed') {
+                    $playback = $event;
+                }
+            }
+            $this->assertNotNull($playback, $label);
+            $expected = $this->legacyPlaybackEventShaping($row);
+            $this->assertSame($expected['duration_seconds'], $playback['details']['duration_seconds'], $label);
+            $this->assertSame($expected['completed'], $playback['details']['completed'], $label);
+        }
+    }
 }

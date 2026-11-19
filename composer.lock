@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "157a2fe3d148da7c0cdaa3477e00621f",
+    "content-hash": "6c41ee31f5e556e21f6bdc65e75b4ec2",
     "packages": [
         {
             "name": "brick/math",
@@ -7900,6 +7900,67 @@
             "time": "2024-04-12T12:12:48+00:00"
         },
         {
+            "name": "detain/phlix-testkit",
+            "version": "dev-master",
+            "dist": {
+                "type": "path",
+                "url": "/home/sites/phlix/phlix-testkit",
+                "reference": "77d1013df69dbc189db4c94981247cd97484ad19"
+            },
+            "require": {
+                "php": "^8.3"
+            },
+            "require-dev": {
+                "phpunit/phpunit": "^10.5 || ^12.0",
+                "squizlabs/php_codesniffer": "^4.0"
+            },
+            "suggest": {
+                "ext-pcntl": "Required for Phlix\\Testkit\\Support\\TestBootstrap::install() (pcntl_async_signals + pcntl_signal SIGALRM guard).",
+                "ext-pdo": "Required for the SELECT 1 round-trip leg of Phlix\\Testkit\\MySql\\MySqlGuard probes.",
+                "workerman/mysql": "Phlix\\Testkit\\MySql\\MySqlGuard::connection() returns a Workerman\\MySQL\\Connection when this package is present (server-side credential shape); the kit itself does not require it."
+            },
+            "type": "library",
+            "extra": {
+                "phpunit-compat-note": "This kit supports BOTH PHPUnit majors live in the estate today: phlix-server runs 10.5.67 (schema 10.5) and phlix-hub runs 12.5.45 (schema 12.5) — finding H-12. The constraint ^10.5 || ^12.0 keeps each consumer on its current major at cutover; an estate-wide pin to one major is the eventual cure and will retire the 10.x arm."
+            },
+            "autoload": {
+                "psr-4": {
+                    "Phlix\\Testkit\\": "src/"
+                }
+            },
+            "autoload-dev": {
+                "psr-4": {
+                    "Phlix\\Testkit\\Tests\\": "tests/"
+                }
+            },
+            "archive": {
+                "exclude": [
+                    "/tests",
+                    "/.github",
+                    "/.gitignore",
+                    "/composer.lock",
+                    "/CHANGELOG.md",
+                    "/phpunit.xml.dist"
+                ]
+            },
+            "scripts": {
+                "test": [
+                    "phpunit"
+                ],
+                "cs": [
+                    "phpcs --standard=PSR12 --colors src/"
+                ]
+            },
+            "license": [
+                "MIT"
+            ],
+            "description": "Shared test-support SSOT for phlix-server and phlix-hub: the real-MySQL entry gate (probe + skip decision + fingerprint validation), the scratch-database TestCase lifecycle base (DELETE-not-TRUNCATE reset law), the proc_open'd subordinate-server harness (pidfile/readiness-marker/orphan-guard), and the SIGALRM test-bootstrapper. Extracted per dupe-scan findings H-07/H-08/H-09/H-10 and D-15. Not a runtime dependency of any product — consumers require-dev it. Deliberately NOT inside phlix-shared: that package's charter is zero I/O, and this kit probes sockets, drives PDO, and spawns processes.",
+            "transport-options": {
+                "symlink": false,
+                "relative": false
+            }
+        },
+        {
             "name": "detain/phlix-tokens",
             "version": "v0.2.3",
             "dist": {
@@ -11094,7 +11155,9 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": {},
+    "stability-flags": {
+        "detain/phlix-testkit": 20
+    },
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {

@@ -12,9 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Media;
 
 use Phlix\Common\Database\MigrationRunner;
-use Phlix\Common\Database\PhlixMySQLConnection;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -39,7 +37,10 @@ use Workerman\MySQL\Connection;
  */
 final class CollectionsForeignKeysMigration122RealDbTest extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
+
+    /** Fix-dir label uniquifier for in-test replay calls (per-test instance). */
+    private int $migrationRuns = 0;
 
     private const MIGRATION_122 = '122_collections_foreign_keys.sql';
 
@@ -81,33 +82,13 @@ final class CollectionsForeignKeysMigration122RealDbTest extends TestCase
             . ") ENGINE=InnoDB CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
     ];
 
-    private ?Connection $db = null;
-
-    private ?Connection $admin = null;
-
-    private string $scratchDb = '';
-
-    /** @var list<string> */
-    private array $fixDirs = [];
-
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->requireHealthyDatabase('skipping the migration-122 collections-FK proof. Runs in CI.');
-
-        $host = IntegrationDbGuard::host();
-        $port = IntegrationDbGuard::port();
-        $user = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $rand = bin2hex(random_bytes(6));
-        $this->scratchDb = 'phlix_srv22_' . $rand;
-
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-        $this->db = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
+        // S126 gate + scratch create/quintet/naming live in UsesScratchDatabase
+        // (H-08): skip on genuine absence, LOUD on reachable-but-unusable.
+        $this->openScratchDatabase('skipping the migration-122 collections-FK proof. Runs in CI.', 'srv22');
 
         foreach (self::FIXTURE_DDL as $ddl) {
             $this->db->query($ddl);
@@ -116,25 +97,7 @@ final class CollectionsForeignKeysMigration122RealDbTest extends TestCase
 
     protected function tearDown(): void
     {
-        foreach ($this->fixDirs as $fixDir) {
-            if (is_dir($fixDir)) {
-                foreach ((array) glob($fixDir . '/*') as $file) {
-                    if (is_string($file)) {
-                        unlink($file);
-                    }
-                }
-                rmdir($fixDir);
-            }
-        }
-        $this->fixDirs = [];
-
-        if ($this->admin !== null && $this->scratchDb !== '') {
-            $this->admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-        }
-
-        $this->db = null;
-        $this->admin = null;
-        $this->scratchDb = '';
+        $this->cleanupScratchDatabase();
 
         parent::tearDown();
     }
@@ -305,27 +268,21 @@ final class CollectionsForeignKeysMigration122RealDbTest extends TestCase
     /**
      * Run ONE real migration file through the production runner over a
      * single-file fixDir (the 121 test's scratch-DB isolation pattern).
+     * The dir lives in the trait's registered set (H-08); the per-instance
+     * counter keeps replay calls' labels distinct, matching the old
+     * fresh-random-dir-per-call semantics.
      *
      * @return array{applied: list<string>, notes: list<string>, errors: list<string>, skipped_count: int}
      */
     private function runMigrationFile(string $basename): array
     {
-        $rand = bin2hex(random_bytes(4));
-        $fixDir = sys_get_temp_dir() . '/phlix-srv22-fix-' . $basename . '-' . $rand;
-        mkdir($fixDir, 0o755, true);
-        $this->fixDirs[] = $fixDir;
-
-        copy($this->migrationPath($basename), $fixDir . '/' . $basename);
+        $this->migrationRuns++;
+        $fixDir = $this->scratchFixDir('fix-' . $basename . '-' . $this->migrationRuns, [$basename]);
 
         $db = $this->requireDb();
         $runner = new MigrationRunner(static fn (): Connection => $db, $fixDir);
 
         return $runner->run();
-    }
-
-    private function migrationPath(string $basename): string
-    {
-        return dirname(__DIR__, 3) . '/migrations/' . $basename;
     }
 
     private function requireDb(): Connection

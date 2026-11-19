@@ -18,7 +18,6 @@ use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Auth\WebAuthn\WebAuthnCredentialRepository;
-use Phlix\Common\Database\PhlixMySQLConnection;
 use Phlix\Plugins\Github\Plugin as GithubPlugin;
 use Phlix\Plugins\Ldap\Plugin as LdapPlugin;
 use Phlix\Plugins\Oidc\Plugin as OidcPlugin;
@@ -26,8 +25,7 @@ use Phlix\Plugins\Repository\PluginSettingsStore;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -64,7 +62,7 @@ use Workerman\MySQL\Connection;
  */
 final class AdminSettingsProviderLockParityB2Test extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
     private const PW     = 'auth.password.enabled';
     private const WA     = 'auth.webauthn.enabled';
@@ -75,29 +73,13 @@ final class AdminSettingsProviderLockParityB2Test extends TestCase
     /** @var list<string> */
     private const TOGGLE_KEYS = [self::PW, self::WA, self::OIDC, self::LDAP, self::GITHUB];
 
-    private ?Connection $db = null;
-
-    private ?Connection $admin = null;
-
-    private string $scratchDb = '';
-
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->requireHealthyDatabase('skipping the provider-parity serialization proof. Runs in CI.');
-
-        $host     = IntegrationDbGuard::host();
-        $port     = IntegrationDbGuard::port();
-        $user     = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb   = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $this->scratchDb = 'phlix_b2p_' . bin2hex(random_bytes(6));
-
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-        $this->db = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
+        // S126 gate + scratch create/quintet/naming live in UsesScratchDatabase
+        // (H-08): skip on genuine absence, LOUD on reachable-but-unusable.
+        $this->openScratchDatabase('skipping the provider-parity serialization proof. Runs in CI.', 'b2p');
 
         // Identical scratch DDL to AdminSettingsAuthLockB2Test (026 verbatim;
         // the UNIQUE(setting_key) index is the lock target this file probes).
@@ -136,13 +118,7 @@ final class AdminSettingsProviderLockParityB2Test extends TestCase
 
     protected function tearDown(): void
     {
-        if ($this->admin !== null && $this->scratchDb !== '') {
-            $this->admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-        }
-
-        $this->db        = null;
-        $this->admin     = null;
-        $this->scratchDb = '';
+        $this->cleanupScratchDatabase();
 
         parent::tearDown();
     }
@@ -303,13 +279,9 @@ final class AdminSettingsProviderLockParityB2Test extends TestCase
 
     private function connection(): Connection
     {
-        return new PhlixMySQLConnection(
-            IntegrationDbGuard::host(),
-            IntegrationDbGuard::port(),
-            (string) (getenv('DB_USER') ?: 'root'),
-            (string) (getenv('DB_PASSWORD') ?: ''),
-            $this->scratchDb,
-        );
+        // Fresh scratch-database session through the trait's single credential
+        // resolver (H-08) — the hand-inlined quintet is gone estate-wide.
+        return $this->newScratchConnection();
     }
 
     /**

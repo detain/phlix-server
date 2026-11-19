@@ -11,12 +11,9 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Media\Library;
 
-use Phlix\Common\Database\PhlixMySQLConnection;
 use Phlix\Media\Library\ItemRepository;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
-use Workerman\MySQL\Connection;
 
 /**
  * minors M-SERVER-21 (W-min102) — real-MySQL proof that ItemRepository::create()
@@ -33,7 +30,7 @@ use Workerman\MySQL\Connection;
  */
 final class MediaItemCreateAtomicityRealDbTest extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
     private const ITEMS_DDL =
         "CREATE TABLE media_items ("
@@ -60,30 +57,13 @@ final class MediaItemCreateAtomicityRealDbTest extends TestCase
         . " PRIMARY KEY (media_item_id, genre)"
         . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
 
-    private ?Connection $db = null;
-
-    private ?Connection $admin = null;
-
-    private string $scratchDb = '';
-
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->requireHealthyDatabase('skipping the create()-atomicity proof. Runs in CI.');
-
-        $host = IntegrationDbGuard::host();
-        $port = IntegrationDbGuard::port();
-        $user = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $rand = bin2hex(random_bytes(6));
-        $this->scratchDb = 'phlix_srv21_' . $rand;
-
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-        $this->db = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
+        // S126 gate + scratch create/quintet/naming live in UsesScratchDatabase
+        // (H-08): skip on genuine absence, LOUD on reachable-but-unusable.
+        $this->openScratchDatabase('skipping the create()-atomicity proof. Runs in CI.', 'srv21');
 
         $this->db->query(self::ITEMS_DDL);
         $this->db->query(self::GENRES_DDL);
@@ -91,11 +71,9 @@ final class MediaItemCreateAtomicityRealDbTest extends TestCase
 
     protected function tearDown(): void
     {
-        if ($this->admin !== null && $this->scratchDb !== '') {
-            $this->admin->query('DROP DATABASE `' . $this->scratchDb . '`');
-        }
-        $this->db = null;
-        $this->admin = null;
+        // H-08 normalization (disclosed): the hand-rolled DROP lacked
+        // IF-EXISTS + property reset; the trait's canonical cleanup owns both.
+        $this->cleanupScratchDatabase();
 
         parent::tearDown();
     }

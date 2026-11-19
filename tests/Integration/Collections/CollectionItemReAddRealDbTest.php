@@ -17,9 +17,7 @@ use Phlix\Collections\CollectionRepository;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Playlists\SmartPlaylistEngine;
 use Phlix\Playlists\SmartPlaylistRepository;
-use Phlix\Common\Database\PhlixMySQLConnection;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -60,7 +58,7 @@ use Workerman\MySQL\Connection;
  */
 final class CollectionItemReAddRealDbTest extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
     /** Lane survival token (M-SERVER-07). Code-resident by design; never prose. */
     private const LANE_TOKEN = 'S7READDUPLICATEITEMK9T4';
@@ -76,42 +74,23 @@ final class CollectionItemReAddRealDbTest extends TestCase
 
     private const FRESH_ITEM = 's7-item-0000-0000-0000-000000000003';
 
-    private ?Connection $db = null;
-
-    private ?Connection $admin = null;
-
-    private string $scratchDb = '';
-
     protected function setUp(): void
     {
         parent::setUp();
 
-        // S126 gate: skip on genuine absence, LOUD on reachable-but-unusable.
-        $this->requireHealthyDatabase('skipping the M-SERVER-07 collection re-add proof. Runs in CI with MySQL.');
-
-        $host = IntegrationDbGuard::host();
-        $port = IntegrationDbGuard::port();
-        $user = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $this->scratchDb = 'phlix_s7_' . bin2hex(random_bytes(6));
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-        $this->db = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
+        // S126 gate + scratch create/quintet/naming live in UsesScratchDatabase
+        // (H-08): skip on genuine absence, LOUD on reachable-but-unusable.
+        $this->openScratchDatabase(
+            'skipping the M-SERVER-07 collection re-add proof. Runs in CI with MySQL.',
+            's7'
+        );
 
         $this->applyMigration005();
     }
 
     protected function tearDown(): void
     {
-        if ($this->admin !== null && $this->scratchDb !== '') {
-            $this->admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-        }
-
-        $this->db = null;
-        $this->admin = null;
-        $this->scratchDb = '';
+        $this->cleanupScratchDatabase();
 
         parent::tearDown();
     }

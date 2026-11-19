@@ -17,12 +17,10 @@ use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Auth\WebAuthn\WebAuthnCredentialRepository;
-use Phlix\Common\Database\PhlixMySQLConnection;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -50,7 +48,7 @@ use Workerman\MySQL\Connection;
  */
 final class AdminSettingsAuthLockB2Test extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
     private const PW     = 'auth.password.enabled';
     private const WA     = 'auth.webauthn.enabled';
@@ -61,29 +59,13 @@ final class AdminSettingsAuthLockB2Test extends TestCase
     /** @var list<string> */
     private const TOGGLE_KEYS = [self::PW, self::WA, self::OIDC, self::LDAP, self::GITHUB];
 
-    private ?Connection $db = null;
-
-    private ?Connection $admin = null;
-
-    private string $scratchDb = '';
-
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->requireHealthyDatabase('skipping the B2 auth-lock serialization proof. Runs in CI.');
-
-        $host     = IntegrationDbGuard::host();
-        $port     = IntegrationDbGuard::port();
-        $user     = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb   = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $this->scratchDb = 'phlix_b2_' . bin2hex(random_bytes(6));
-
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-        $this->db = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
+        // S126 gate + scratch create/quintet/naming live in UsesScratchDatabase
+        // (H-08): skip on genuine absence, LOUD on reachable-but-unusable.
+        $this->openScratchDatabase('skipping the B2 auth-lock serialization proof. Runs in CI.', 'b2');
 
         // users / server_settings / webauthn_credentials / user_identities —
         // identical scratch DDL to AdminSettingsRealSchemaPutTest (026 verbatim;
@@ -123,13 +105,7 @@ final class AdminSettingsAuthLockB2Test extends TestCase
 
     protected function tearDown(): void
     {
-        if ($this->admin !== null && $this->scratchDb !== '') {
-            $this->admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-        }
-
-        $this->db    = null;
-        $this->admin = null;
-        $this->scratchDb = '';
+        $this->cleanupScratchDatabase();
 
         parent::tearDown();
     }
@@ -172,14 +148,11 @@ final class AdminSettingsAuthLockB2Test extends TestCase
         $this->assertSame(200, $seed->update($this->put([self::PW => true]), [])->statusCode);
         $this->assertSame(200, $seed->update($this->put([self::WA => true]), [])->statusCode);
 
-        $host     = IntegrationDbGuard::host();
-        $port     = IntegrationDbGuard::port();
-        $user     = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-
+        // Fresh sessions on the scratch database — credentials come from the
+        // trait's single resolver (H-08), never re-inlined per connection.
         // Writer A: the full guarded batch — BEGIN, protocol lock, write
         // pw=OFF, COMMIT — held open across B's probe.
-        $connA = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
+        $connA = $this->newScratchConnection();
         $repoA = new SettingsRepository($connA, dirname(__DIR__, 3) . '/config');
         $repoA->beginTransaction();
         $repoA->lockSettingRows(self::TOGGLE_KEYS);
@@ -187,7 +160,7 @@ final class AdminSettingsAuthLockB2Test extends TestCase
 
         // Writer B (separate connection): the same protocol lock MUST block
         // while A's transaction holds the row locks.
-        $connB = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
+        $connB = $this->newScratchConnection();
         $connB->query('SET SESSION innodb_lock_wait_timeout = 1');
         $repoB = new SettingsRepository($connB, dirname(__DIR__, 3) . '/config');
         $repoB->beginTransaction();

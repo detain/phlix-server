@@ -12,9 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Common\Database;
 
 use Phlix\Common\Database\MigrationRunner;
-use Phlix\Common\Database\PhlixMySQLConnection;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -47,47 +45,25 @@ use Workerman\MySQL\Connection;
  */
 final class MysqlOnlyIndexDialectGateTest extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
-    private ?Connection $admin = null;
-
-    private ?Connection $db = null;
-
-    private string $scratchDb = '';
-
+    /** REAL source chain (not a temp dir) — the runner below replays it whole. */
     private string $migrationsDir = '';
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->requireHealthyDatabase('skipping the M-SERVER-06 full-chain dialect-gate proof. Runs in CI.');
+        // S126 gate + scratch create/quintet/naming live in UsesScratchDatabase
+        // (H-08): skip on genuine absence, LOUD on reachable-but-unusable.
+        $this->openScratchDatabase('skipping the M-SERVER-06 full-chain dialect-gate proof. Runs in CI.', 's06');
 
-        $host = IntegrationDbGuard::host();
-        $port = IntegrationDbGuard::port();
-        $user = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $this->migrationsDir = dirname(__DIR__, 4) . '/migrations';
-
-        $rand = bin2hex(random_bytes(6));
-        $this->scratchDb = 'phlix_s06_' . $rand;
-
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-        $this->db = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
+        $this->migrationsDir = self::scratchMigrationsSource();
     }
 
     protected function tearDown(): void
     {
-        if ($this->admin !== null && $this->scratchDb !== '') {
-            $this->admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-        }
-
-        $this->admin = null;
-        $this->db = null;
-        $this->scratchDb = '';
+        $this->cleanupScratchDatabase();
 
         parent::tearDown();
     }

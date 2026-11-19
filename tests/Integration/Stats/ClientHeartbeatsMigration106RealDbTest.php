@@ -12,10 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Stats;
 
 use Phlix\Common\Database\MigrationRunner;
-use Phlix\Common\Database\PhlixMySQLConnection;
 use Phlix\Stats\ClientHeartbeatStore;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -41,41 +39,23 @@ use Workerman\MySQL\Connection;
  */
 final class ClientHeartbeatsMigration106RealDbTest extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
     private const MIGRATION_106 = '106_client_heartbeats.sql';
 
-    private ?Connection $db = null;
-
-    private ?Connection $admin = null;
-
-    private string $scratchDb = '';
-
+    /** Scratch fix-dir returned by the trait in setUp; runner input below. */
     private string $fixDir = '';
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        // S126 gate: skip on genuine absence, LOUD on reachable-but-unusable.
-        $this->requireHealthyDatabase('skipping the S518 migration-106 upsert proof. Runs in CI.');
+        // S126 gate + scratch create/quintet/naming + fix-dir copy all live in
+        // UsesScratchDatabase (H-08): skip on genuine absence, LOUD on
+        // reachable-but-unusable.
+        $this->openScratchDatabase('skipping the S518 migration-106 upsert proof. Runs in CI.', 's518');
 
-        $host = IntegrationDbGuard::host();
-        $port = IntegrationDbGuard::port();
-        $user = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $rand = bin2hex(random_bytes(6));
-        $this->scratchDb = 'phlix_s518_' . $rand;
-
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-        $this->db = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
-
-        $this->fixDir = sys_get_temp_dir() . '/phlix-s518-fix-' . $rand;
-        mkdir($this->fixDir, 0o755, true);
-        copy($this->migrationPath(self::MIGRATION_106), $this->fixDir . '/' . self::MIGRATION_106);
+        $this->fixDir = $this->scratchFixDir('fix', [self::MIGRATION_106]);
 
         $db = $this->db;
         $runner = new MigrationRunner(static fn (): Connection => $db, $this->fixDir);
@@ -89,22 +69,7 @@ final class ClientHeartbeatsMigration106RealDbTest extends TestCase
 
     protected function tearDown(): void
     {
-        if ($this->fixDir !== '' && is_dir($this->fixDir)) {
-            foreach ((array) glob($this->fixDir . '/*') as $file) {
-                if (is_string($file)) {
-                    unlink($file);
-                }
-            }
-            rmdir($this->fixDir);
-        }
-
-        if ($this->admin !== null && $this->scratchDb !== '') {
-            $this->admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-        }
-
-        $this->db = null;
-        $this->admin = null;
-        $this->scratchDb = '';
+        $this->cleanupScratchDatabase();
         $this->fixDir = '';
 
         parent::tearDown();
@@ -220,8 +185,4 @@ final class ClientHeartbeatsMigration106RealDbTest extends TestCase
         $this->assertCount(1, $rows);
     }
 
-    private function migrationPath(string $basename): string
-    {
-        return dirname(__DIR__, 3) . '/migrations/' . $basename;
-    }
 }

@@ -20,6 +20,7 @@ use Phlix\Server\Integrations\Trakt\TraktOAuthStateStore;
 use Phlix\Server\Integrations\Trakt\TraktOperatorConfig;
 use Phlix\Server\Integrations\Trakt\TraktSettings;
 use Phlix\Plugins\Repository\PluginRepository;
+use Phlix\Common\Token;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -183,8 +184,8 @@ final class TraktOAuthController
             return $this->notConfiguredPage();
         }
 
-        $state = bin2hex(random_bytes(16));
-        $codeVerifier = bin2hex(random_bytes(32));
+        $state = Token::state();
+        $codeVerifier = Token::pkceVerifier();
 
         $api = new TraktApi(new HttpClient(), $clientId, $clientSecret);
         $authUrl = $api->getAuthUrl($state, $codeVerifier, $redirectUri);

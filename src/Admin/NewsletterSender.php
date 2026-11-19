@@ -14,6 +14,7 @@ namespace Phlix\Admin;
 use DateTimeInterface;
 use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Token;
 use Phlix\Common\Uuid;
 use Workerman\MySQL\Connection;
 
@@ -391,7 +392,7 @@ class NewsletterSender
      */
     private static function generateMimeBoundary(): string
     {
-        return 'phlix-' . bin2hex(random_bytes(16));
+        return Token::prefixed('phlix-', 16);
     }
 
     /**

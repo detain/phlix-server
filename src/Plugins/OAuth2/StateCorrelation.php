@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\OAuth2;
 
+use Phlix\Common\Token;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 
@@ -66,7 +67,7 @@ final class StateCorrelation
      */
     public static function issue(): string
     {
-        return bin2hex(random_bytes(32));
+        return Token::correlation();
     }
 
     /**

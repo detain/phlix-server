@@ -30,6 +30,7 @@ use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Token;
 use Phlix\Shared\Auth\AuthResult;
 use Workerman\MySQL\Connection;
 
@@ -322,8 +323,8 @@ final class OidcCallbackController
         $codeChallenge = OidcProvider::computeCodeChallenge($codeVerifier);
 
         // Cryptographically-random CSRF state + ID-token replay nonce.
-        $nonce = bin2hex(random_bytes(16));
-        $stateId = bin2hex(random_bytes(16));
+        $nonce = Token::state();
+        $stateId = Token::state();
 
         // Bundle the redirect_uri into the state envelope so the
         // callback knows where to land. The opaque `sid` is the lookup

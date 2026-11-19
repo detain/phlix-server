@@ -13,6 +13,7 @@ namespace Phlix\Session\SyncPlay;
 
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Token;
 use Phlix\Server\WebSocket\Connection;
 use Phlix\Server\WebSocket\ConnectionInterface;
 use Phlix\Server\WebSocket\ConnectionPool;
@@ -2162,7 +2163,7 @@ class SyncPlayManager
      */
     private function generateGroupId(): string
     {
-        return 'sp_' . bin2hex(random_bytes(8));
+        return Token::prefixed('sp_', 8);
     }
 
     /**

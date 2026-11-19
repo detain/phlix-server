@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers\Admin;
 
 use Phlix\Admin\SettingsRepository;
+use Phlix\Common\Token;
 use Phlix\Server\Integrations\Lastfm\DbLastfmOAuthStateStore;
 use Phlix\Server\Integrations\Lastfm\LastfmApi;
 use Phlix\Server\Integrations\Lastfm\LastfmConfig;
@@ -137,7 +138,7 @@ final class LastfmController
             return $this->redirect('/app/admin/services?lastfm=not_configured');
         }
 
-        $state = bin2hex(random_bytes(16));
+        $state = Token::state();
         $this->stateStore->put($state, $userId);
 
         // Last.fm appends `&token=<token>` to whatever `cb` we hand it, so we

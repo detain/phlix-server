@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Console\Commands;
 
 use Phlix\Auth\UserRepository;
+use Phlix\Common\Token;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -106,7 +107,7 @@ final class UserResetPasswordCommand extends Command
                 $password = $passwordOption;
                 $generated = false;
             } else {
-                $password = bin2hex(random_bytes(12));
+                $password = Token::resetToken();
                 $generated = true;
             }
 

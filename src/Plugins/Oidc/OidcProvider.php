@@ -15,6 +15,7 @@ use Jose\Component\Core\JWKSet;
 use Phlix\Shared\Auth\AuthResult;
 use Phlix\Shared\Auth\ProviderInterface;
 use Phlix\Shared\Auth\UserInfo;
+use Phlix\Common\Token;
 use Phlix\Plugins\Oidc\DiscoveryDocument;
 use Phlix\Plugins\Oidc\IdTokenValidator;
 use Phlix\Plugins\Oidc\OidcUserInfo;
@@ -367,7 +368,7 @@ final class OidcProvider implements ProviderInterface
         ?string $codeChallenge = null,
     ): string {
         $authEndpoint = $this->discovery->authorizationEndpoint();
-        $nonceValue = $nonce ?? bin2hex(random_bytes(16));
+        $nonceValue = $nonce ?? Token::state();
 
         $paramArray = [
             'client_id' => $this->clientId,

@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\OAuth2;
 
+use Phlix\Common\Token;
+
 /**
  * RFC 7636 PKCE (Proof Key for Code Exchange) helpers, shared by every OAuth2
  * authorization-code provider (OIDC + GitHub).
@@ -37,7 +39,7 @@ final class Pkce
      */
     public static function generateCodeVerifier(): string
     {
-        return bin2hex(random_bytes(32));
+        return Token::pkceVerifier();
     }
 
     /**

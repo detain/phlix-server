@@ -16,6 +16,7 @@ use Phlix\Auth\Dto\UserRow;
 use Phlix\Auth\PasswordHasher;
 use Phlix\Auth\PasswordPolicy;
 use Phlix\Auth\UserRepository;
+use Phlix\Common\Token;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Response;
@@ -544,8 +545,9 @@ final class AdminUserController
             return (new Response())->status(404)->json(['error' => 'User not found']);
         }
 
-        // Generate a 32-byte (64-character hex) cryptographically secure token.
-        $token = bin2hex(random_bytes(32));
+        // Mint the reset secret through the named Token policy: 32 bytes,
+        // stored hashed below, so the budget is auditable at the table.
+        $token = Token::resetToken();
         $hashedToken = PasswordHasher::hash($token);
         $expiresAt = time() + 900; // 15 minutes from now.
 

@@ -20,6 +20,7 @@ use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Token;
 use Phlix\Plugins\Github\GithubOAuthProvider;
 use Phlix\Plugins\Github\Plugin as GithubPlugin;
 use Phlix\Plugins\OAuth2\CallbackUrl;
@@ -283,7 +284,7 @@ final class GithubCallbackController
         $codeVerifier = Pkce::generateCodeVerifier();
         $codeChallenge = Pkce::computeCodeChallenge($codeVerifier);
 
-        $stateId = bin2hex(random_bytes(16));
+        $stateId = Token::state();
         $stateData = [
             'sid' => $stateId,
             'redirect_uri' => $redirectUri,

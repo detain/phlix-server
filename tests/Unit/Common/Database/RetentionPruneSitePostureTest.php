@@ -65,6 +65,30 @@ final class RetentionPruneSitePostureTest extends TestCase
         };
     }
 
+    /**
+     * Capture what the run writes to the error channel (estate idiom,
+     * {@see EnvConfigTest}). HUB-5.2: a soft swallow must be LOUD there —
+     * survival alone is only half the law.
+     *
+     * @param callable(): void $run
+     */
+    private function captureErrorLog(callable $run): string
+    {
+        $file = tempnam(sys_get_temp_dir(), 'd14log');
+        self::assertIsString($file);
+        $previous = (string) ini_get('error_log');
+        ini_set('error_log', $file);
+
+        try {
+            $run();
+
+            return (string) file_get_contents($file);
+        } finally {
+            ini_set('error_log', $previous);
+            unlink($file);
+        }
+    }
+
     public function testRateLimiterHitSurvivesAFailingSweep(): void
     {
         $seen = [];
@@ -73,10 +97,13 @@ final class RetentionPruneSitePostureTest extends TestCase
             return ($this->sweepThrowsHandler('DELETE FROM rate_limit_buckets'))($sql, $params);
         });
 
-        $state = (new DbRateLimiter($db))->hit('login:1.2.3.4');
+        $log = $this->captureErrorLog(function () use (&$db, &$state): void {
+            $state = (new DbRateLimiter($db))->hit('login:1.2.3.4');
+        });
 
         $this->assertContains('DELETE FROM rate_limit_buckets WHERE reset_at <= ? LIMIT ?', $seen);
         $this->assertSame(1, $state->remaining >= 0 ? 1 : 0, 'the decision path still answered');
+        $this->assertStringContainsString('sweep on rate_limit_buckets', $log, 'HUB-5.2: the swallow was loud');
     }
 
     public function testLoginFailureRecordingSurvivesAFailingSweep(): void
@@ -87,10 +114,13 @@ final class RetentionPruneSitePostureTest extends TestCase
             return ($this->sweepThrowsHandler('DELETE FROM login_rate_limit'))($sql, $params);
         });
 
-        (new DbLoginRateLimitStore($db))->recordFailedAttempt('203.0.113.7', 'user@example.test');
+        $log = $this->captureErrorLog(function () use ($db): void {
+            (new DbLoginRateLimitStore($db))->recordFailedAttempt('203.0.113.7', 'user@example.test');
+        });
 
         $this->assertContains('DELETE FROM login_rate_limit WHERE reset_at <= ? LIMIT ?', $seen);
         $this->assertContains('DELETE FROM login_rate_limit_account WHERE reset_at <= ? LIMIT ?', $seen);
+        $this->assertStringContainsString('sweep on login_rate_limit', $log, 'HUB-5.2: the swallow was loud');
     }
 
     public function testLastfmCallbackConsumeSurvivesAFailingSweep(): void
@@ -101,8 +131,11 @@ final class RetentionPruneSitePostureTest extends TestCase
             return ($this->sweepThrowsHandler('DELETE FROM oauth_state_store WHERE expires_at'))($sql, $params);
         });
 
-        $this->assertNull((new DbLastfmOAuthStateStore($db))->consume('state-that-does-not-exist'));
+        $log = $this->captureErrorLog(function () use ($db): void {
+            $this->assertNull((new DbLastfmOAuthStateStore($db))->consume('state-that-does-not-exist'));
+        });
         $this->assertContains('DELETE FROM oauth_state_store WHERE expires_at <= NOW() LIMIT ?', $seen);
+        $this->assertStringContainsString('sweep on oauth_state_store', $log, 'HUB-5.2: the swallow was loud');
     }
 
     public function testTraktCallbackConsumeSurvivesAFailingSweep(): void
@@ -113,8 +146,11 @@ final class RetentionPruneSitePostureTest extends TestCase
             return ($this->sweepThrowsHandler('DELETE FROM oauth_state_store WHERE expires_at'))($sql, $params);
         });
 
-        $this->assertNull((new DbTraktOAuthStateStore($db))->consume('state-that-does-not-exist'));
+        $log = $this->captureErrorLog(function () use ($db): void {
+            $this->assertNull((new DbTraktOAuthStateStore($db))->consume('state-that-does-not-exist'));
+        });
         $this->assertContains('DELETE FROM oauth_state_store WHERE expires_at <= NOW() LIMIT ?', $seen);
+        $this->assertStringContainsString('sweep on oauth_state_store', $log, 'HUB-5.2: the swallow was loud');
     }
 
     public function testGenericOauth2ConsumeSurvivesAFailingSweep(): void
@@ -125,9 +161,12 @@ final class RetentionPruneSitePostureTest extends TestCase
             return ($this->sweepThrowsHandler('DELETE FROM oauth_state_store WHERE expires_at'))($sql, $params);
         });
 
-        (new DbOAuth2StateStore($db, 'github'))->consume('state-that-does-not-exist');
+        $log = $this->captureErrorLog(function () use ($db): void {
+            (new DbOAuth2StateStore($db, 'github'))->consume('state-that-does-not-exist');
+        });
 
         $this->assertContains('DELETE FROM oauth_state_store WHERE expires_at <= NOW() LIMIT ?', $seen);
+        $this->assertStringContainsString('sweep on oauth_state_store', $log, 'HUB-5.2: the swallow was loud');
     }
 
     public function testOidcCallbackConsumeSurvivesAFailingSweep(): void
@@ -138,8 +177,11 @@ final class RetentionPruneSitePostureTest extends TestCase
             return ($this->sweepThrowsHandler('DELETE FROM oauth_state_store WHERE expires_at'))($sql, $params);
         });
 
-        $this->assertNull((new DbOidcStateStore($db))->consume('state-that-does-not-exist'));
+        $log = $this->captureErrorLog(function () use ($db): void {
+            $this->assertNull((new DbOidcStateStore($db))->consume('state-that-does-not-exist'));
+        });
         $this->assertContains('DELETE FROM oauth_state_store WHERE expires_at <= NOW() LIMIT ?', $seen);
+        $this->assertStringContainsString('sweep on oauth_state_store', $log, 'HUB-5.2: the swallow was loud');
     }
 
     public function testWebAuthnCeremonyIssueSurvivesAFailingSweep(): void
@@ -150,9 +192,12 @@ final class RetentionPruneSitePostureTest extends TestCase
             return ($this->sweepThrowsHandler('DELETE FROM oauth_state_store WHERE provider'))($sql, $params);
         });
 
-        (new WebAuthnChallengeStore($db))->issue('chal-1', WebAuthnChallengeStore::SCOPE_REGISTER, 'principal-1');
+        $log = $this->captureErrorLog(function () use ($db): void {
+            (new WebAuthnChallengeStore($db))->issue('chal-1', WebAuthnChallengeStore::SCOPE_REGISTER, 'principal-1');
+        });
 
         $this->assertContains('DELETE FROM oauth_state_store WHERE provider = ? AND expires_at <= NOW() LIMIT ?', $seen);
+        $this->assertStringContainsString('sweep on oauth_state_store', $log, 'HUB-5.2: the swallow was loud');
     }
 
     public function testQuickConnectIssueAlreadySurvivedAFailingSweep(): void
@@ -164,9 +209,12 @@ final class RetentionPruneSitePostureTest extends TestCase
             return ($this->sweepThrowsHandler('DELETE FROM oauth_state_store WHERE provider'))($sql, $params);
         });
 
-        (new QuickConnectStateStore($db))->issue();
+        $log = $this->captureErrorLog(function () use ($db): void {
+            (new QuickConnectStateStore($db))->issue();
+        });
 
         $this->assertContains('DELETE FROM oauth_state_store WHERE provider = ? AND expires_at <= NOW() LIMIT ?', $seen);
+        $this->assertStringContainsString('sweep on oauth_state_store', $log, 'HUB-5.2: the doctrine source stayed loud through the lift');
     }
 
     public function testTokenGrantPruneAlreadySurvivedAFailingSweep(): void
@@ -177,13 +225,17 @@ final class RetentionPruneSitePostureTest extends TestCase
             return ($this->sweepThrowsHandler('DELETE FROM auth_refresh_grants'))($sql, $params);
         });
 
-        (new TokenSessionRepository($db))->pruneExpired();
+        $log = $this->captureErrorLog(function () use ($db): void {
+            (new TokenSessionRepository($db))->pruneExpired();
+        });
 
         $this->assertContains('DELETE FROM auth_refresh_grants WHERE expires_at < NOW() - INTERVAL 86400 SECOND LIMIT ?', $seen);
         $this->assertContains(
             'DELETE FROM auth_refresh_grants WHERE expires_at IS NULL AND created_at < NOW() - INTERVAL 31536000 SECOND LIMIT ?',
-            $seen
+            $seen,
+            'arm 2 must not be skipped by arm 1\'s failure — per-arm swallow (D-14 r1)'
         );
+        $this->assertStringContainsString('sweep on auth_refresh_grants', $log, 'HUB-5.2: the swallow was loud');
     }
 
     public function testCastingSweepAlreadySurvivedAFailingSweep(): void
@@ -194,7 +246,10 @@ final class RetentionPruneSitePostureTest extends TestCase
             return ($this->sweepThrowsHandler('DELETE FROM casting_sessions'))($sql, $params);
         });
 
-        $this->assertNull((new CastingSessionStore($db))->find('airplay', 'device-1'));
+        $log = $this->captureErrorLog(function () use ($db): void {
+            $this->assertNull((new CastingSessionStore($db))->find('airplay', 'device-1'));
+        });
         $this->assertContains('DELETE FROM casting_sessions WHERE last_seen_at < DATE_SUB(NOW(), INTERVAL 86400 SECOND) LIMIT ?', $seen);
+        $this->assertStringContainsString('sweep on casting_sessions', $log, 'HUB-5.2: the swallow was loud');
     }
 }

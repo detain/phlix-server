@@ -27,8 +27,11 @@
  *  - `false` (SOFT) — user-facing write paths (auth refresh, pairing polls,
  *    rate-limit decisions, OAuth consumes): a sweep that cannot run must never
  *    sink the request that triggered it. Doctrine source:
- *    QuickConnectStateStore::purgeExpired(). The engine swallows Throwable
- *    and returns what it deleted so far; the next invocation retries.
+ *    QuickConnectStateStore::purgeExpired(), completed by the HUB-5.2 law:
+ *    the swallow is LOUD on the error channel (error_log) — the mint/decision
+ *    proceeds, the integrity signal is never silent. The engine swallows
+ *    Throwable, logs, and returns what it deleted so far; the next invocation
+ *    retries.
  *  - `true` (HARD) — maintenance timers (stats retention): the caller's timer
  *    catch owns logging + retry, so the engine propagates. Call-sites that
  *    chose soft-but-throwing behavior before this file existed were cured to
@@ -112,6 +115,10 @@ final class RetentionPrune
                 throw $e;
             }
 
+            // HUB-5.2 posture law, both halves: the request survives, but the
+            // failure is LOUD on the error channel — never a silent swallow.
+            error_log('RetentionPrune soft-fail: sweep on ' . $table . '.' . $column . ' threw: ' . $e->getMessage());
+
             return 0;
         }
 
@@ -154,6 +161,12 @@ final class RetentionPrune
                 if ($failLoud) {
                     throw $e;
                 }
+
+                // Loud on the error channel; the caller's path proceeds (HUB-5.2).
+                error_log(
+                    'RetentionPrune soft-fail: sweepByIds on ' . $table . '.' . $column
+                    . ' after ' . $deleted . ' deleted threw: ' . $e->getMessage()
+                );
 
                 return $deleted;
             }

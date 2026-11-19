@@ -57,6 +57,29 @@ final class RetentionPruneTest extends TestCase
         $this->statements = [];
     }
 
+    /**
+     * Capture what the run writes to the error channel (estate idiom,
+     * {@see EnvConfigTest} — HUB-5.2 swallow must be LOUD on that channel).
+     *
+     * @param callable(): void $run
+     */
+    private function captureErrorLog(callable $run): string
+    {
+        $file = tempnam(sys_get_temp_dir(), 'd14log');
+        self::assertIsString($file);
+        $previous = (string) ini_get('error_log');
+        ini_set('error_log', $file);
+
+        try {
+            $run();
+
+            return (string) file_get_contents($file);
+        } finally {
+            ini_set('error_log', $previous);
+            unlink($file);
+        }
+    }
+
     // ---------------------------------------------------------------- sweep()
 
     public function testSweepRendersTheSitesCommittedOnePhaseSqlByteIdentically(): void
@@ -163,16 +186,20 @@ final class RetentionPruneTest extends TestCase
 
     public function testSoftArmReturnsZeroOnSweepFailure(): void
     {
-        $deleted = RetentionPrune::sweep(
-            $this->connection(static fn(): mixed => throw new RuntimeException('db down')),
-            't',
-            'c',
-            PruneDeadline::notAfterNow(),
-            100,
-            failLoud: false
-        );
+        $deleted = null;
+        $log = $this->captureErrorLog(function () use (&$deleted): void {
+            $deleted = RetentionPrune::sweep(
+                $this->connection(static fn(): mixed => throw new RuntimeException('db down')),
+                't',
+                'c',
+                PruneDeadline::notAfterNow(),
+                100,
+                failLoud: false
+            );
+        });
 
         $this->assertSame(0, $deleted);
+        $this->assertStringContainsString('RetentionPrune soft-fail: sweep on t.c threw: db down', $log);
     }
 
     // ----------------------------------------------------------- sweepByIds()
@@ -372,31 +399,35 @@ final class RetentionPruneTest extends TestCase
     {
         // Maintenance-site analogue: round 1 deletes a full batch, round 2 is
         // a deadlock ladder whose retries exhaust — the SOFT arm must return
-        // what was already deleted instead of throwing.
+        // what was already deleted instead of throwing, LOUD on the error log.
         $rounds = 0;
-        $deleted = RetentionPrune::sweepByIds(
-            $this->connection(
-                static function (string $sql) use (&$rounds): mixed {
-                    if (str_contains($sql, 'DELETE')) {
-                        if ($rounds === 1) {
-                            return 2;
+        $deleted = null;
+        $log = $this->captureErrorLog(function () use (&$deleted, &$rounds): void {
+            $deleted = RetentionPrune::sweepByIds(
+                $this->connection(
+                    static function (string $sql) use (&$rounds): mixed {
+                        if (str_contains($sql, 'DELETE')) {
+                            if ($rounds === 1) {
+                                return 2;
+                            }
+                            throw new PDOException('Deadlock found when trying to get lock');
                         }
-                        throw new PDOException('Deadlock found when trying to get lock');
+                        $rounds++;
+                        return $rounds === 1 ? [['id' => 1], ['id' => 2]] : [['id' => 9]];
                     }
-                    $rounds++;
-                    return $rounds === 1 ? [['id' => 1], ['id' => 2]] : [['id' => 9]];
-                }
-            ),
-            't',
-            'c',
-            PruneDeadline::beforeDateSubNowDays(1),
-            2,
-            20,
-            3,
-            failLoud: false
-        );
+                ),
+                't',
+                'c',
+                PruneDeadline::beforeDateSubNowDays(1),
+                2,
+                20,
+                3,
+                failLoud: false
+            );
+        });
 
         $this->assertSame(2, $deleted);
+        $this->assertStringContainsString('RetentionPrune soft-fail: sweepByIds on t.c after 2 deleted', $log);
     }
 
     public function testSubOneBatchRefusesTheTwoPhaseArm(): void

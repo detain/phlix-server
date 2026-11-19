@@ -15,6 +15,7 @@ use Phlix\Common\Logger\LoggerFactory;
 use Workerman\MySQL\Connection;
 use InvalidArgumentException;
 use RuntimeException;
+use ReflectionMethod;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 class LibraryManagerTest extends TestCase
@@ -1177,5 +1178,135 @@ class LibraryManagerTest extends TestCase
             }
         }
         return $out;
+    }
+
+    /**
+     * E-09 cohort 5a: pins the RowMap fold of pruneRemovedItems' row decode
+     * (id/path legs + synthetic-path skip) against a verbatim transcription of
+     * the pre-fold ??-guarded strict ternaries (ca91c293 shape). Each vector
+     * rides beside a present file so the roots-without-anything-live refusal
+     * never fires and the phase guard always admits deletion.
+     */
+    public function testPruneRowDecodeLegsAreByteIdenticalToLegacyAcrossVectors(): void
+    {
+        $root = '/tmp/opencode/refactor-exec-1119/w4-root';
+        @mkdir($root, 0777, true);
+        $present = $root . '/present.mkv';
+        file_put_contents($present, 'x');
+
+        try {
+            /** @var list<array<string, mixed>> $vectors */
+            $vectors = [
+                ['id' => 'g-1', 'path' => $root . '/gone.mkv'],
+                ['id' => null, 'path' => $root . '/gone2.mkv'],
+                ['id' => 5, 'path' => $root . '/gone3.mkv'],
+                ['path' => $root . '/gone4.mkv'],
+                ['id' => 'e-1', 'path' => ''],
+                ['id' => 'e-2', 'path' => 3.5],
+                ['id' => 's-1', 'path' => 'series:x'],
+                ['id' => 'e-3'],
+                [],
+            ];
+
+            foreach ($vectors as $row) {
+                $deleted = [];
+                $db = $this->createMock(Connection::class);
+                $db->method('query')->willReturnCallback(
+                    static function (string $sql, array $params = []) use ($row, $present, &$deleted) {
+                        if (str_contains($sql, 'SELECT id, path FROM media_items')) {
+                            return [['id' => 'p-1', 'path' => $present], $row];
+                        }
+                        if (str_contains($sql, 'NOT EXISTS')) {
+                            return [];
+                        }
+                        if (str_contains($sql, 'DELETE FROM media_items')) {
+                            $deleted[] = $params[0];
+                            return [];
+                        }
+                        return [];
+                    }
+                );
+
+                // Verbatim from the ca91c293 tree (root-attribution guards
+                // kept out of the transcription: every vector path is under
+                // the single root the invocation passes).
+                $id = is_string($row['id'] ?? null) ? $row['id'] : null;
+                $path = is_string($row['path'] ?? null) ? $row['path'] : '';
+                $synthetic = str_starts_with($path, 'series:') || str_starts_with($path, 'season:');
+                $expected = $id !== null && $path !== '' && !$synthetic && !file_exists($path) ? [$id] : [];
+
+                $manager = new LibraryManager(
+                    $db,
+                    $this->createMock(MediaScanner::class),
+                    $this->createMock(FolderWatcher::class),
+                    $this->createMock(MusicLibraryService::class)
+                );
+                $prune = new ReflectionMethod(LibraryManager::class, 'pruneRemovedItems');
+                $prune->setAccessible(true);
+
+                $removed = $prune->invoke($manager, 'lib-1', [$root]);
+
+                $this->assertSame(count($expected), $removed);
+                $this->assertSame($expected, $deleted);
+            }
+        } finally {
+            unlink($present);
+            @rmdir($root);
+        }
+    }
+
+    /**
+     * E-09 cohort 5a: the id leg of pruneEmptyContainers, seasons leg driven
+     * with six decode-domain vectors, series leg kept empty.
+     */
+    public function testPruneEmptyContainerRowDecodeIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        $childless = [
+            ['id' => 'c-1'],
+            ['id' => null],
+            ['id' => 7],
+            [],
+            ['id' => ''],
+            ['id' => 'c-2'],
+        ];
+
+        $deleted = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql, array $params = []) use ($childless, &$deleted) {
+                if (str_contains($sql, 'NOT EXISTS')) {
+                    return ($params[1] ?? '') === 'season' ? $childless : [];
+                }
+                if (str_contains($sql, 'DELETE FROM media_items')) {
+                    $deleted[] = $params[0];
+                    return [];
+                }
+                return [];
+            }
+        );
+
+        // Verbatim from the ca91c293 tree.
+        $expected = [];
+        foreach ($childless as $row) {
+            $id = is_string($row['id'] ?? null) ? $row['id'] : null;
+            if ($id === null) {
+                continue;
+            }
+            $expected[] = $id;
+        }
+
+        $manager = new LibraryManager(
+            $db,
+            $this->createMock(MediaScanner::class),
+            $this->createMock(FolderWatcher::class),
+            $this->createMock(MusicLibraryService::class)
+        );
+        $prune = new ReflectionMethod(LibraryManager::class, 'pruneEmptyContainers');
+        $prune->setAccessible(true);
+
+        $removed = $prune->invoke($manager, 'lib-1');
+
+        $this->assertSame(count($expected), $removed);
+        $this->assertSame($expected, $deleted);
     }
 }

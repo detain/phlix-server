@@ -14,6 +14,7 @@ namespace Phlix\Media\Library;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
 use Phlix\Media\Library\Dto\LibraryRow;
 use Phlix\Media\Music\MusicLibraryService;
@@ -1501,8 +1502,12 @@ class LibraryManager
             if (!is_array($row)) {
                 continue;
             }
-            $id = is_string($row['id'] ?? null) ? $row['id'] : null;
-            $path = is_string($row['path'] ?? null) ? $row['path'] : '';
+            $row = RowMap::fromMixed($row);
+            // E-09 cohort 5a: RowMap fold of the pre-fold ??-guarded strict
+            // ternaries (fallbacks transcribed); byte-identity pinned by the
+            // legacy-oracle vectors in tests/Unit/Media/Library/LibraryManagerTest.php.
+            $id = RowMap::nullableStr($row, 'id');
+            $path = RowMap::str($row, 'path', '');
             if ($id === null || $path === '') {
                 continue;
             }
@@ -1642,7 +1647,8 @@ class LibraryManager
                 if (!is_array($row)) {
                     continue;
                 }
-                $id = is_string($row['id'] ?? null) ? $row['id'] : null;
+                $row = RowMap::fromMixed($row);
+                $id = RowMap::nullableStr($row, 'id');
                 if ($id === null) {
                     continue;
                 }

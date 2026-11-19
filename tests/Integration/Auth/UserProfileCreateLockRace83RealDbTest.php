@@ -13,8 +13,7 @@ namespace Phlix\Tests\Integration\Auth;
 
 use Phlix\Auth\UserProfileManager;
 use Phlix\Common\Database\PhlixMySQLConnection;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 
@@ -48,33 +47,19 @@ use Throwable;
  */
 final class UserProfileCreateLockRace83RealDbTest extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
     private const USER_ID = '11111111-1111-4111-8111-111111111111';
-
-    private ?PhlixMySQLConnection $admin = null;
-
-    private string $scratchDb = '';
-
-    private ?PhlixMySQLConnection $scratch = null;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->requireHealthyDatabase('skipping the M-SERVER-83 lock-serialization proof. Runs in CI.');
-
-        $host     = IntegrationDbGuard::host();
-        $port     = IntegrationDbGuard::port();
-        $user     = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb   = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $this->scratchDb = 'phlix_srv83_' . bin2hex(random_bytes(6));
-
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-        $this->scratch = $this->conn();
+        // H-08: gate + scratch create share UsesScratchDatabase (S126 law).
+        $this->openScratchDatabase(
+            'skipping the M-SERVER-83 lock-serialization proof. Runs in CI.',
+            'srv83'
+        );
 
         // Minimal parent + the two child tables, DDL mirroring migration 002
         // columns create() actually touches (the child tables' definitions
@@ -120,20 +105,15 @@ final class UserProfileCreateLockRace83RealDbTest extends TestCase
 
     protected function tearDown(): void
     {
-        if ($this->admin !== null && $this->scratchDb !== '') {
-            $this->admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-        }
-
-        $this->admin     = null;
-        $this->scratch   = null;
-        $this->scratchDb = '';
+        $this->cleanupScratchDatabase();
 
         parent::tearDown();
     }
 
     private function scratch(): PhlixMySQLConnection
     {
-        $scratch = $this->scratch;
+        // H-08: the trait's primary scratch session backs this accessor.
+        $scratch = $this->db;
         self::assertInstanceOf(PhlixMySQLConnection::class, $scratch, 'setUp must build the scratch connection');
 
         return $scratch;
@@ -145,13 +125,7 @@ final class UserProfileCreateLockRace83RealDbTest extends TestCase
      */
     private function conn(): PhlixMySQLConnection
     {
-        return new PhlixMySQLConnection(
-            IntegrationDbGuard::host(),
-            IntegrationDbGuard::port(),
-            (string) (getenv('DB_USER') ?: 'root'),
-            (string) (getenv('DB_PASSWORD') ?: ''),
-            $this->scratchDb
-        );
+        return $this->newScratchConnection();
     }
 
     public function test_second_create_blocks_on_the_user_row_lock_and_then_hits_the_cap(): void

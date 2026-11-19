@@ -12,9 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Collections;
 
 use Phlix\Common\Database\MigrationRunner;
-use Phlix\Common\Database\PhlixMySQLConnection;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -41,7 +39,7 @@ use Workerman\MySQL\Connection;
  */
 final class CollectionsOwnershipMigration112RealDbTest extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
     private const MIGRATION_005 = '005_collections.sql';
 
@@ -60,59 +58,28 @@ final class CollectionsOwnershipMigration112RealDbTest extends TestCase
         . " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
         . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
 
-    private ?Connection $db = null;
-
-    private ?Connection $admin = null;
-
-    private string $scratchDb = '';
-
-    /** @var list<string> */
-    private array $fixDirs = [];
+    /**
+     * Fix-dir label uniquifier for in-test replay calls (per-test instance).
+     */
+    private int $migrationRuns = 0;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        // S126 gate: skip on genuine absence, LOUD on reachable-but-unusable.
-        $this->requireHealthyDatabase('skipping the migration-112 ownership-backfill proof. Runs in CI.');
-
-        $host = IntegrationDbGuard::host();
-        $port = IntegrationDbGuard::port();
-        $user = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $rand = bin2hex(random_bytes(6));
-        $this->scratchDb = 'phlix_s112_' . $rand;
-
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-        $this->db = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
+        // H-08: gate + scratch create share UsesScratchDatabase (S126 law:
+        // skip on genuine absence, LOUD on reachable-but-unusable).
+        $this->openScratchDatabase(
+            'skipping the migration-112 ownership-backfill proof. Runs in CI.',
+            's112'
+        );
 
         $this->db->query(self::USERS_FIXTURE_DDL);
     }
 
     protected function tearDown(): void
     {
-        foreach ($this->fixDirs as $fixDir) {
-            if (is_dir($fixDir)) {
-                foreach ((array) glob($fixDir . '/*') as $file) {
-                    if (is_string($file)) {
-                        unlink($file);
-                    }
-                }
-                rmdir($fixDir);
-            }
-        }
-        $this->fixDirs = [];
-
-        if ($this->admin !== null && $this->scratchDb !== '') {
-            $this->admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-        }
-
-        $this->db = null;
-        $this->admin = null;
-        $this->scratchDb = '';
+        $this->cleanupScratchDatabase();
 
         parent::tearDown();
     }
@@ -323,22 +290,13 @@ final class CollectionsOwnershipMigration112RealDbTest extends TestCase
      */
     private function runMigrationFile(string $basename): array
     {
-        $rand = bin2hex(random_bytes(4));
-        $fixDir = sys_get_temp_dir() . '/phlix-s112-fix-' . $basename . '-' . $rand;
-        mkdir($fixDir, 0o755, true);
-        $this->fixDirs[] = $fixDir;
-
-        copy($this->migrationPath($basename), $fixDir . '/' . $basename);
+        $this->migrationRuns++;
+        $fixDir = $this->scratchFixDir('fix-' . $basename . '-' . $this->migrationRuns, [$basename]);
 
         $db = $this->requireDb();
         $runner = new MigrationRunner(static fn (): Connection => $db, $fixDir);
 
         return $runner->run();
-    }
-
-    private function migrationPath(string $basename): string
-    {
-        return dirname(__DIR__, 3) . '/migrations/' . $basename;
     }
 
     private function seedUser(string $id, bool $is_admin, string $status, string $createdAt): void

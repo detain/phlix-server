@@ -12,9 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Admin;
 
 use Phlix\Common\Database\MigrationRunner;
-use Phlix\Common\Database\PhlixMySQLConnection;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -47,7 +45,7 @@ use Workerman\MySQL\Connection;
  */
 final class NewsletterQueueDedupMigration125RealDbTest extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
     private const MIGRATION_125 = '125_newsletter_queue_user_week_unique.sql';
 
@@ -68,58 +66,27 @@ final class NewsletterQueueDedupMigration125RealDbTest extends TestCase
         . " INDEX idx_created_at (created_at)"
         . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
 
-    private ?Connection $db = null;
-
-    private ?Connection $admin = null;
-
-    private string $scratchDb = '';
-
-    /** @var list<string> */
-    private array $fixDirs = [];
+    /**
+     * Fix-dir label uniquifier for in-test replay calls (per-test instance).
+     */
+    private int $migrationRuns = 0;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->requireHealthyDatabase('skipping the migration-125 survivor-precedence proof. Runs in CI.');
-
-        $host = IntegrationDbGuard::host();
-        $port = IntegrationDbGuard::port();
-        $user = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $rand = bin2hex(random_bytes(6));
-        $this->scratchDb = 'phlix_srpcure_' . $rand;
-
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-        $this->db = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
+        // H-08: gate + scratch create share UsesScratchDatabase (S126 law).
+        $this->openScratchDatabase(
+            'skipping the migration-125 survivor-precedence proof. Runs in CI.',
+            'srpcure'
+        );
 
         $this->db->query(self::FIXTURE_DDL);
     }
 
     protected function tearDown(): void
     {
-        foreach ($this->fixDirs as $fixDir) {
-            if (is_dir($fixDir)) {
-                foreach ((array) glob($fixDir . '/*') as $file) {
-                    if (is_string($file)) {
-                        unlink($file);
-                    }
-                }
-                rmdir($fixDir);
-            }
-        }
-        $this->fixDirs = [];
-
-        if ($this->admin !== null && $this->scratchDb !== '') {
-            $this->admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-        }
-
-        $this->db = null;
-        $this->admin = null;
-        $this->scratchDb = '';
+        $this->cleanupScratchDatabase();
 
         parent::tearDown();
     }
@@ -365,22 +332,15 @@ final class NewsletterQueueDedupMigration125RealDbTest extends TestCase
 
     private function runMigrationFile(string $basename): array
     {
-        $rand = bin2hex(random_bytes(4));
-        $fixDir = sys_get_temp_dir() . '/phlix-srv-cure-fix-' . $basename . '-' . $rand;
-        mkdir($fixDir, 0o755, true);
-        $this->fixDirs[] = $fixDir;
-
-        copy($this->migrationPath($basename), $fixDir . '/' . $basename);
+        // H-08: fix-dir dirs now carry the DB token 'srpcure' (was 'srv-cure');
+        // the names are throwaway and asserted nowhere.
+        $this->migrationRuns++;
+        $fixDir = $this->scratchFixDir('fix-' . $basename . '-' . $this->migrationRuns, [$basename]);
 
         $db = $this->requireDb();
         $runner = new MigrationRunner(static fn (): Connection => $db, $fixDir);
 
         return $runner->run();
-    }
-
-    private function migrationPath(string $basename): string
-    {
-        return dirname(__DIR__, 3) . '/migrations/' . $basename;
     }
 
     private function requireDb(): Connection

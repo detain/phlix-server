@@ -15,13 +15,11 @@ use Phlix\Auth\AuthManager;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Database\MigrationRunner;
-use Phlix\Common\Database\PhlixMySQLConnection;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Server\Http\Request;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -54,7 +52,7 @@ use Workerman\MySQL\Connection;
  */
 final class AdminPasswordHandoffRealDbTest extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
     private const SCHEMA_MIGRATIONS = [
         '001_initial_schema.sql',
@@ -67,12 +65,6 @@ final class AdminPasswordHandoffRealDbTest extends TestCase
     private const CREATE_PASSWORD = 'Admin-Create-Pass-1!';
     private const RESET_PASSWORD = 'Admin-Reset-Pass-2!';
 
-    private ?Connection $admin = null;
-
-    private ?Connection $db = null;
-
-    private string $scratchDb = '';
-
     private string $fixDir = '';
 
     /** @var list<string> log dirs minted by logDir(), removed in tearDown(). */
@@ -82,27 +74,14 @@ final class AdminPasswordHandoffRealDbTest extends TestCase
     {
         parent::setUp();
 
-        // S126 gate: skip on genuine absence, LOUD on reachable-but-unusable.
-        $this->requireHealthyDatabase('skipping the admin password hand-off real-MySQL proof. Runs in CI.');
+        // H-08: gate + scratch create share UsesScratchDatabase (S126 law:
+        // skip on genuine absence, LOUD on reachable-but-unusable).
+        $this->openScratchDatabase(
+            'skipping the admin password hand-off real-MySQL proof. Runs in CI.',
+            'admpw'
+        );
 
-        $host = IntegrationDbGuard::host();
-        $port = IntegrationDbGuard::port();
-        $user = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $rand = bin2hex(random_bytes(6));
-        $this->scratchDb = 'phlix_admpw_' . $rand;
-
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-        $this->db = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
-
-        $this->fixDir = sys_get_temp_dir() . '/phlix-admpw-fix-' . $rand;
-        mkdir($this->fixDir, 0o755, true);
-        foreach (self::SCHEMA_MIGRATIONS as $file) {
-            copy(dirname(__DIR__, 3) . '/migrations/' . $file, $this->fixDir . '/' . $file);
-        }
+        $this->fixDir = $this->scratchFixDir('fix', self::SCHEMA_MIGRATIONS);
 
         $result = $this->runner()->run();
         $this->assertSame(
@@ -115,14 +94,7 @@ final class AdminPasswordHandoffRealDbTest extends TestCase
 
     protected function tearDown(): void
     {
-        if ($this->fixDir !== '' && is_dir($this->fixDir)) {
-            foreach ((array) glob($this->fixDir . '/*') as $file) {
-                if (is_string($file)) {
-                    unlink($file);
-                }
-            }
-            rmdir($this->fixDir);
-        }
+        $this->cleanScratchFixDirs();
 
         foreach ($this->mintedLogDirs as $dir) {
             // S439: each log dir is per-test — sweep them all.
@@ -131,13 +103,8 @@ final class AdminPasswordHandoffRealDbTest extends TestCase
         }
         $this->mintedLogDirs = [];
 
-        if ($this->admin !== null && $this->scratchDb !== '') {
-            $this->admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-        }
+        $this->dropScratchDatabase();
 
-        $this->db = null;
-        $this->admin = null;
-        $this->scratchDb = '';
         $this->fixDir = '';
 
         parent::tearDown();

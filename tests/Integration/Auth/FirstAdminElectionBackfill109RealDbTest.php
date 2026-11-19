@@ -15,11 +15,9 @@ use Phlix\Auth\AuthManager;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Database\MigrationRunner;
-use Phlix\Common\Database\PhlixMySQLConnection;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\StructuredLogger;
-use Phlix\Tests\Support\Database\IntegrationDbGuard;
-use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use Phlix\Tests\Support\Database\UsesScratchDatabase;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -59,7 +57,7 @@ use Workerman\MySQL\Connection;
  */
 final class FirstAdminElectionBackfill109RealDbTest extends TestCase
 {
-    use RequiresRealDatabase;
+    use UsesScratchDatabase;
 
     private const SCHEMA_MIGRATIONS = [
         '001_initial_schema.sql',
@@ -79,12 +77,6 @@ final class FirstAdminElectionBackfill109RealDbTest extends TestCase
     /** The non-impersonating "election closed" marker 109 stamps when users exist with no admin. */
     private const NIL_MARKER = '00000000-0000-0000-0000-000000000000';
 
-    private ?Connection $admin = null;
-
-    private ?Connection $db = null;
-
-    private string $scratchDb = '';
-
     private string $fixDir = '';
 
     /** @var list<string> log dirs minted by silentLogger(), removed in tearDown(). */
@@ -94,27 +86,14 @@ final class FirstAdminElectionBackfill109RealDbTest extends TestCase
     {
         parent::setUp();
 
-        // S126 gate: skip on genuine absence, LOUD on reachable-but-unusable.
-        $this->requireHealthyDatabase('skipping the H-1-rework migration-109 upgraded-install proof. Runs in CI.');
+        // H-08: gate + scratch create share UsesScratchDatabase (S126 law:
+        // skip on genuine absence, LOUD on reachable-but-unusable).
+        $this->openScratchDatabase(
+            'skipping the H-1-rework migration-109 upgraded-install proof. Runs in CI.',
+            'h1rw'
+        );
 
-        $host = IntegrationDbGuard::host();
-        $port = IntegrationDbGuard::port();
-        $user = (string) (getenv('DB_USER') ?: 'root');
-        $password = (string) (getenv('DB_PASSWORD') ?: '');
-        $baseDb = (string) (getenv('DB_DATABASE') ?: 'phlix_test');
-
-        $rand = bin2hex(random_bytes(6));
-        $this->scratchDb = 'phlix_h1rw_' . $rand;
-
-        $this->admin = new PhlixMySQLConnection($host, $port, $user, $password, $baseDb);
-        $this->admin->query('CREATE DATABASE `' . $this->scratchDb . '`');
-        $this->db = new PhlixMySQLConnection($host, $port, $user, $password, $this->scratchDb);
-
-        $this->fixDir = sys_get_temp_dir() . '/phlix-h1rw-fix-' . $rand;
-        mkdir($this->fixDir, 0o755, true);
-        foreach (self::SCHEMA_MIGRATIONS as $file) {
-            copy($this->migrationPath($file), $this->fixDir . '/' . $file);
-        }
+        $this->fixDir = $this->scratchFixDir('fix', self::SCHEMA_MIGRATIONS);
 
         $result = $this->runner()->run();
         $this->assertSame(
@@ -127,14 +106,7 @@ final class FirstAdminElectionBackfill109RealDbTest extends TestCase
 
     protected function tearDown(): void
     {
-        if ($this->fixDir !== '' && is_dir($this->fixDir)) {
-            foreach ((array) glob($this->fixDir . '/*') as $file) {
-                if (is_string($file)) {
-                    unlink($file);
-                }
-            }
-            rmdir($this->fixDir);
-        }
+        $this->cleanScratchFixDirs();
 
         foreach ($this->mintedLogDirs as $dir) {
             // S439: silentLogger() mints a fresh dir per call — sweep them all.
@@ -143,13 +115,8 @@ final class FirstAdminElectionBackfill109RealDbTest extends TestCase
         }
         $this->mintedLogDirs = [];
 
-        if ($this->admin !== null && $this->scratchDb !== '') {
-            $this->admin->query('DROP DATABASE IF EXISTS `' . $this->scratchDb . '`');
-        }
+        $this->dropScratchDatabase();
 
-        $this->db = null;
-        $this->admin = null;
-        $this->scratchDb = '';
         $this->fixDir = '';
 
         parent::tearDown();
@@ -285,7 +252,7 @@ final class FirstAdminElectionBackfill109RealDbTest extends TestCase
         $this->assertSame('wnr00001-0000-0000-0000-000000000001', $this->sentinelUserId(), 'a stamped winner is never rewritten');
 
         $db->query("DELETE FROM schema_migrations WHERE name LIKE '109_%'");
-        copy($this->migrationPath(self::BACKFILL_MIGRATION), $this->fixDir . '/' . self::BACKFILL_MIGRATION);
+        copy(self::scratchMigrationPath(self::BACKFILL_MIGRATION), $this->fixDir . '/' . self::BACKFILL_MIGRATION);
         $second = $this->runner()->run();
         $this->assertSame([], $second['errors'], 'replaying 109 against a migrated database must be a SUCCESS');
         $this->assertSame('wnr00001-0000-0000-0000-000000000001', $this->sentinelUserId());
@@ -305,7 +272,7 @@ final class FirstAdminElectionBackfill109RealDbTest extends TestCase
     /** Copy 109 into the fix dir and run the production MigrationRunner over it. */
     private function applyBackfill(): void
     {
-        copy($this->migrationPath(self::BACKFILL_MIGRATION), $this->fixDir . '/' . self::BACKFILL_MIGRATION);
+        copy(self::scratchMigrationPath(self::BACKFILL_MIGRATION), $this->fixDir . '/' . self::BACKFILL_MIGRATION);
 
         $result = $this->runner()->run();
         $this->assertSame(
@@ -383,11 +350,6 @@ final class FirstAdminElectionBackfill109RealDbTest extends TestCase
         $userId = $rows[0]['user_id'];
 
         return $userId === null ? null : (string) $userId;
-    }
-
-    private function migrationPath(string $basename): string
-    {
-        return dirname(__DIR__, 3) . '/migrations/' . $basename;
     }
 
     private function logDir(): string

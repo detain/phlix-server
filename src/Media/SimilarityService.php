@@ -178,14 +178,20 @@ final class SimilarityService
                 continue;
             }
 
-            $similarItemId = is_string($row['similar_item_id'] ?? null) ? $row['similar_item_id'] : '';
+                        // E-09 cohort 5a: RowMap fold (fromMixed narrows the untyped query
+            // row to the accessors' array<string,mixed> contract; fallbacks
+            // transcribed verbatim). Pinned by the legacy-oracle vectors in
+            // tests/Unit/Media/SimilarityWorkerCoroutineForkTest.php (sibling
+            // placement: no dedicated SimilarityService suite exists).
+            $row = RowMap::fromMixed($row);
+            $similarItemId = RowMap::str($row, 'similar_item_id', '');
             if ($similarItemId === '') {
                 continue;
             }
 
-            $score = is_numeric($row['score'] ?? null) ? (float) $row['score'] : 0.0;
-            $reason = is_string($row['reason'] ?? null) ? $row['reason'] : self::REASON_GENRE;
-            $title = is_string($row['title'] ?? null) ? $row['title'] : '';
+            $score = RowMap::floatFromNumeric($row, 'score', 0.0);
+            $reason = RowMap::str($row, 'reason', self::REASON_GENRE);
+            $title = RowMap::str($row, 'title', '');
 
             $posterUrl = $this->extractPosterUrl($row['metadata_json'] ?? null);
             $year = $this->extractYear($row['metadata_json'] ?? null);

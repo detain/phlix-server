@@ -11,6 +11,7 @@ use Phlix\Media\SimilarityService;
 use Phlix\Media\SimilarityWorker;
 use Phlix\Tests\Support\Coroutine\RunsInCoroutine;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 
@@ -171,5 +172,94 @@ final class SimilarityWorkerCoroutineForkTest extends TestCase
             'SimilarityWorker::processConcurrently Starting batch [count=2]',
             $record->messages
         );
+    }
+
+    /**
+     * E-09 cohort 5a (W5): legacy-oracle vectors for the getSimilar fold
+     * legs (sibling placement: no dedicated SimilarityService suite
+     * exists; named in the src E-09 comment). Expected shapes transcribe
+     * the pre-fold ternaries verbatim from git show 1d509d91; the kept
+     * metadata helpers run through the same private methods on both
+     * sides (reflection) so only the folded legs are pinned. The
+     * self::REASON_GENRE default is the private const value 'genre'.
+     */
+    public function testSimilarRowDecodeLegsAreByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            [
+                'similar_item_id' => 'm-2',
+                'score' => '0.87',
+                'reason' => 'genre',
+                'title' => 'Dune',
+                'metadata_json' => '{}',
+            ],
+            [
+                'similar_item_id' => '',
+                'score' => 1,
+                'reason' => 'x',
+                'title' => 'T',
+                'metadata_json' => '{}',
+            ],
+            ['score' => 'abc', 'title' => 'T', 'metadata_json' => '{}'],
+            [
+                'similar_item_id' => null,
+                'score' => 1,
+                'reason' => 'x',
+                'title' => 'T',
+                'metadata_json' => '{}',
+            ],
+            [
+                'similar_item_id' => 5,
+                'score' => 1,
+                'reason' => 'x',
+                'title' => 'T',
+                'metadata_json' => '{}',
+            ],
+            ['similar_item_id' => 'm-3', 'score' => true, 'metadata_json' => '{}'],
+            [
+                'similar_item_id' => 'm-4',
+                'score' => null,
+                'reason' => null,
+                'title' => 7,
+                'metadata_json' => '{}',
+            ],
+            [
+                'similar_item_id' => 'm-5',
+                'score' => 2.5,
+                'reason' => 'vector',
+                'title' => 'V',
+                'metadata_json' => '{"poster_path":"/p.jpg","release_date":"2001-02-03"}',
+            ],
+        ];
+
+        $poster = new ReflectionMethod(SimilarityService::class, 'extractPosterUrl');
+        $year = new ReflectionMethod(SimilarityService::class, 'extractYear');
+
+        foreach ($vectors as $row) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+            $service = new SimilarityService($db, $this->createMock(ItemRepository::class));
+
+            $expected = [];
+            $similarItemId = is_string($row['similar_item_id'] ?? null)
+                ? $row['similar_item_id']
+                : '';
+            if ($similarItemId !== '') {
+                $meta = $row['metadata_json'] ?? null;
+                $expected[] = [
+                    'id' => $similarItemId,
+                    'title' => is_string($row['title'] ?? null) ? $row['title'] : '',
+                    'posterUrl' => $poster->invoke($service, $meta),
+                    'year' => $year->invoke($service, $meta),
+                    'score' => is_numeric($row['score'] ?? null)
+                        ? (float) $row['score']
+                        : 0.0,
+                    'reason' => is_string($row['reason'] ?? null) ? $row['reason'] : 'genre',
+                ];
+            }
+
+            self::assertSame($expected, $service->getSimilar('m-1', 10));
+        }
     }
 }

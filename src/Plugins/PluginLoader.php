@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Plugins;
 
 use Phlix\Common\Events\ListenerRegistry;
+use Phlix\Common\Env\EnvConfig;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
@@ -1229,13 +1230,12 @@ class PluginLoader
     }
 
     /**
-     * Whether the operator has opted into unverified installs via the env var.
+     * Whether the operator has opted into unverified installs via the env var
+     * (true words under the estate env-bool law, {@see EnvConfig::bool}, E-04).
      */
     private static function allowUnverifiedInstalls(): bool
     {
-        $value = getenv(self::ALLOW_UNVERIFIED_ENV);
-        return $value !== false
-            && in_array(strtolower($value), ['1', 'true', 'yes', 'on'], true);
+        return EnvConfig::bool(self::ALLOW_UNVERIFIED_ENV);
     }
 
     /**

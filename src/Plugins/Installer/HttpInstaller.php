@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\Installer;
 
+use Phlix\Common\Env\EnvConfig;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
@@ -298,12 +299,10 @@ class HttpInstaller
             return;
         }
         if ($scheme === 'http') {
-            $envValue = getenv('PHLIX_PLUGINS_ALLOW_HTTP');
-            $allowed = $envValue !== false
-                && in_array(strtolower($envValue), ['1', 'true', 'yes', 'on'], true);
-            if ($allowed) {
+            if (EnvConfig::bool('PHLIX_PLUGINS_ALLOW_HTTP')) {
                 return;
             }
+
             throw new PluginInstallException(
                 'Plain HTTP plugin sources are forbidden. Set PHLIX_PLUGINS_ALLOW_HTTP=1 to override.',
             );

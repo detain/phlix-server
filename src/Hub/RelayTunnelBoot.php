@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub;
 
+use Phlix\Common\Env\EnvConfig;
 use Phlix\Common\Logger\StructuredLogger;
 
 /**
@@ -47,14 +48,15 @@ final class RelayTunnelBoot
     public const DISABLED_REASON = 'relay disabled by operator kill-switch';
 
     /**
-     * Env-var spellings that count as "disabled" for `PHLIX_RELAY_DISABLED`.
-     *
-     * @var list<string>
-     */
-    private const TRUTHY = ['1', 'true', 'yes', 'on'];
-
-    /**
      * Whether the `PHLIX_RELAY_DISABLED` env var value disables the tunnel.
+     *
+     * The spelling grammar is the estate's single env-bool law —
+     * {@see EnvConfig::boolValue()} (E-04): true words `1`/`true`/`yes`/`on`
+     * disable, false words `0`/`false`/`no`/`off` do not, values are trimmed
+     * and case-folded (the trim is the drift cure: ` false` once answered
+     * differently per copy — under the law it answers FALSE everywhere),
+     * unset/empty means not disabled, and junk answers not-disabled with a
+     * logged warning.
      *
      * `getenv()` returns `false` when unset, so that shape is accepted directly
      * and treated as "not disabled".
@@ -67,11 +69,7 @@ final class RelayTunnelBoot
      */
     public static function envDisables(string|false|null $raw): bool
     {
-        if (!is_string($raw)) {
-            return false;
-        }
-
-        return in_array(strtolower(trim($raw)), self::TRUTHY, true);
+        return EnvConfig::boolValue($raw, false, 'PHLIX_RELAY_DISABLED');
     }
 
     /**

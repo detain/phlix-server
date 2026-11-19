@@ -28,6 +28,7 @@ use Phlix\Common\Container\Providers\SessionServicesProvider;
 use Phlix\Common\Container\Providers\ThemingServicesProvider;
 use Phlix\Common\Container\Providers\TranscodeServicesProvider;
 use Phlix\Common\Container\Providers\WebPortalServicesProvider;
+use Phlix\Common\Env\EnvConfig;
 use Psr\Container\ContainerInterface;
 
 /**
@@ -143,16 +144,13 @@ final class ContainerFactory
     /**
      * Whether to enable PHP-DI's compiled-container cache.
      *
-     * @return bool True when PHLIX_CONTAINER_COMPILE is set to a truthy value.
+     * @return bool True when PHLIX_CONTAINER_COMPILE holds a true word under
+     *         the estate env-bool law ({@see EnvConfig::bool}, E-04).
      *
      * @since 0.10.0
      */
     private static function shouldCompile(): bool
     {
-        $value = getenv('PHLIX_CONTAINER_COMPILE');
-        if ($value === false) {
-            return false;
-        }
-        return in_array(strtolower((string)$value), ['1', 'true', 'yes', 'on'], true);
+        return EnvConfig::bool('PHLIX_CONTAINER_COMPILE');
     }
 }

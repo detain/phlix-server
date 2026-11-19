@@ -14,6 +14,7 @@ namespace Phlix\Common\Events;
 use Crell\Tukio\DebugEventDispatcher;
 use Crell\Tukio\Dispatcher;
 use Crell\Tukio\OrderedListenerProvider;
+use Phlix\Common\Env\EnvConfig;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Psr\Container\ContainerInterface;
@@ -126,17 +127,14 @@ final class EventDispatcherFactory
     /**
      * Whether the debug-dispatch decorator is enabled by environment.
      *
-     * @return bool True when `PHLIX_DEBUG_EVENTS` is set to a truthy value.
+     * @return bool True when `PHLIX_DEBUG_EVENTS` holds a true word under the
+     *         estate env-bool law ({@see EnvConfig::bool}, E-04).
      *
      * @since 0.10.0
      */
     public static function debugEnabled(): bool
     {
-        $value = getenv(self::DEBUG_ENV_VAR);
-        if ($value === false) {
-            return false;
-        }
-        return in_array(strtolower((string)$value), ['1', 'true', 'yes', 'on'], true);
+        return EnvConfig::bool(self::DEBUG_ENV_VAR);
     }
 
     /**

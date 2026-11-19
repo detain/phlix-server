@@ -19,6 +19,7 @@ use Monolog\Level;
 use Monolog\Logger;
 use Monolog\LogRecord;
 use Monolog\Processor\PsrLogMessageProcessor;
+use Phlix\Common\Env\EnvConfig;
 use Psr\Log\LoggerInterface;
 use Stringable;
 
@@ -173,11 +174,12 @@ class StructuredLogger implements LoggerInterface
      * Whether a handler's `env` gate (if any) is satisfied.
      *
      * A handler with no `env` key always attaches. When `env` names an
-     * environment variable, the handler attaches only when that variable is
-     * set to a truthy value. Truthiness is interpreted identically to
+     * environment variable, the handler attaches only when that variable
+     * holds a true word under the estate's single env-bool law
+     * ({@see EnvConfig::bool}, E-04) — the very reader
      * {@see \Phlix\Common\Events\EventDispatcherFactory::debugEnabled()}
-     * (`1`/`true`/`yes`/`on`, case-insensitive) so both subsystems agree on
-     * the same PHLIX_DEBUG_EVENTS switch.
+     * calls, so both subsystems agree on the same PHLIX_DEBUG_EVENTS switch
+     * by sharing one implementation, not by copying its word list.
      *
      * @param array<string, mixed> $config
      */
@@ -187,11 +189,8 @@ class StructuredLogger implements LoggerInterface
         if (!is_string($envVar) || $envVar === '') {
             return true;
         }
-        $value = getenv($envVar);
-        if ($value === false) {
-            return false;
-        }
-        return in_array(strtolower((string) $value), ['1', 'true', 'yes', 'on'], true);
+
+        return EnvConfig::bool($envVar);
     }
 
     /**

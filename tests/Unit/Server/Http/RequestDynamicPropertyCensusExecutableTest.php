@@ -1267,7 +1267,32 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // SSOT guard for the mint-site migration and login-path rehash wiring. Pinned to the TRACKED
     // set at this commit (git ls-files '*.php' = 2157 now; +2 mine); foreign untracked WIP on the
     // shared working tree is again excluded. Reads/writes remain the siblings' duty.
-    private const EXPECTED_PHP_FILES = 2159;
+    //
+    // Staircase continued — measured at 2ce2e981 (SRV-MICRO cure round, review SRV-MICRO-r3 MAJOR).
+    // The pin sat at 2159 while ten tracked PHP files landed across five lanes without rotation:
+    // +1 be1d607e (SRV-3.2): tests/Unit/Dlna/DeviceRegistryAddressFilterTest.php.
+    // +1 30e140e2 (FRAME C-06): tests/Unit/Hub/RelayMessageFramerWireCorpusTest.php.
+    // +3 04ad2870 (S-TOKEN): src/Common/Token.php + tests/Unit/Common/TokenMintCensusTest.php +
+    //   tests/Unit/Common/TokenTest.php.
+    // +1 3b010225 (W4 PREP): tests/Unit/Server/Http/EnvelopeWireCorpusTest.php.
+    //   (2159→2165: all pre-existing drift, attributed to those lanes — the suite was already red
+    //   2165/514/1301 at 9821f5f6^ where this lane began.)
+    // +2 9821f5f6 (SRV-MICRO E-16): src/Common/Time/HttpDate.php +
+    //   tests/Unit/Common/Time/HttpDateTest.php — E-16's own owed rotation: the adding commit
+    //   shipped without it (the exact silence S431 exists to end; named by the r3 review and
+    //   fixed forward here, not reverted).
+    // +2 6662fa30 (E-07): src/Media/Metadata/Tmdb/ImageUrl.php + tests/Unit/Media/Metadata/Tmdb/
+    //   ImageUrlTest.php.
+    // +2 d8ba8d3c (E-17): src/Common/Fs/Mime.php + tests/Unit/Common/Fs/MimePinMatrixTest.php.
+    // Pinned to the TRACKED set at this commit: git ls-files '*.php' = 2171 (SRV-MICRO's share is
+    // the named +2; the +8 foreign rows are attribution, not absorption — those lanes owed their
+    // own rotations and the file itself now says so). SRV-SCRATCHDB is live and will step this
+    // again; expected, that lane blesses its own.
+    // Reads (512 vs 514 measured) and writes (1274 vs 1306 measured) REMAIN RED and are NOT
+    // rotated here: their deltas belong to 04ad2870's Token migration, 651a6bfe's rateLimited
+    // seam, and later sibling Request-write work. SRV-MICRO touches zero Request reads/writes in
+    // any commit of this lane, so rotating those legs would launder other lanes' censuses.
+    private const EXPECTED_PHP_FILES = 2171;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

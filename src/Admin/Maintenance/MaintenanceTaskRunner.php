@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Admin\Maintenance;
 
+use Phlix\Common\Util\RowMap;
 use InvalidArgumentException;
 use Phlix\Media\Library\PathDedupeRunner;
 use Phlix\Media\Library\PathDeduper;
@@ -381,6 +382,6 @@ class MaintenanceTaskRunner
             return 0;
         }
 
-        return is_numeric($row['cnt'] ?? null) ? (int) $row['cnt'] : 0;
+        return RowMap::intFromNumeric(RowMap::fromMixed($row), 'cnt', 0);
     }
 }

@@ -12,6 +12,9 @@ use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Media\Transcoding\TranscodeManager;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
+use ReflectionMethod;
+use ReflectionProperty;
+use ReflectionClass;
 use Workerman\MySQL\Connection;
 
 /**
@@ -530,5 +533,43 @@ final class MaintenanceTaskRunnerTest extends TestCase
             $this->issuedSql(),
             'The task must actually WRITE a snapshot, not merely collect one.'
         );
+    }
+
+    /**
+     * E-09 cohort 5a (W5): countRows cnt fold leg vs the pre-fold
+     * is_numeric ternary (verbatim transcription).
+     */
+    public function test_count_rows_decode_leg_is_byte_identical_to_legacy_across_vectors(): void
+    {
+        $dbProperty = new ReflectionProperty(MaintenanceTaskRunner::class, 'db');
+        $dbProperty->setAccessible(true);
+        $countRows = new ReflectionMethod(MaintenanceTaskRunner::class, 'countRows');
+        $countRows->setAccessible(true);
+
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['cnt' => 5],
+            ['cnt' => '5'],
+            ['cnt' => '5.9'],
+            ['cnt' => null],
+            ['cnt' => 'abc'],
+            ['cnt' => true],
+            [],
+        ];
+
+        foreach ($vectors as $row) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+            $runner = (new ReflectionClass(MaintenanceTaskRunner::class))
+                ->newInstanceWithoutConstructor();
+            $dbProperty->setValue($runner, $db);
+
+            $expected = is_numeric($row['cnt'] ?? null) ? (int) $row['cnt'] : 0;
+            $this->assertSame(
+                $expected,
+                $countRows->invoke($runner, 'media_items'),
+                'vector ' . json_encode($row)
+            );
+        }
     }
 }

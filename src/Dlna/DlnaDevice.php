@@ -578,19 +578,23 @@ class DlnaDevice
     /**
      * Generate a unique device serial number.
      *
-     * Creates a pseudo-random hex string in the format XXXX-XXXX-XXXX
-     * for use as a device serial number when the actual serial is unknown.
+     * Builds an unpredictable hex string in the format XXXXXXXX-XXXX for use
+     * as a device serial number when the actual serial is unknown. Drawn from
+     * random_bytes(), not mt_rand(): an mt_rand() stream is steerable via
+     * mt_srand() — PHPUnit's executionOrder=random re-seeds it mid-run (the
+     * S443 hazard documented in Phlix\Common\Uuid) — and a predictable
+     * serialNumber published in the advertised device description lets a LAN
+     * peer regenerate another device's identifier.
      *
-     * @return string A pseudo-random serial number
+     * @return string A cryptographically random serial number
      */
     private function generateSerial(): string
     {
-        return sprintf(
-            '%04x%04x-%04x',
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff)
-        );
+        // 6 bytes = 48 bits, the same budget the three 16-bit draws carried,
+        // rendered in the byte-identical wire shape existing consumers see.
+        $hex = bin2hex(random_bytes(6));
+
+        return substr($hex, 0, 8) . '-' . substr($hex, 8, 4);
     }
 
     /**

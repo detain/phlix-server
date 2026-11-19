@@ -7,6 +7,7 @@ use PHPUnit\Framework\MockObject\MockObject;
 use Phlix\Dlna\ContentDirectory;
 use Phlix\Media\Library\ItemRepository;
 use PHPUnit\Framework\Attributes\DataProvider;
+use ReflectionMethod;
 
 class ContentDirectoryTest extends TestCase
 {
@@ -19,6 +20,41 @@ class ContentDirectoryTest extends TestCase
         $this->itemRepositoryMock = $this->createMock(ItemRepository::class);
 
         $this->contentDirectory = new ContentDirectory($this->itemRepositoryMock);
+    }
+
+    /**
+     * SRV-2.2 (D-07): the DIDL object-id fallback must not draw from
+     * mt_rand(). PHPUnit's executionOrder=random lets sibling suites re-seed
+     * mt_srand() mid-run, and consecutive mt_rand() draws then reproduce
+     * byte-for-byte across processes — the hazard documented in the
+     * Phlix\Common\Uuid S443 note. A known seed must not be able to
+     * regenerate these identifiers.
+     */
+    public function testGeneratedObjectIdsAreNotReproducibleUnderPinnedMtRandSeed(): void
+    {
+        $generate = function (): string {
+            $method = new ReflectionMethod(ContentDirectory::class, 'generateObjectId');
+            return $method->invoke($this->contentDirectory);
+        };
+
+        mt_srand(20261119);
+        $first = $generate();
+        mt_srand(20261119);
+        $second = $generate();
+
+        $reason = 'Object ids derive from mt_rand(), whose stream is steerable via '
+            . 'mt_srand() — a known seed regenerates the same identifiers';
+
+        $this->assertNotSame($first, $second, $reason);
+    }
+
+    /** The advertised fallback shape: 'obj-' + 8 hex + '-' + 4 hex. */
+    public function testGeneratedObjectIdKeepsAdvertisedHexShape(): void
+    {
+        $method = new ReflectionMethod(ContentDirectory::class, 'generateObjectId');
+        $id = $method->invoke($this->contentDirectory);
+
+        $this->assertMatchesRegularExpression('/^obj-[0-9a-f]{8}-[0-9a-f]{4}$/', $id);
     }
 
     public function testBrowseRootReturnsContainers(): void

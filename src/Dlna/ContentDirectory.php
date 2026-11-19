@@ -1024,15 +1024,20 @@ class ContentDirectory
 
     /**
      * Generate a unique object ID.
+     *
+     * random_bytes(), not mt_rand(): an mt_rand() stream is steerable via
+     * mt_srand() (PHPUnit's executionOrder=random re-seeds it mid-run — the
+     * S443 hazard documented in Phlix\Common\Uuid), and reproducible object
+     * ids let a Browse request collide with containers another process
+     * minted for id-less items.
      */
     private function generateObjectId(): string
     {
-        return sprintf(
-            'obj-%04x%04x-%04x',
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff)
-        );
+        // 6 bytes = 48 bits, same budget as the three 16-bit draws, rendered
+        // in the byte-identical 'obj-XXXXXXXX-XXXX' shape.
+        $hex = bin2hex(random_bytes(6));
+
+        return 'obj-' . substr($hex, 0, 8) . '-' . substr($hex, 8, 4);
     }
 
     /**

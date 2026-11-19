@@ -7,6 +7,50 @@ use Phlix\Dlna\DlnaDevice;
 
 class DlnaDeviceTest extends TestCase
 {
+    /**
+     * SRV-2.2 (D-07): the device serial identifier must not draw from
+     * mt_rand(). PHPUnit's executionOrder=random lets sibling suites re-seed
+     * mt_srand() mid-run, and consecutive mt_rand() draws then reproduce
+     * byte-for-byte across processes — the hazard documented in the
+     * Phlix\Common\Uuid S443 note. A known seed must not be able to
+     * regenerate this device's identifier.
+     */
+    public function testSerialIsNotReproducibleUnderPinnedMtRandSeed(): void
+    {
+        $make = static fn(): string => (new DlnaDevice(
+            'uuid:serial-seed-test',
+            DlnaDevice::TYPE_SERVER,
+            'Serial Seed Test',
+            '192.168.1.200',
+            8200
+        ))->getSerialNumber();
+
+        mt_srand(20261119);
+        $first = $make();
+        mt_srand(20261119);
+        $second = $make();
+
+        $reason = 'Device serials derive from mt_rand(), whose stream is steerable via '
+            . 'mt_srand() — a known seed regenerates the same device identifier';
+
+        $this->assertNotSame($first, $second, $reason);
+    }
+
+    /** The wire shape consumers already see: 8 hex + '-' + 4 hex (UPnP serialNumber budget is 32 chars). */
+    public function testSerialKeepsAdvertisedHexShape(): void
+    {
+        $serial = (new DlnaDevice(
+            'uuid:serial-shape-test',
+            DlnaDevice::TYPE_SERVER,
+            'Serial Shape Test',
+            '192.168.1.201',
+            8200
+        ))->getSerialNumber();
+
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{8}-[0-9a-f]{4}$/', $serial);
+        $this->assertLessThanOrEqual(32, strlen($serial));
+    }
+
     public function testCanCreateServerDevice(): void
     {
         $device = new DlnaDevice(

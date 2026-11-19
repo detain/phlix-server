@@ -304,4 +304,135 @@ final class StatsControllerTest extends TestCase
         $response = (new StatsController($collector))->topMedia($request, []);
         $this->assertSame(200, $response->statusCode);
     }
+
+    /**
+     * SRV-3-r2 (INFO) — playback() advertised `?from=`/`?to=` (its param
+     * annotation even named `query.from` / `query.to`) but read the body-only
+     * `Request::input()` channel, so a query-window request silently scanned
+     * the default -30-days window. The pair now rides the SAME rawParam
+     * query-first/body-second law as `since`/`limit`; parseDate's documented
+     * leniency and the '-30 days'/'now' defaults are untouched.
+     */
+    public function test_playback_honors_a_query_channel_from(): void
+    {
+        $collector = $this->mockCollector();
+        $collector->expects($this->once())
+            ->method('getPlaybackStats')
+            ->with(
+                $this->callback(
+                    static fn (mixed $d): bool => $d instanceof DateTime && $d->format('Y-m-d') === '2024-01-01'
+                ),
+                $this->anything()
+            )
+            ->willReturn([]);
+
+        $request = new Request();
+        $request->query = ['from' => '2024-01-01'];
+
+        $response = (new StatsController($collector))->playback($request, []);
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    public function test_playback_honors_a_query_channel_to(): void
+    {
+        $collector = $this->mockCollector();
+        $collector->expects($this->once())
+            ->method('getPlaybackStats')
+            ->with(
+                $this->anything(),
+                $this->callback(
+                    static fn (mixed $d): bool => $d instanceof DateTime && $d->format('Y-m-d') === '2024-01-31'
+                )
+            )
+            ->willReturn([]);
+
+        $request = new Request();
+        $request->query = ['to' => '2024-01-31'];
+
+        $response = (new StatsController($collector))->playback($request, []);
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * Both boundaries at once, plus the win-over-body law: the query pair
+     * outranks a contradictory body window — exactly the precedence the
+     * since/limit pins already hold.
+     */
+    public function test_playback_query_channel_window_wins_over_the_body(): void
+    {
+        $collector = $this->mockCollector();
+        $collector->expects($this->once())
+            ->method('getPlaybackStats')
+            ->with(
+                $this->callback(
+                    static fn (mixed $d): bool => $d instanceof DateTime && $d->format('Y-m-d') === '2024-01-01'
+                ),
+                $this->callback(
+                    static fn (mixed $d): bool => $d instanceof DateTime && $d->format('Y-m-d') === '2024-01-31'
+                )
+            )
+            ->willReturn([]);
+
+        $request = new Request();
+        $request->query = ['from' => '2024-01-01', 'to' => '2024-01-31'];
+        $request->body = ['from' => '2020-06-06', 'to' => '2020-07-07'];
+
+        $response = (new StatsController($collector))->playback($request, []);
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * Honest control (green before AND after): the pre-existing BODY channel
+     * keeps working byte-identically, and an absent pair still means the
+     * '-30 days'/'now' defaults.
+     */
+    public function test_playback_still_honors_a_body_channel_window(): void
+    {
+        $collector = $this->mockCollector();
+        $collector->expects($this->once())
+            ->method('getPlaybackStats')
+            ->with(
+                $this->callback(
+                    static fn (mixed $d): bool => $d instanceof DateTime && $d->format('Y-m-d') === '2024-02-02'
+                ),
+                $this->callback(
+                    static fn (mixed $d): bool => $d instanceof DateTime && $d->format('Y-m-d') === '2024-03-03'
+                )
+            )
+            ->willReturn([]);
+
+        $request = new Request();
+        $request->body = ['from' => '2024-02-02', 'to' => '2024-03-03'];
+
+        $response = (new StatsController($collector))->playback($request, []);
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    public function test_playback_without_any_window_keeps_the_relative_defaults(): void
+    {
+        $collector = $this->mockCollector();
+        $collector->expects($this->once())
+            ->method('getPlaybackStats')
+            ->with(
+                $this->callback(
+                    static function (mixed $d): bool {
+                        if (!$d instanceof DateTime) {
+                            return false;
+                        }
+                        // parseDate('now') lands a ~now DateTime; a local
+                        // '-30 days' lands strictly earlier than 29 days ago.
+                        return $d->getTimestamp() < time() - 29 * 86400;
+                    }
+                ),
+                $this->callback(
+                    static function (mixed $d): bool {
+                        return $d instanceof DateTime && abs($d->getTimestamp() - time()) < 60;
+                    }
+                )
+            )
+            ->willReturn([]);
+
+        $response = (new StatsController($collector))->playback(new Request(), []);
+        $this->assertSame(200, $response->statusCode);
+    }
 }

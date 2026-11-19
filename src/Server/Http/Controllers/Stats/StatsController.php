@@ -50,15 +50,22 @@ final class StatsController
      * `GET /api/v1/admin/stats/playback?from=2024-01-01&to=2024-01-31` →
      * `200 { "data": [{date, play_count, total_duration, completed_count}, ...] }`
      *
-     * @param Request              $request The HTTP request (query.from, query.to)
+     * `from`/`to` follow the same channel law as `since`/`limit` —
+     * query-first, body-second (SRV-3-r2 review: the doc example advertises
+     * the query window and `Request::input()` alone never saw it, so the
+     * documented `?from=`/`?to=` surface was dead-on-arrival). Their PARSING
+     * is unchanged: {@see self::parseDate()} keeps its documented leniency,
+     * and an absent param on both channels keeps the '-30 days'/'now' default.
+     *
+     * @param Request              $request The HTTP request (`from`/`to` read query-first, body-second)
      * @param array<string,string> $params  Path parameters (unused)
      *
      * @return Response JSON-encoded playback stats
      */
     public function playback(Request $request, array $params): Response
     {
-        $from = $this->parseDate($request->input('from', '-30 days'));
-        $to = $this->parseDate($request->input('to', 'now'));
+        $from = $this->parseDate($this->rawParam($request, 'from') ?? '-30 days');
+        $to = $this->parseDate($this->rawParam($request, 'to') ?? 'now');
 
         $stats = $this->collector->getPlaybackStats($from, $to);
 

@@ -71,15 +71,16 @@ final class TokenTest extends TestCase
         $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $secret);
     }
 
-    public function test_jti_is_16_bytes_matching_the_frozen_jwt_handler_shape(): void
+    public function test_jti_is_16_bytes_matching_the_jwt_handler_refresh_wire_shape(): void
     {
         $jti = Token::jti();
 
         $this->assertSame(
             32,
             \strlen($jti),
-            'Token::jti() must stay shape-identical to the frozen JwtHandler mint it replaces, '
-                . 'or the banked follow-up swap would silently change JWT wire payloads.'
+            'Token::jti() is the JWT id mint itself — JwtHandler delegates its refresh '
+                . 'jti here (SRV-TINIES ruling (ii)) — and a width change would silently '
+                . 'move JWT wire payloads and overflow the CHAR(32) auth_refresh_grants.jti PK.'
         );
         $this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $jti);
     }

@@ -616,6 +616,46 @@ class AudiobookControllerTest extends TestCase
         }
     }
 
+    /**
+     * E-17 shape-equality pin for the guard consolidation: the controller used
+     * to answer "missing file" from a bare file_exists() probe and "escaping
+     * file" from LibraryRootGuard with the SAME 404 body; the guard alone now
+     * covers both arms. This test is green before AND after the change by
+     * design — its whole point is that missing-in-root, missing-outside-root
+     * and empty path are indistinguishable at the wire (byte-identical 404),
+     * so removing the probe cannot alter any observable output.
+     */
+    public function testStreamAudiobookMissingAndEmptyPathsShareThe404Shape(): void
+    {
+        $baseDir = sys_get_temp_dir() . '/phlix_e17_missing_' . uniqid();
+        $libraryDir = $baseDir . '/library';
+        $previousRoots = getenv('PHLIX_LIBRARY_ROOTS');
+
+        try {
+            $this->assertNotFalse(mkdir($libraryDir, 0o755, true));
+            putenv('PHLIX_LIBRARY_ROOTS=' . $libraryDir);
+            LibraryRootGuard::reset();
+
+            $cases = [
+                'missing inside root'  => $libraryDir . '/absent.m4b',
+                'missing outside root' => $baseDir . '/absent.m4b',
+                'empty path'           => '',
+            ];
+            foreach ($cases as $label => $path) {
+                $response = $this->streamAsAudiobook('audiobook-missing', 'Missing', $path);
+                $this->assertSame(404, $response->statusCode, $label);
+                /** @var array<array-key, mixed> $body */
+                $body = json_decode($response->body, true);
+                $this->assertSame('Audiobook not found', $body['error'] ?? null, $label);
+            }
+        } finally {
+            putenv($previousRoots === false ? 'PHLIX_LIBRARY_ROOTS' : 'PHLIX_LIBRARY_ROOTS=' . $previousRoots);
+            LibraryRootGuard::reset();
+            @rmdir($libraryDir);
+            @rmdir($baseDir);
+        }
+    }
+
     public function testStreamAudiobookReturnsCompleteFileWithoutRange(): void
     {
         $itemRepo = $this->createMockItemRepo();

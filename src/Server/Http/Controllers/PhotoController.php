@@ -359,7 +359,13 @@ class PhotoController
         /** @var string */
         $path = $item['path'];
 
-        if (!file_exists($path)) {
+        // E-17: this arm used to be a bare file_exists() — a poisoned stored
+        // path to any real readable file (/etc/passwd shape, red-pinned by
+        // testGetFullReturns404WhenPathEscapesLibraryRoots) was served whole.
+        // Jail it like getThumbnail(): realpath()-based containment also
+        // implies existence, so a missing OR escaping path yields the same
+        // 404 (no path disclosure).
+        if (!LibraryRootGuard::assertWithinLibraryRoots($path)) {
             return (new Response())->status(404)->json([
                 'error' => 'Photo file not found',
             ]);

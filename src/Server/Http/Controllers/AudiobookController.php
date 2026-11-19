@@ -436,12 +436,15 @@ class AudiobookController
 
         $path = is_string($audiobook['path'] ?? null) ? $audiobook['path'] : '';
 
-        if (empty($path) || !file_exists($path)) {
-            return (new Response())->status(404)->json(['error' => 'Audiobook not found']);
-        }
-
-        // Validate path is within allowed media directory. Return 404 (not 403)
-        // on failure so a poisoned path cannot be used to probe the filesystem.
+        // E-17: the redundant `empty($path) || !file_exists($path)` probe that
+        // used to sit here answered the identical 404 body — dropped, not
+        // relocated: the guard's realpath() check implies existence and
+        // rejects the empty path outright, so every input maps to exactly the
+        // same output (missing/empty/escaping → 404 'Audiobook not found';
+        // in-root real file → stream), pinned by the jail and missing-file
+        // tests. Validate path is within allowed media directories. Return 404
+        // (not 403) on failure so a poisoned path cannot be used to probe the
+        // filesystem.
         if (!$this->validateMediaPath($path)) {
             return (new Response())->status(404)->json(['error' => 'Audiobook not found']);
         }

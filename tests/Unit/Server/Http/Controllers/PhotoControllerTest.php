@@ -356,6 +356,13 @@ class PhotoControllerTest extends TestCase
         $tempDir = sys_get_temp_dir();
         $testFile = $tempDir . '/test_full_' . uniqid() . '.jpg';
 
+        // E-17: getFull() jails the stored path through LibraryRootGuard like
+        // getThumbnail(); pin the temp dir as a library root so the fixture is
+        // a legitimate in-library path regardless of host layout.
+        $prevRoots = getenv('PHLIX_LIBRARY_ROOTS');
+        putenv('PHLIX_LIBRARY_ROOTS=' . $tempDir);
+        \Phlix\Common\Fs\LibraryRootGuard::reset();
+
         // Minimal JPEG
         $minimalJpeg = base64_decode(
             '/9j/4AAQSkZJRgABAQEAeAB4AAD/4QCmRXhpZgAATU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAAExAAIAAAAQAAAATgAAAAAAAAB4AAAAAQAAAHgAAAAB'
@@ -394,6 +401,12 @@ class PhotoControllerTest extends TestCase
             if (file_exists($testFile)) {
                 unlink($testFile);
             }
+            if ($prevRoots === false) {
+                putenv('PHLIX_LIBRARY_ROOTS');
+            } else {
+                putenv('PHLIX_LIBRARY_ROOTS=' . $prevRoots);
+            }
+            \Phlix\Common\Fs\LibraryRootGuard::reset();
         }
     }
 
@@ -411,6 +424,11 @@ class PhotoControllerTest extends TestCase
     {
         $tempDir = sys_get_temp_dir();
         $testFile = $tempDir . '/test_full_uc_' . uniqid() . '.jpg';
+
+        // E-17: see the jail pin note in the Range test above.
+        $prevRoots = getenv('PHLIX_LIBRARY_ROOTS');
+        putenv('PHLIX_LIBRARY_ROOTS=' . $tempDir);
+        \Phlix\Common\Fs\LibraryRootGuard::reset();
 
         $minimalJpeg = base64_decode(
             '/9j/4AAQSkZJRgABAQEAeAB4AAD/4QCmRXhpZgAATU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAAExAAIAAAAQAAAATgAAAAAAAAB4AAAAAQAAAHgAAAAB'
@@ -450,6 +468,12 @@ class PhotoControllerTest extends TestCase
             if (file_exists($testFile)) {
                 unlink($testFile);
             }
+            if ($prevRoots === false) {
+                putenv('PHLIX_LIBRARY_ROOTS');
+            } else {
+                putenv('PHLIX_LIBRARY_ROOTS=' . $prevRoots);
+            }
+            \Phlix\Common\Fs\LibraryRootGuard::reset();
         }
     }
 
@@ -458,6 +482,11 @@ class PhotoControllerTest extends TestCase
         // Create a temporary image file
         $tempDir = sys_get_temp_dir();
         $testFile = $tempDir . '/test_full_norange_' . uniqid() . '.jpg';
+
+        // E-17: see the jail pin note in the Range test above.
+        $prevRoots = getenv('PHLIX_LIBRARY_ROOTS');
+        putenv('PHLIX_LIBRARY_ROOTS=' . $tempDir);
+        \Phlix\Common\Fs\LibraryRootGuard::reset();
 
         // Minimal JPEG
         $minimalJpeg = base64_decode(
@@ -494,6 +523,12 @@ class PhotoControllerTest extends TestCase
             if (file_exists($testFile)) {
                 unlink($testFile);
             }
+            if ($prevRoots === false) {
+                putenv('PHLIX_LIBRARY_ROOTS');
+            } else {
+                putenv('PHLIX_LIBRARY_ROOTS=' . $prevRoots);
+            }
+            \Phlix\Common\Fs\LibraryRootGuard::reset();
         }
     }
 
@@ -541,6 +576,54 @@ class PhotoControllerTest extends TestCase
         $response = $this->controller->getFull($request, $params);
 
         $this->assertEquals(404, $response->statusCode);
+    }
+
+    /**
+     * E-17 (LibraryRootGuard mandate): getFull() used to gate only on
+     * file_exists() over the DB-stored path, so a poisoned row pointing at a
+     * real readable file OUTSIDE the library roots (here /etc/passwd — the
+     * shape the sibling getThumbnail jail test already pins) was served whole.
+     * The guard adoption must refuse it with the byte-identical 404 the
+     * missing-file arm already answers (no path disclosure, no 403 oracle).
+     */
+    public function testGetFullReturns404WhenPathEscapesLibraryRoots(): void
+    {
+        $request = new Request();
+        $params = ['id' => 'photo-evil'];
+
+        $this->db->method('query')->willReturn([
+            [
+                'id' => 'photo-evil',
+                'name' => 'Poisoned',
+                'type' => 'photo',
+                'library_id' => 'lib-1',
+                // A real, readable file that is NOT under any library root.
+                'path' => '/etc/passwd',
+                'metadata_json' => '{}',
+            ],
+        ]);
+
+        // Constrain roots to a directory that cannot contain /etc/passwd.
+        $prevRoots = getenv('PHLIX_LIBRARY_ROOTS');
+        putenv('PHLIX_LIBRARY_ROOTS=' . sys_get_temp_dir());
+        \Phlix\Common\Fs\LibraryRootGuard::reset();
+
+        try {
+            $response = $this->controller->getFull($request, $params);
+
+            $this->assertEquals(404, $response->statusCode);
+            /** @var array<array-key, mixed> $body */
+            $body = json_decode($response->body, true);
+            $this->assertSame(['error' => 'Photo file not found'], $body);
+            $this->assertStringNotContainsString('root:', $response->body);
+        } finally {
+            if ($prevRoots === false) {
+                putenv('PHLIX_LIBRARY_ROOTS');
+            } else {
+                putenv('PHLIX_LIBRARY_ROOTS=' . $prevRoots);
+            }
+            \Phlix\Common\Fs\LibraryRootGuard::reset();
+        }
     }
 
     public function testGetFullReturns416WhenRangeNotSatisfiable(): void

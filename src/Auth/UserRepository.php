@@ -629,7 +629,7 @@ class UserRepository
         if (!is_string($passwordRaw)) {
             throw new \InvalidArgumentException('The password must be text.');
         }
-        $passwordHash = password_hash($passwordRaw, PASSWORD_ARGON2ID);
+        $passwordHash = PasswordHasher::hash($passwordRaw);
 
         // Default to 'active' so existing callers (admin user create, external
         // provider create) keep producing immediately-usable accounts. The
@@ -704,7 +704,7 @@ class UserRepository
                 throw new \InvalidArgumentException('The password must be text.');
             }
             $sets[] = 'password_hash = ?';
-            $values[] = password_hash($passwordRaw, PASSWORD_ARGON2ID);
+            $values[] = PasswordHasher::hash($passwordRaw);
             // M-1 (security audit 2026-09-29): a password write IS a
             // revocation event — every JWT minted before it must die with the
             // old secret. Stamped HERE, inside the same UPDATE, because this
@@ -1103,7 +1103,46 @@ class UserRepository
             return false;
         }
 
-        return password_verify($password, $hash);
+        if (!PasswordHasher::verify($password, $hash)) {
+            return false;
+        }
+
+        // B-06 (2026-11-19) forward-only cost correction: a credential that
+        // just authenticated but was minted outside the canonical ARGON2ID
+        // parameters — old bare password_hash() calls, drifted host ini
+        // defaults, bcrypt/argon2i history — is re-minted now, at the moment
+        // the plaintext is legitimately in hand. No migration exists or is
+        // needed: password verification always reads the parameters embedded
+        // in each hash, so stale shapes keep working until their owner logs
+        // in. A failed verify never reaches this line.
+        if (PasswordHasher::needsRehash($hash)) {
+            $this->persistPasswordHash($id, PasswordHasher::hash($password));
+        }
+
+        return true;
+    }
+
+    /**
+     * Persist a re-minted credential from {@see self::verifyPassword()}.
+     *
+     * Deliberately NOT the M-1 revocation stamp: a transparent cost re-mint
+     * keeps the SAME secret valid, so tokens minted under the old (weaker)
+     * parameters stay valid — {@see self::update()} remains the only path
+     * where a password write is a revocation event. A DB failure here
+     * surfaces: the login itself already succeeded and the caller's session
+     * continues against the still-valid old hash, but the lane makes no
+     * silent promises (the same posture updateLastLogin() already has on
+     * this path). The request-scoped findById cache is dropped so a later
+     * read in the same request cannot act on the stale hash.
+     */
+    private function persistPasswordHash(string $id, string $hash): void
+    {
+        $this->db->query(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            [$hash, $id]
+        );
+
+        unset($this->cacheById[$id]);
     }
 
     /**
@@ -1115,8 +1154,9 @@ class UserRepository
      * itself enumerated accounts. Callers on the "no such user" path invoke
      * this BEFORE throwing the same generic error, making the two failure
      * timings indistinguishable. The dummy hash below is a real argon2id hash
-     * generated with the same default cost parameters {@see self::create()}
-     * uses (m=65536,t=4,p=1); its plaintext is unknown by construction and
+     * minted with the same canonical cost parameters
+     * {@see PasswordHasher::ARGON2ID_OPTIONS} that every SRV-4 mint passes
+     * explicitly (m=65536,t=4,p=1); its plaintext is unknown by construction and
      * the stored value is irrelevant — only its cost shape matters.
      *
      * @param string $password The candidate password to burn-verify.
@@ -1125,10 +1165,15 @@ class UserRepository
      */
     public function burnPasswordVerifyTime(string $password): void
     {
-        password_verify($password, self::TIMING_BURN_DUMMY_HASH);
+        PasswordHasher::verify($password, self::TIMING_BURN_DUMMY_HASH);
     }
 
-    /** Argon2id (default costs) dummy hash for {@see burnPasswordVerifyTime()}. */
+    /**
+     * Argon2id (canonical costs — {@see PasswordHasher::ARGON2ID_OPTIONS})
+     * dummy hash for {@see burnPasswordVerifyTime()}. Regenerate it in
+     * lockstep with any change to the canonical options; PasswordHasherTest
+     * pins the embedded parameters against the SSOT constant.
+     */
     private const TIMING_BURN_DUMMY_HASH =
         '$argon2id$v=19$m=65536,t=4,p=1$ajhMV1lZWk0wNUZYMUJJeA'
         . '$GnAZV0jZAc3B24RwsTj5qLoSiy6ITh4BFMMHxFIDdSQ';

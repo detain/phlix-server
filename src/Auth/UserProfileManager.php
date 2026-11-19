@@ -744,7 +744,7 @@ class UserProfileManager
         // survive a partial failure (M-SERVER-83 second leg).
         $this->createProfileSettings($id, [
             'content_rating' => $data['content_rating'] ?? self::DEFAULT_CONTENT_RATING,
-            'pin_hash' => isset($data['pin']) ? password_hash($data['pin'], PASSWORD_ARGON2ID) : null,
+            'pin_hash' => isset($data['pin']) ? PasswordHasher::hash($data['pin']) : null,
             'pin_required_for_admin' => $data['pin_required_for_admin'] ?? false,
             'max_daily_watch_time' => $data['max_daily_watch_time'] ?? 0,
             'allowed_genres' => $data['allowed_genres'] ?? null,
@@ -981,7 +981,7 @@ class UserProfileManager
             return false; // Fail closed: no PIN set is NOT a pass.
         }
 
-        return password_verify($pin, $pinHash);
+        return PasswordHasher::verify($pin, $pinHash);
     }
 
     /**
@@ -1035,7 +1035,7 @@ class UserProfileManager
             throw new \InvalidArgumentException('PIN must contain only digits');
         }
 
-        $pinHash = password_hash($pin, PASSWORD_ARGON2ID);
+        $pinHash = PasswordHasher::hash($pin);
 
         $this->db->query(
             "UPDATE profile_settings SET pin_hash = ? WHERE profile_id = ?",
@@ -1321,7 +1321,7 @@ class UserProfileManager
 
         if (isset($data['pin'])) {
             $sets[] = 'pin_hash = ?';
-            $values[] = password_hash($data['pin'], PASSWORD_ARGON2ID);
+            $values[] = PasswordHasher::hash($data['pin']);
         }
 
         if (isset($data['pin_required_for_admin'])) {

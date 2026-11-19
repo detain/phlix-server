@@ -13,6 +13,7 @@ namespace Phlix\Server\Http\Controllers\Admin;
 
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\Dto\UserRow;
+use Phlix\Auth\PasswordHasher;
 use Phlix\Auth\PasswordPolicy;
 use Phlix\Auth\UserRepository;
 use Phlix\Server\Http\Request;
@@ -545,7 +546,7 @@ final class AdminUserController
 
         // Generate a 32-byte (64-character hex) cryptographically secure token.
         $token = bin2hex(random_bytes(32));
-        $hashedToken = password_hash($token, PASSWORD_ARGON2ID);
+        $hashedToken = PasswordHasher::hash($token);
         $expiresAt = time() + 900; // 15 minutes from now.
 
         // Store the hashed token, its expiry, and force a password change.

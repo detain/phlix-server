@@ -1260,7 +1260,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // their untracked WIP too — that inflation is not baked in here. Reads/writes denominators are NOT
     // rotated by this lane: nothing SRV-4 adds speaks on a Request root, and the +3 writes drift
     // measured at this lane's arrival belongs to the sibling auth/stats waves, not to SRV-4.
-    private const EXPECTED_PHP_FILES = 2156;
+    // 2156→2157 (attributed foreign delta, landed after SRV-4.1 commit 1): the SRV-3.1 stats lane
+    // (379ea2bf) joined one new tracked file without rotating this pin.
+    // +2 2157→2159 (SRV-4.1 part 2): tests/Unit/Auth/PasswordHasherAdoptionTest.php and
+    // tests/Unit/Auth/PasswordHasherMintSiteCensusTest.php — the adoption pins and the executable
+    // SSOT guard for the mint-site migration and login-path rehash wiring. Pinned to the TRACKED
+    // set at this commit (git ls-files '*.php' = 2157 now; +2 mine); foreign untracked WIP on the
+    // shared working tree is again excluded. Reads/writes remain the siblings' duty.
+    private const EXPECTED_PHP_FILES = 2159;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

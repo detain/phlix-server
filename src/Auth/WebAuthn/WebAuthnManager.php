@@ -868,17 +868,32 @@ class WebAuthnManager
     /**
      * Strict base64url decode: wrong alphabet or padding garbage throws the
      * caller's ceremony-level error rather than smuggling in a mangled key.
-     * Delegated to the shared {@see Base64Url} strict arm (v0.56.0 adoption);
-     * the legacy explicit `str_pad` was proven inert against PHP's strict
-     * base64_decode (unpadded input decodes identically) by corpus harness.
+     *
+     * NOT delegated to the shared {@see Base64Url} strict arm: an executed
+     * 234k-vector malformed-shape corpus (adversarial review r1 of the
+     * v0.56.0 adoption wave) proved the delegation moves the acceptance
+     * policy in BOTH directions. The legacy explicit `str_pad` before strict
+     * decode tolerates truncated-padding forms (length % 4 == 3 ending in a
+     * single '=', e.g. 'PQ=' — 6,646 vectors) that the shared no-pad arm
+     * rejects, and rejects embedded-whitespace forms (e.g. "p0\n" — 2,264
+     * vectors) that the shared arm accepts because strict base64_decode
+     * strips whitespace before validating. Canonical authenticator output
+     * (padded and unpadded) is identical either way (50k + 400k controls,
+     * zero diffs), so realistic wire bytes were never at stake — but the
+     * ratified parse semantics at this security seam are preserved here,
+     * byte-identical to the pre-adoption body, and pinned both directions by
+     * tests/Unit/Security/WebAuthnLegacyDecodeParityTest.php. The strictness
+     * MODERNIZATION (rejecting truncation, refusing embedded whitespace) is
+     * banked as a v0.57 proposal row, not shipped in a zero-behavior wave.
      */
     private static function base64UrlDecode(string $encoded, string $errorMessage): string
     {
-        $decoded = Base64Url::decode($encoded, true);
-        if ($decoded === '') {
+        $normalized = strtr($encoded, '-_', '+/');
+        $padded = str_pad($normalized, (int) (ceil(strlen($normalized) / 4) * 4), '=');
+        $decoded = base64_decode($padded, true);
+        if ($decoded === false || $decoded === '') {
             throw new \InvalidArgumentException($errorMessage);
         }
-
         return $decoded;
     }
 

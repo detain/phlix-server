@@ -1396,7 +1396,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   RED and UNROTATED: measured zero own-delta (no $request-> line added or
     //   removed across the six converted files); foreign churn 517 vs 512 /
     //   1315 vs 1274 untouched per law.
-    private const EXPECTED_PHP_FILES = 2205;
+    private const EXPECTED_PHP_FILES = 2206;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

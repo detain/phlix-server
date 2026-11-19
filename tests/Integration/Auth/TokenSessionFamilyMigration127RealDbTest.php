@@ -142,7 +142,8 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
     private function apply128(): array
     {
         $this->migrationRuns++;
-        $fixDir = $this->scratchFixDir('fix-' . self::MIGRATION_128 . '-' . $this->migrationRuns, [self::MIGRATION_128]);
+        $migration = self::MIGRATION_128;
+        $fixDir = $this->scratchFixDir('fix-' . $migration . '-' . $this->migrationRuns, [$migration]);
 
         $db = $this->db;
         if (!$db instanceof Connection) {

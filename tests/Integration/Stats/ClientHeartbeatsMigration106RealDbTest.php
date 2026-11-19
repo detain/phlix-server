@@ -184,5 +184,4 @@ final class ClientHeartbeatsMigration106RealDbTest extends TestCase
         $this->assertIsArray($rows);
         $this->assertCount(1, $rows);
     }
-
 }

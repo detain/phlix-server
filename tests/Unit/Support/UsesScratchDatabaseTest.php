@@ -246,7 +246,11 @@ final class UsesScratchDatabaseTest extends TestCase
             }
         }
 
-        $this->assertSame([], $offenders, 'DB credentials must be resolved via UsesScratchDatabase::scratchCredentials(), not $_ENV (H-08)');
+        $this->assertSame(
+            [],
+            $offenders,
+            'DB credentials must resolve via UsesScratchDatabase::scratchCredentials(), not $_ENV (H-08)'
+        );
     }
 
     /**

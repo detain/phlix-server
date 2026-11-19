@@ -14,6 +14,7 @@ namespace Phlix\Media\Library;
 use InvalidArgumentException;
 use Phlix\Common\Database\MysqlError;
 use Phlix\Common\Database\WriteResult;
+use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
 use Workerman\MySQL\Connection;
 
@@ -1028,51 +1029,28 @@ class ScanJobRepository
      */
     private function decodeRow(array $row): array
     {
+        // Boundary narrowing per the WebAuthnCredentialRepository::normalizeRow
+        // law: the driver hands back array<array-key,mixed>; RowMap accessors
+        // consume array<string,mixed>. Int keys are never read here, so the
+        // discarding normalization is behavior-neutral.
+        $row = RowMap::fromMixed($row);
+
         return [
-            'id'            => is_string($row['id'] ?? null) ? $row['id'] : '',
-            'library_id'    => is_string($row['library_id'] ?? null) ? $row['library_id'] : '',
-            'type'          => is_string($row['type'] ?? null) ? $row['type'] : 'scan',
-            'status'        => is_string($row['status'] ?? null) ? $row['status'] : 'queued',
-            'items_found'   => $this->intColumn($row['items_found'] ?? null),
-            'items_added'   => $this->intColumn($row['items_added'] ?? null),
-            'items_updated' => $this->intColumn($row['items_updated'] ?? null),
-            'items_removed' => $this->intColumn($row['items_removed'] ?? null),
-            'items_failed'  => $this->intColumn($row['items_failed'] ?? null),
-            'current_path'  => $this->nullableString($row['current_path'] ?? null),
-            'error'         => $this->nullableString($row['error'] ?? null),
-            'queued_at'     => $this->nullableString($row['queued_at'] ?? null),
-            'started_at'    => $this->nullableString($row['started_at'] ?? null),
-            'completed_at'  => $this->nullableString($row['completed_at'] ?? null),
+            'id'            => RowMap::str($row, 'id', ''),
+            'library_id'    => RowMap::str($row, 'library_id', ''),
+            'type'          => RowMap::str($row, 'type', 'scan'),
+            'status'        => RowMap::str($row, 'status', 'queued'),
+            'items_found'   => RowMap::intFromNumeric($row, 'items_found', 0),
+            'items_added'   => RowMap::intFromNumeric($row, 'items_added', 0),
+            'items_updated' => RowMap::intFromNumeric($row, 'items_updated', 0),
+            'items_removed' => RowMap::intFromNumeric($row, 'items_removed', 0),
+            'items_failed'  => RowMap::intFromNumeric($row, 'items_failed', 0),
+            'current_path'  => RowMap::nullableScalarStr($row, 'current_path'),
+            'error'         => RowMap::nullableScalarStr($row, 'error'),
+            'queued_at'     => RowMap::nullableScalarStr($row, 'queued_at'),
+            'started_at'    => RowMap::nullableScalarStr($row, 'started_at'),
+            'completed_at'  => RowMap::nullableScalarStr($row, 'completed_at'),
         ];
-    }
-
-    /**
-     * Normalise a raw column value to a string, or null when it is SQL NULL.
-     *
-     * @param mixed $value Raw column value.
-     *
-     * @return string|null The string value, or null when null/non-scalar.
-     */
-    private function nullableString(mixed $value): ?string
-    {
-        if ($value === null) {
-            return null;
-        }
-
-        return is_scalar($value) ? (string) $value : null;
-    }
-
-    /**
-     * Coerce a raw counter column value to a non-negative int, defaulting to
-     * 0 for null / non-numeric input (counters are `INT UNSIGNED` columns).
-     *
-     * @param mixed $value Raw column value.
-     *
-     * @return int The integer value, or 0 when null/non-numeric.
-     */
-    private function intColumn(mixed $value): int
-    {
-        return is_numeric($value) ? (int) $value : 0;
     }
 
     /**

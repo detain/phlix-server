@@ -785,4 +785,107 @@ final class ScanJobRepositoryTest extends TestCase
         $this->assertSame(2, $calls);
         $this->assertTrue($result['created']);
     }
+
+    /**
+     * E-09 cohort 4 legacy oracle: the pre-migration decodeRow body (verbatim,
+     * local mirrors of the private nullableString()/intColumn() helpers) pinned
+     * against the shipped path on every column-shape vector.
+     */
+    public function testDecodeRowMatchesThePreMigrationBodyOnEveryPinVector(): void
+    {
+        $legacy = static function (array $row): array {
+            $nullableString = static function (mixed $value): ?string {
+                if ($value === null) {
+                    return null;
+                }
+
+                return is_scalar($value) ? (string) $value : null;
+            };
+            $intColumn = static function (mixed $value): int {
+                return is_numeric($value) ? (int) $value : 0;
+            };
+
+            return [
+                'id'            => is_string($row['id'] ?? null) ? $row['id'] : '',
+                'library_id'    => is_string($row['library_id'] ?? null) ? $row['library_id'] : '',
+                'type'          => is_string($row['type'] ?? null) ? $row['type'] : 'scan',
+                'status'        => is_string($row['status'] ?? null) ? $row['status'] : 'queued',
+                'items_found'   => $intColumn($row['items_found'] ?? null),
+                'items_added'   => $intColumn($row['items_added'] ?? null),
+                'items_updated' => $intColumn($row['items_updated'] ?? null),
+                'items_removed' => $intColumn($row['items_removed'] ?? null),
+                'items_failed'  => $intColumn($row['items_failed'] ?? null),
+                'current_path'  => $nullableString($row['current_path'] ?? null),
+                'error'         => $nullableString($row['error'] ?? null),
+                'queued_at'     => $nullableString($row['queued_at'] ?? null),
+                'started_at'    => $nullableString($row['started_at'] ?? null),
+                'completed_at'  => $nullableString($row['completed_at'] ?? null),
+            ];
+        };
+
+        $vectors = [
+            'happy' => [
+                'id' => 'sj-1',
+                'library_id' => 'lib-1',
+                'type' => 'scan',
+                'status' => 'running',
+                'items_found' => 100,
+                'items_added' => '42',
+                'items_updated' => null,
+                'items_removed' => '0',
+                'items_failed' => 7.0,
+                'current_path' => '/data/a.mkv',
+                'error' => null,
+                'queued_at' => '2026-08-07 10:00:00',
+                'started_at' => '',
+                'completed_at' => 1754560000,
+            ],
+            'missing-most' => ['type' => 'rescan'],
+            'junk-shapes' => [
+                'id' => null,
+                'library_id' => ['x'],
+                'type' => true,
+                'status' => 5,
+                'items_found' => 'abc',
+                'items_added' => true,
+                'items_updated' => [],
+                'items_removed' => 5.7,
+                'items_failed' => null,
+                'current_path' => ['a'],
+                'error' => 42,
+                'queued_at' => false,
+                'started_at' => '  ',
+                'completed_at' => null,
+                7 => 'int-key noise',
+            ],
+            'numeric-edge-counters' => [
+                'id' => 'sj-4',
+                'library_id' => 'lib-4',
+                'type' => '',
+                'status' => 'completed',
+                'items_found' => '1e3',
+                'items_added' => '0x1A',
+                'items_updated' => '-5',
+                'items_removed' => ' 42 ',
+                'items_failed' => '42.9',
+                'current_path' => null,
+                'error' => '',
+                'queued_at' => null,
+                'started_at' => null,
+                'completed_at' => null,
+            ],
+        ];
+
+        foreach ($vectors as $name => $row) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturnCallback(
+                static fn (): array => [$row],
+            );
+
+            $decoded = (new ScanJobRepository($db))->findById('job-x');
+
+            $this->assertIsArray($decoded, $name);
+            $this->assertSame($legacy($row), $decoded, $name);
+        }
+    }
 }

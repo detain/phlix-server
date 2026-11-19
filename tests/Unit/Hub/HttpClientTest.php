@@ -56,17 +56,19 @@ class HttpClientTest extends TestCase
         $this->assertIsString($log);
         $previous = ini_get('error_log');
         ini_set('error_log', $log);
+        $written = '';
         try {
             $client = new HttpClient('https://hub.example.com');
+            $written = (string) @file_get_contents($log);
         } finally {
             ini_set('error_log', is_string($previous) ? $previous : '');
+            // r1 review Info: unlink in finally so a red assertion below
+            // cannot leak the scratch file.
+            @unlink($log);
         }
 
         $this->assertTrue($client->isTlsVerifyEnabled());
-        $written = file_get_contents($log);
-        $this->assertIsString($written);
         $this->assertStringContainsString(HttpClient::ENV_TLS_VERIFY, $written);
-        @unlink($log);
     }
 
     public function test_hub_tls_verify_padded_and_blank_answers_are_preserved(): void

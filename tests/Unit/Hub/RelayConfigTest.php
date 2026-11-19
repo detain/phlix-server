@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Hub;
 
+use DI\ContainerBuilder;
 use PHPUnit\Framework\TestCase;
+use Phlix\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\RelayConfig;
 
 /**
@@ -297,6 +299,162 @@ final class RelayConfigTest extends TestCase
 
         putenv('PHLIX_RELAY_TLS_VERIFY= off');
         $this->assertFalse(RelayConfig::fromEnv()->relayTlsVerify, 'padded falsy word opts out (trim law)');
+    }
+
+    // ---- SRV-ENVBOOL-r2: config/relay.php converges on the same E-04 grammar ----
+    //
+    // The class-level pins above only governed the DIRECT env path. Production
+    // wiring (config/server.php:97 'relay' => require config/relay.php ->
+    // HubServicesProvider RelayConfig factory -> fromEnv($overrides)) answers
+    // these knobs at the CONFIG LAYER first, whose three same-named reads used
+    // the pre-E-04 filter_var/`?:` grammar (r1 review MAJOR). They now delegate
+    // to EnvConfig, so every path speaks one grammar. Disclosed answer changes
+    // on the live (config/DI) path — probe table reviews/envbool-r2-old.tsv:
+    //   (a) PHLIX_RELAY_TLS_VERIFY='0'  : shadow `?:` swallowed the falsy
+    //       string to 'true' -> ON despite the file's own comment promising
+    //       the opt-out; now FALSE (opt-out respected).
+    //   (b) PHLIX_RELAY_TLS_VERIFY junk ('maybe','-1'): filter_var invalid ->
+    //       silent FALSE = verification fail-OPEN; now default TRUE (secure-on)
+    //       and LOUD. Nothing shipped sets either value: deploy grep finds no
+    //       artifact setting PHLIX_RELAY_TLS_VERIFY at all (.github/, docker,
+    //       k8s, systemd, scripts/), so (a) can bite only hand-edited env.
+
+    private const CONFIG_RELAY_FILE = __DIR__ . '/../../../config/relay.php';
+
+    public function test_config_relay_file_tls_verify_follows_the_opt_out_grammar(): void
+    {
+        // Default secure-on (preserved on every path shape).
+        $this->assertTrue($this->configRelayValue('PHLIX_RELAY_TLS_VERIFY', 'unset'));
+        // Explicit opt-outs RESPECTED — the documented purpose of the knob.
+        // '0' is disclosed flip class (a): the shadow answered TRUE.
+        $this->assertFalse($this->configRelayValue('PHLIX_RELAY_TLS_VERIFY', '0'));
+        $this->assertFalse($this->configRelayValue('PHLIX_RELAY_TLS_VERIFY', 'false'));
+        $this->assertFalse($this->configRelayValue('PHLIX_RELAY_TLS_VERIFY', ' off'));
+        // Truthy words keep verification (preserved).
+        $this->assertTrue($this->configRelayValue('PHLIX_RELAY_TLS_VERIFY', '1'));
+        $this->assertTrue($this->configRelayValue('PHLIX_RELAY_TLS_VERIFY', '  true  '));
+        // Junk keeps the safe default TRUE — disclosed flip class (b): the
+        // shadow failed OPEN to FALSE silently for these exact spellings.
+        $this->assertTrue($this->configRelayValue('PHLIX_RELAY_TLS_VERIFY', 'maybe'));
+        $this->assertTrue($this->configRelayValue('PHLIX_RELAY_TLS_VERIFY', '-1'));
+        // Not-provided shapes take the default (preserved).
+        $this->assertTrue($this->configRelayValue('PHLIX_RELAY_TLS_VERIFY', ''));
+    }
+
+    public function test_config_relay_file_relay_tls_and_require_tls_answers_are_preserved(): void
+    {
+        // relay_tls (default false): full answer space agrees OLD vs NEW — the
+        // migration adds only the junk announcement, zero answer changes.
+        $this->assertFalse($this->configRelayValue('PHLIX_RELAY_TLS', 'unset'));
+        $this->assertFalse($this->configRelayValue('PHLIX_RELAY_TLS', ''));
+        $this->assertFalse($this->configRelayValue('PHLIX_RELAY_TLS', '0'));
+        $this->assertTrue($this->configRelayValue('PHLIX_RELAY_TLS', '1'));
+        $this->assertTrue($this->configRelayValue('PHLIX_RELAY_TLS', ' yes'));
+        $this->assertFalse($this->configRelayValue('PHLIX_RELAY_TLS', 'off'));
+        $this->assertFalse($this->configRelayValue('PHLIX_RELAY_TLS', 'maybe'));
+        // require_tls: the closure was already boolOptOut-shaped — every
+        // spelling preserved ('0' opts out WITHOUT the :47 `?:` swallowing).
+        $this->assertTrue($this->configRelayValue('PHLIX_RELAY_REQUIRE_TLS', 'unset'));
+        $this->assertTrue($this->configRelayValue('PHLIX_RELAY_REQUIRE_TLS', ''));
+        $this->assertFalse($this->configRelayValue('PHLIX_RELAY_REQUIRE_TLS', '0'));
+        $this->assertTrue($this->configRelayValue('PHLIX_RELAY_REQUIRE_TLS', 'maybe'));
+        $this->assertFalse($this->configRelayValue('PHLIX_RELAY_REQUIRE_TLS', 'no'));
+    }
+
+    public function test_config_relay_file_announces_junk_on_the_production_path(): void
+    {
+        // The config layer used to answer junk silently (relay_tls 'maybe' ->
+        // FALSE no-words, tls_verify junk -> fail-open FALSE). With EnvConfig
+        // the typo announces itself once per knob exactly where the operator
+        // set it. Reader-level warning grammar is pinned exhaustively in
+        // EnvConfigTest; these legs pin that the PRODUCTION parse path logs.
+        $log = $this->capturedErrorLog(function (): void {
+            $cfg = require self::CONFIG_RELAY_FILE;
+            $this->assertTrue($cfg['relay_tls_verify']);
+        }, 'PHLIX_RELAY_TLS_VERIFY=maybe');
+        $this->assertStringContainsString('PHLIX_RELAY_TLS_VERIFY', $log);
+    }
+
+    public function test_di_final_relay_config_respects_the_tls_verify_opt_out_the_config_promise(): void
+    {
+        // Production truth: the DI factory ALWAYS overlays the parsed
+        // config/relay.php, so this pins the effective container answer.
+        // Pre-migration the shadow made PHLIX_RELAY_TLS_VERIFY=0 unreachable
+        // (always ON via `?:`); it now opts out, matching the file's comment.
+        $config = $this->relayConfigFromContainer('PHLIX_RELAY_TLS_VERIFY=0');
+        $this->assertFalse($config->relayTlsVerify, '=0 must disable verification on the DI path');
+        // The other bool knobs answer their defaults unaffected on this path.
+        $this->assertFalse($config->relayTls);
+        $this->assertTrue($config->requireTls);
+    }
+
+    public function test_di_final_junk_keeps_verification_secure_on_and_silence_is_gone(): void
+    {
+        $config = $this->relayConfigFromContainer('PHLIX_RELAY_TLS_VERIFY=maybe');
+        // Fail-OPEN shadow (FALSE) is dead: junk keeps the safe ON.
+        $this->assertTrue($config->relayTlsVerify);
+        // require_tls opt-out survives end-to-end on the DI path (preserved).
+        $requireOff = $this->relayConfigFromContainer('PHLIX_RELAY_REQUIRE_TLS=0');
+        $this->assertFalse($requireOff->requireTls);
+    }
+
+    /**
+     * Parse the REAL shipped config/relay.php with one env knob set.
+     */
+    private function configRelayValue(string $envName, string $value): bool
+    {
+        if ($value === 'unset') {
+            putenv($envName);
+        } else {
+            putenv($envName . '=' . $value);
+        }
+        $cfg = require self::CONFIG_RELAY_FILE;
+        $key = [
+            'PHLIX_RELAY_TLS' => 'relay_tls',
+            'PHLIX_RELAY_TLS_VERIFY' => 'relay_tls_verify',
+            'PHLIX_RELAY_REQUIRE_TLS' => 'require_tls',
+        ][$envName];
+        $this->assertIsBool($cfg[$key]);
+        return $cfg[$key];
+    }
+
+    /**
+     * The container-built RelayConfig exactly as HubServicesProvider assembles
+     * it (config/server.php passes require config/relay.php as $appConfig['relay']).
+     */
+    private function relayConfigFromContainer(string ...$envSets): RelayConfig
+    {
+        foreach ($envSets as $set) {
+            putenv($set);
+        }
+        $builder = new ContainerBuilder();
+        $builder->useAutowiring(true);
+        (new HubServicesProvider())->register($builder, ['relay' => require self::CONFIG_RELAY_FILE]);
+        $container = $builder->build();
+        $config = $container->get(RelayConfig::class);
+        $this->assertInstanceOf(RelayConfig::class, $config);
+        return $config;
+    }
+
+    /**
+     * EnvConfigTest idiom: route error_log to a temp file for one closure.
+     */
+    private function capturedErrorLog(callable $run, string $envSet): string
+    {
+        putenv($envSet);
+        $path = tempnam(sys_get_temp_dir(), 'srvenvbool-r2-');
+        $this->assertIsString($path);
+        $previous = ini_get('error_log');
+        ini_set('error_log', $path);
+        $log = '';
+        try {
+            $run();
+            $log = (string) @file_get_contents($path);
+        } finally {
+            ini_set('error_log', is_string($previous) ? $previous : '');
+            unlink($path);
+        }
+        return $log;
     }
 
     // ---- R18-17: typed env parsing (empty = unset; old `?:` falsiness preserved) ----

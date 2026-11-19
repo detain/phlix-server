@@ -38,13 +38,23 @@ return [
     // (:8802) is plaintext unless HUB_RELAY_TLS=true is set on the hub. Only the
     // DERIVED relay scheme is affected; an explicit hub_relay_ws_url above wins.
     // Enable here (PHLIX_RELAY_TLS=1) AND on the hub (HUB_RELAY_TLS=true) together.
-    'relay_tls' => filter_var(getenv('PHLIX_RELAY_TLS') ?: 'false', FILTER_VALIDATE_BOOLEAN),
+    // E-04 grammar (SRV-ENVBOOL-r2): EnvConfig::bool — answers identical to the
+    // old filter_var(`?:`) line for every spelling; junk now announces itself.
+    'relay_tls' => EnvConfig::bool('PHLIX_RELAY_TLS', false),
 
     // Verify the hub's presented relay TLS certificate (default: secure/on).
     // Set PHLIX_RELAY_TLS_VERIFY=0 to accept a self-signed hub relay cert
     // (verify_peer=false + allow_self_signed). Production should use a CA-signed
     // cert and leave verification on.
-    'relay_tls_verify' => filter_var(getenv('PHLIX_RELAY_TLS_VERIFY') ?: 'true', FILTER_VALIDATE_BOOLEAN),
+    // E-04 grammar (SRV-ENVBOOL-r2): EnvConfig::boolOptOut. Disclosed answer
+    // changes vs the old `?:`+filter_var shadow (r1 review MAJOR — this layer
+    // always answered first on the DI path): '0' was swallowed by string
+    // truthiness to ON, breaking the opt-out THIS COMMENT PROMISES — it now
+    // opts out; junk/typos ('maybe') answered a silent FALSE (verification
+    // fail-OPEN) — they now keep the safe default ON and log loudly. No
+    // shipped artifact sets this knob (deploy grep: .github/, docker, k8s,
+    // systemd, scripts all clear), so only hand-edited env observes the flips.
+    'relay_tls_verify' => EnvConfig::boolOptOut('PHLIX_RELAY_TLS_VERIFY'),
 
     // CA bundle used to verify the hub's relay TLS certificate (default = system).
     // Anchor law (audit §5.2): CA/root certificates only — NEVER the hub's
@@ -61,13 +71,10 @@ return [
     // flag WINS over allow_plaintext_tunnel: an explicit ACK cannot re-open a
     // refused dial. Default TRUE (secure-by-default, flipped from warn-only);
     // PHLIX_RELAY_REQUIRE_TLS=0 opts out (a startup log line records it).
-    'require_tls' => (static function (): bool {
-        $raw = getenv('PHLIX_RELAY_REQUIRE_TLS');
-        if ($raw === false || trim($raw) === '') {
-            return true;
-        }
-        return filter_var($raw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true;
-    })(),
+    // E-04 grammar (SRV-ENVBOOL-r2): the hand-rolled closure was already
+    // boolOptOut-shaped — every answer preserved — so it now IS the reader
+    // (trim + words + junk-stays-secure + loud), not an approximation of it.
+    'require_tls' => EnvConfig::boolOptOut('PHLIX_RELAY_REQUIRE_TLS'),
 
     // This server's own local HTTP listener that relayed client bytes are piped to.
     'local_http_address' => '127.0.0.1:8096',

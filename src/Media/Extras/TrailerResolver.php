@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Extras;
 
+use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Metadata\TmdbProvider;
@@ -262,17 +263,20 @@ class TrailerResolver
         $rows = $this->extras->findTrailersByMediaItemId($mediaItemId);
 
         return array_map(function ($row) {
-            $source = is_string($row['source'] ?? null) ? $row['source'] : '';
+            // E-09 cohort 5a: RowMap fold of the pre-fold strict-guard ternaries
+            // (fallbacks transcribed); byte-identity pinned by the legacy-oracle
+            // vectors in tests/Unit/Media/Extras/TrailerResolverTest.php.
+            $source = RowMap::str($row, 'source', '');
             return new Trailer(
-                id: is_string($row['id'] ?? null) ? $row['id'] : '',
-                mediaItemId: is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '',
-                title: is_string($row['title'] ?? null) ? $row['title'] : '',
+                id: RowMap::str($row, 'id', ''),
+                mediaItemId: RowMap::str($row, 'media_item_id', ''),
+                title: RowMap::str($row, 'title', ''),
                 source: $source,
-                url: is_string($row['url'] ?? null) ? $row['url'] : '',
-                duration: is_numeric($row['duration'] ?? null) ? (int) $row['duration'] : 0,
-                quality: is_numeric($row['quality'] ?? null) ? (int) $row['quality'] : 0,
+                url: RowMap::str($row, 'url', ''),
+                duration: RowMap::intFromNumeric($row, 'duration', 0),
+                quality: RowMap::intFromNumeric($row, 'quality', 0),
                 isLocal: $source === 'local',
-                filePath: is_string($row['file_path'] ?? null) ? $row['file_path'] : ''
+                filePath: RowMap::str($row, 'file_path', '')
             );
         }, $rows);
     }
@@ -289,19 +293,22 @@ class TrailerResolver
         $rows = $this->extras->findNonTrailerExtrasByMediaItemId($mediaItemId);
 
         return array_map(function ($row) {
-            $source = is_string($row['source'] ?? null) ? $row['source'] : '';
-            $type = is_string($row['extra_type'] ?? null) ? $row['extra_type'] : 'clip';
+            // E-09 cohort 5a: RowMap fold of the pre-fold strict-guard ternaries
+            // (fallbacks transcribed); byte-identity pinned by the legacy-oracle
+            // vectors in tests/Unit/Media/Extras/TrailerResolverTest.php.
+            $source = RowMap::str($row, 'source', '');
+            $type = RowMap::str($row, 'extra_type', 'clip');
             return new Extra(
-                id: is_string($row['id'] ?? null) ? $row['id'] : '',
-                mediaItemId: is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '',
-                title: is_string($row['title'] ?? null) ? $row['title'] : '',
+                id: RowMap::str($row, 'id', ''),
+                mediaItemId: RowMap::str($row, 'media_item_id', ''),
+                title: RowMap::str($row, 'title', ''),
                 type: $type,
                 source: $source,
-                url: is_string($row['url'] ?? null) ? $row['url'] : '',
-                duration: is_numeric($row['duration'] ?? null) ? (int) $row['duration'] : 0,
-                quality: is_numeric($row['quality'] ?? null) ? (int) $row['quality'] : 0,
+                url: RowMap::str($row, 'url', ''),
+                duration: RowMap::intFromNumeric($row, 'duration', 0),
+                quality: RowMap::intFromNumeric($row, 'quality', 0),
                 isLocal: $source === 'local',
-                filePath: is_string($row['file_path'] ?? null) ? $row['file_path'] : ''
+                filePath: RowMap::str($row, 'file_path', '')
             );
         }, $rows);
     }

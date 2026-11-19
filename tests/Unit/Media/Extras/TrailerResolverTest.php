@@ -251,4 +251,144 @@ class TrailerResolverTest extends TestCase
         // this path; getTrailers() returns the merged trailer list.
         $this->resolver->getTrailers($mediaItemId);
     }
+
+    /**
+     * E-09 cohort 5a legacy oracle: the two build*FromDb closures of
+     * TrailerResolver reshaped through RowMap must be byte-identical to the
+     * pre-fold strict-guard ternaries (transcribed verbatim below from the
+     * 6cd39c5d state of src/Media/Extras/TrailerResolver.php) across the whole
+     * type domain the SELECT * FROM media_extras feed can deliver.
+     *
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private function legacyTrailerShape(array $row): array
+    {
+        $source = is_string($row['source'] ?? null) ? $row['source'] : '';
+        return [
+            'id' => is_string($row['id'] ?? null) ? $row['id'] : '',
+            'mediaItemId' => is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '',
+            'title' => is_string($row['title'] ?? null) ? $row['title'] : '',
+            'source' => $source,
+            'url' => is_string($row['url'] ?? null) ? $row['url'] : '',
+            'duration' => is_numeric($row['duration'] ?? null) ? (int) $row['duration'] : 0,
+            'quality' => is_numeric($row['quality'] ?? null) ? (int) $row['quality'] : 0,
+            'isLocal' => $source === 'local',
+            'filePath' => is_string($row['file_path'] ?? null) ? $row['file_path'] : '',
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private function legacyExtraShape(array $row): array
+    {
+        $source = is_string($row['source'] ?? null) ? $row['source'] : '';
+        $type = is_string($row['extra_type'] ?? null) ? $row['extra_type'] : 'clip';
+        return [
+            'id' => is_string($row['id'] ?? null) ? $row['id'] : '',
+            'mediaItemId' => is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '',
+            'title' => is_string($row['title'] ?? null) ? $row['title'] : '',
+            'type' => $type,
+            'source' => $source,
+            'url' => is_string($row['url'] ?? null) ? $row['url'] : '',
+            'duration' => is_numeric($row['duration'] ?? null) ? (int) $row['duration'] : 0,
+            'quality' => is_numeric($row['quality'] ?? null) ? (int) $row['quality'] : 0,
+            'isLocal' => $source === 'local',
+            'filePath' => is_string($row['file_path'] ?? null) ? $row['file_path'] : '',
+        ];
+    }
+
+    /**
+     * @return array<string, array<string, mixed>>
+     */
+    private function trailerRowVectors(): array
+    {
+        $typed = [
+            'id' => 'tr-1',
+            'media_item_id' => 'm-1',
+            'title' => 'Official Trailer',
+            'extra_type' => 'trailer',
+            'source' => 'local',
+            'url' => 'file:///x.mkv',
+            'file_path' => '/x.mkv',
+            'duration' => 120,
+            'quality' => 1080,
+            'cached_at' => '2026-01-15 10:30:00',
+        ];
+        $nulls = array_fill_keys(array_keys($typed), null);
+        $numericStrings = $typed + ['duration' => '120', 'quality' => '720p', 'source' => 'tmdb'];
+        $decimalStrings = $typed + ['duration' => '12.9', 'quality' => '1080.0'];
+        $floatsAndBools = $typed + ['duration' => 120.0, 'quality' => true, 'source' => false];
+        $wrongTypes = $typed + [
+            'id' => 5,
+            'media_item_id' => [],
+            'title' => 1.5,
+            'url' => true,
+            'file_path' => ['a'],
+            'duration' => ['120'],
+        ];
+        $empties = $typed + ['source' => '', 'url' => '', 'file_path' => '', 'duration' => '', 'extra_type' => ''];
+        $missing = $typed;
+        unset($missing['duration'], $missing['quality'], $missing['file_path'], $missing['source']);
+        return [
+            'typed' => $typed,
+            'null-columns' => $nulls,
+            'numeric-strings' => $numericStrings,
+            'decimal-strings-truncate-like-legacy-cast' => $decimalStrings,
+            'floats-and-bools' => $floatsAndBools,
+            'wrong-types' => $wrongTypes,
+            'empty-strings' => $empties,
+            'missing-keys' => $missing,
+        ];
+    }
+
+    public function testDatabaseRowShapingIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        foreach ($this->trailerRowVectors() as $label => $row) {
+            $extras = $this->createMock(ExtrasRepository::class);
+            $extras->method('isCacheValid')->willReturn(true);
+            $extras->method('findTrailersByMediaItemId')->willReturn([$row]);
+            $extras->method('findNonTrailerExtrasByMediaItemId')->willReturn([$row]);
+            $resolver = new TrailerResolver(
+                $this->createMock(ItemRepository::class),
+                $this->createMock(TmdbProvider::class),
+                $extras,
+                $this->createMock(TrailerFinder::class),
+                86400
+            );
+
+            $trailers = $resolver->getTrailers('m-1');
+            $this->assertCount(1, $trailers, $label);
+            $trailer = $trailers[0];
+            $this->assertSame($this->legacyTrailerShape($row), [
+                'id' => $trailer->id,
+                'mediaItemId' => $trailer->mediaItemId,
+                'title' => $trailer->title,
+                'source' => $trailer->source,
+                'url' => $trailer->url,
+                'duration' => $trailer->duration,
+                'quality' => $trailer->quality,
+                'isLocal' => $trailer->isLocal,
+                'filePath' => $trailer->filePath,
+            ], 'trailer leg: ' . $label);
+
+            $extraList = $resolver->getExtras('m-1');
+            $this->assertCount(1, $extraList, $label);
+            $extra = $extraList[0];
+            $this->assertSame($this->legacyExtraShape($row), [
+                'id' => $extra->id,
+                'mediaItemId' => $extra->mediaItemId,
+                'title' => $extra->title,
+                'type' => $extra->type,
+                'source' => $extra->source,
+                'url' => $extra->url,
+                'duration' => $extra->duration,
+                'quality' => $extra->quality,
+                'isLocal' => $extra->isLocal,
+                'filePath' => $extra->filePath,
+            ], 'extra leg: ' . $label);
+        }
+    }
 }

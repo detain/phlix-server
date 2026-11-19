@@ -57,7 +57,9 @@ final class PruneDeadline
     public static function atMostUnixTime(int $timestamp): self
     {
         if ($timestamp < 0) {
-            throw new InvalidArgumentException('Prune deadline Unix time must be non-negative, got ' . $timestamp . '.');
+            throw new InvalidArgumentException(
+                'Prune deadline Unix time must be non-negative, got ' . $timestamp . '.'
+            );
         }
 
         return new self('<=', '?', [$timestamp]);

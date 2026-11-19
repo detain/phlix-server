@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Collections;
 
+use Phlix\Common\Util\RowMap;
+
 /**
  * Readonly entity representing a media collection.
  *
@@ -69,20 +71,23 @@ final class Collection
      */
     public static function fromRow(array $row): self
     {
-        $id = is_string($row['id'] ?? null) ? $row['id'] : '';
-        $name = is_string($row['name'] ?? null) ? $row['name'] : '';
-        $libraryId = is_string($row['library_id'] ?? null) ? $row['library_id'] : '';
-        $smartPlaylistId = is_string($row['smart_playlist_id'] ?? null) ? $row['smart_playlist_id'] : null;
-        $parentId = is_string($row['parent_id'] ?? null) ? $row['parent_id'] : null;
-        $sortOrderRaw = $row['sort_order'] ?? null;
-        $sortOrder = is_int($sortOrderRaw)
-            ? $sortOrderRaw
-            : (is_numeric($sortOrderRaw) ? (int)$sortOrderRaw : 0);
-        $createdAt = is_string($row['created_at'] ?? null) ? $row['created_at'] : 'now';
-        $updatedAt = is_string($row['updated_at'] ?? null) ? $row['updated_at'] : 'now';
+        // E-09: every column's NULL-handling is an EXPLICIT argument here
+        // (the legacy ternaries' fallbacks, transcribed — never silently
+        // harmonized). The strict/numeric families match the legacy
+        // narrowing per column: sort_order was numeric-coercive, the
+        // string columns strict; the byte-identity pin lives in
+        // tests/Unit/Collections/CollectionFromRowByteIdentityTest.php.
+        $id = RowMap::str($row, 'id', '');
+        $name = RowMap::str($row, 'name', '');
+        $libraryId = RowMap::str($row, 'library_id', '');
+        $smartPlaylistId = RowMap::nullableStr($row, 'smart_playlist_id');
+        $parentId = RowMap::nullableStr($row, 'parent_id');
+        $sortOrder = RowMap::intFromNumeric($row, 'sort_order', 0);
+        $createdAt = RowMap::str($row, 'created_at', 'now');
+        $updatedAt = RowMap::str($row, 'updated_at', 'now');
         // Missing key (pre-112 fixtures) and SQL NULL both hydrate to null —
         // the legacy/unowned policy value, not a parse failure.
-        $createdBy = is_string($row['created_by'] ?? null) ? $row['created_by'] : null;
+        $createdBy = RowMap::nullableStr($row, 'created_by');
 
         return new self(
             id: $id,

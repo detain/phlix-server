@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Admin;
 
+use Phlix\Common\Util\RowMap;
 use DateTimeInterface;
 use Smarty\Smarty;
 use Phlix\Media\Library\LibraryManager;
@@ -310,10 +311,15 @@ class NewsletterGenerator
 
         $named = array_values(array_filter(
             $rows,
-            static fn (array $row): bool => is_string($row['name'] ?? null) && $row['name'] !== ''
+            // E-09 cohort 5a: RowMap call-swap — nullableNonEmptyStr(...)!==null
+            // is value-identical to the pre-fold is_string && !== '' predicate.
+            // Pinned by the legacy-oracle vectors in
+            // tests/Unit/Admin/NewsletterGeneratorTest.php.
+            static fn (array $row): bool => RowMap::nullableNonEmptyStr(RowMap::fromMixed($row), 'name') !== null
         ));
 
         return array_map(function (array $row): array {
+            $row = RowMap::fromMixed($row);
             $posterUrl = $row['poster_url'] ?? null;
             if (is_string($posterUrl) && str_starts_with($posterUrl, '"')) {
                 $decoded = json_decode($posterUrl, true);
@@ -321,10 +327,10 @@ class NewsletterGenerator
             }
 
             return [
-                'media_item_id' => is_string($row['media_item_id']) ? $row['media_item_id'] : '',
-                'name' => (string) $row['name'],
+                'media_item_id' => RowMap::str($row, 'media_item_id', ''),
+                'name' => RowMap::str($row, 'name', ''),
                 'poster_url' => is_string($posterUrl) ? $posterUrl : null,
-                'play_count' => is_numeric($row['play_count']) ? (int) $row['play_count'] : 0,
+                'play_count' => RowMap::intFromNumeric($row, 'play_count', 0),
             ];
         }, $named);
     }

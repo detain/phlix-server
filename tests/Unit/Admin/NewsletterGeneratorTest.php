@@ -15,6 +15,7 @@ use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Stats\StatsCollector;
+use ReflectionMethod;
 use Workerman\MySQL\Connection;
 
 /**
@@ -374,5 +375,71 @@ class NewsletterGeneratorTest extends TestCase
             $result['html_body']
         );
         $this->assertStringNotContainsString('<title>Phlix <b>Weekly</b></title>', $result['html_body']);
+    }
+
+    /**
+     * E-09 cohort 5a (W5): getTopMedia name-predicate call-swap +
+     * media_item_id/name/play_count fold legs vs the pre-fold predicate and
+     * ternaries (verbatim); poster_url JSON-unwrap leg KEPT and transcribed.
+     */
+    public function test_top_media_row_decode_legs_are_byte_identical_to_legacy_across_vectors(): void
+    {
+        $method = new ReflectionMethod(NewsletterGenerator::class, 'getTopMedia');
+        $method->setAccessible(true);
+
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['name' => 'Dune', 'media_item_id' => 'm-1', 'poster_url' => 'https://p', 'play_count' => 5],
+            ['name' => '', 'media_item_id' => 'm-2', 'poster_url' => 'p', 'play_count' => '7'],
+            ['name' => null, 'media_item_id' => 'm-3', 'poster_url' => null, 'play_count' => 1],
+            ['name' => 42, 'media_item_id' => 'm-4', 'poster_url' => 'json-str', 'play_count' => 2.9],
+            [
+                'name' => 'Villeneuve',
+                'media_item_id' => 7,
+                'poster_url' => "\"escaped\"",
+                'play_count' => true,
+            ],
+            ['name' => 'X', 'media_item_id' => null, 'poster_url' => 5, 'play_count' => 'abc'],
+        ];
+
+        foreach ($vectors as $row) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+            $generator = new NewsletterGenerator(
+                $this->createMock(StatsCollector::class),
+                $this->createMock(LibraryManager::class),
+                $db,
+                sys_get_temp_dir() . '/phlix_c5a_ng'
+            );
+
+            $actual = $method->invoke(
+                $generator,
+                'user-1',
+                new DateTime('2026-01-01'),
+                new DateTime('2026-01-08')
+            );
+
+            $keep = is_string($row['name'] ?? null) && $row['name'] !== '';
+            if (!$keep) {
+                $this->assertSame([], $actual, 'kept predicate for vector ' . json_encode($row));
+                continue;
+            }
+
+            $posterUrl = $row['poster_url'] ?? null;
+            if (is_string($posterUrl) && str_starts_with($posterUrl, '"')) {
+                $decoded = json_decode($posterUrl, true);
+                $posterUrl = is_string($decoded) ? $decoded : $posterUrl;
+            }
+            $this->assertSame(
+                [[
+                    'media_item_id' => is_string($row['media_item_id']) ? $row['media_item_id'] : '',
+                    'name' => (string) $row['name'],
+                    'poster_url' => is_string($posterUrl) ? $posterUrl : null,
+                    'play_count' => is_numeric($row['play_count']) ? (int) $row['play_count'] : 0,
+                ]],
+                $actual,
+                'legs for vector ' . json_encode($row)
+            );
+        }
     }
 }

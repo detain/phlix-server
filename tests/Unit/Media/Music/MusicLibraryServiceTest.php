@@ -505,4 +505,106 @@ final class MusicLibraryServiceTest extends TestCase
 
         return $captured;
     }
+
+    /**
+     * E-09 cohort 5a: pins the RowMap fold of the three music rollup row
+     * decoders against verbatim transcriptions of the pre-fold ??-guarded
+     * strict ternaries (ca91c293 shape).
+     */
+    public function testArtistTitleRowDecodeIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['artist_id' => 7, 'title' => 'A'],
+            ['artist_id' => '2.75', 'title' => null],
+            ['artist_id' => '7', 'title' => 5],
+            ['artist_id' => 7.9, 'title' => 'x'],
+            ['artist_id' => true, 'title' => 'skipped'],
+            ['artist_id' => null, 'title' => 'skipped'],
+            ['title' => 'no id'],
+            ['artist_id' => 'abc', 'title' => ''],
+        ];
+
+        foreach ($vectors as $row) {
+            // Verbatim from the ca91c293 tree.
+            $expected = [];
+            $artistId = is_numeric($row['artist_id'] ?? null) ? (int) $row['artist_id'] : 0;
+            $title = is_string($row['title'] ?? null) ? $row['title'] : '';
+            if ($artistId !== 0) {
+                $expected[$artistId][] = $title;
+            }
+
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+            $service = new MusicLibraryService($db, $this->createMock(MusicLibraryScanner::class));
+
+            $this->assertSame($expected, $service->getAlbumTitlesByArtistIds([7]));
+        }
+    }
+
+    /**
+     * E-09 cohort 5a: album-id / track-count legs of the counts decoder.
+     */
+    public function testTrackCountRowDecodeIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['album_id' => 5, 'track_count' => 3],
+            ['album_id' => '5', 'track_count' => 'abc'],
+            ['album_id' => 5.9, 'track_count' => '2.99'],
+            ['album_id' => 0, 'track_count' => 9],
+            ['album_id' => null, 'track_count' => 9],
+            ['track_count' => 7],
+            ['album_id' => '1e3', 'track_count' => true],
+        ];
+
+        foreach ($vectors as $row) {
+            // Verbatim from the ca91c293 tree.
+            $expected = [];
+            $albumId = is_numeric($row['album_id'] ?? null) ? (int) $row['album_id'] : 0;
+            if ($albumId !== 0) {
+                $expected[$albumId] = is_numeric($row['track_count'] ?? null) ? (int) $row['track_count'] : 0;
+            }
+
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+            $service = new MusicLibraryService($db, $this->createMock(MusicLibraryScanner::class));
+
+            $this->assertSame($expected, $service->getTrackCountsByAlbumIds([5]));
+        }
+    }
+
+    /**
+     * E-09 cohort 5a: album-id leg of the track-rows decoder, including the
+     * rn-strip re-attach kept raw by design (window-function helper column).
+     */
+    public function testTrackRowsDecodeIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['album_id' => 7, 'id' => 't-1', 'rn' => 1, 'title' => 'T'],
+            ['album_id' => 7, 'id' => 't-2', 'title' => 'U'],
+            ['album_id' => '7', 'id' => null, 'rn' => 2],
+            ['album_id' => 0, 'id' => 't-3'],
+            ['album_id' => null, 'id' => 't-4'],
+            ['id' => 't-5'],
+        ];
+
+        foreach ($vectors as $row) {
+            // Verbatim from the ca91c293 tree.
+            $expected = [];
+            $albumId = is_numeric($row['album_id'] ?? null) ? (int) $row['album_id'] : 0;
+            if ($albumId !== 0) {
+                $typedRow = $row;
+                unset($typedRow['rn']);
+                $expected[$albumId][] = $typedRow;
+            }
+
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+            $service = new MusicLibraryService($db, $this->createMock(MusicLibraryScanner::class));
+
+            $this->assertSame($expected, $service->getTracksByAlbumIds([7]));
+        }
+    }
 }

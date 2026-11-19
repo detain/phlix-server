@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Music;
 
 use Phlix\Common\Http\PageLimit;
+use Phlix\Common\Util\RowMap;
 use Phlix\Media\Library\ScanResult;
 use Workerman\MySQL\Connection;
 
@@ -696,8 +697,12 @@ class MusicLibraryService
             if (!is_array($row)) {
                 continue;
             }
-            $artistId = is_numeric($row['artist_id'] ?? null) ? (int) $row['artist_id'] : 0;
-            $title = is_string($row['title'] ?? null) ? $row['title'] : '';
+            $row = RowMap::fromMixed($row);
+            // E-09 cohort 5a: RowMap fold of the pre-fold ??-guarded strict
+            // ternaries (fallbacks transcribed); byte-identity pinned by the
+            // legacy-oracle vectors in tests/Unit/Media/Music/MusicLibraryServiceTest.php.
+            $artistId = RowMap::intFromNumeric($row, 'artist_id', 0);
+            $title = RowMap::str($row, 'title', '');
             if ($artistId === 0) {
                 continue;
             }
@@ -911,11 +916,12 @@ class MusicLibraryService
             if (!is_array($row)) {
                 continue;
             }
-            $albumId = is_numeric($row['album_id'] ?? null) ? (int) $row['album_id'] : 0;
+            $row = RowMap::fromMixed($row);
+            $albumId = RowMap::intFromNumeric($row, 'album_id', 0);
             if ($albumId === 0) {
                 continue;
             }
-            $counts[$albumId] = is_numeric($row['track_count'] ?? null) ? (int) $row['track_count'] : 0;
+            $counts[$albumId] = RowMap::intFromNumeric($row, 'track_count', 0);
         }
 
         return $counts;
@@ -1076,7 +1082,8 @@ class MusicLibraryService
             if (!is_array($row)) {
                 continue;
             }
-            $albumId = is_numeric($row['album_id'] ?? null) ? (int) $row['album_id'] : 0;
+            $row = RowMap::fromMixed($row);
+            $albumId = RowMap::intFromNumeric($row, 'album_id', 0);
             if ($albumId === 0) {
                 continue;
             }

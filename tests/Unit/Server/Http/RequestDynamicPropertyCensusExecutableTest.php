@@ -1357,7 +1357,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   1311 vs 1274 at this staging -- foreign sibling churn. Every batch-4 site is
     //   a Response-only render with zero Request property reads/writes, so there is
     //   nothing here to launder.
-    private const EXPECTED_PHP_FILES = 2201;
+    //
+    // Staircase continued -- SRV-ENVELOPES-B4 commit 2 of 3 (BookController adoption).
+    // +1 mine: tests/Unit/Server/Http/BookInlineEnvelopeAdoptionTest.php (golden corpus
+    //   for the 24 pure half-envelope sites converted in this commit).
+    // Pin: 2201 tracked at stage time (git ls-files '*.php'), +1 mine = 2202. The disk
+    //   walk shows 2203 because the foreign untracked sibling file
+    //   (ENVELOPES-b2/b3 MiddlewareErrorEnvelopeAdoptionTest.php) is still on disk --
+    //   the sibling rotates its own +1 at its own commit; named, not absorbed.
+    // Reads/writes legs stay RED and UNROTATED: re-measured 514 vs 512 / 1311 vs 1274,
+    //   foreign drift unchanged at this staging.
+    private const EXPECTED_PHP_FILES = 2202;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -184,16 +184,16 @@ class BookController
         $libraryId = $params['id'] ?? null;
 
         if ($libraryId === null) {
-            return (new Response())->status(400)->json(['error' => 'Library ID is required']);
+            return (new Response())->errorPlain(400, 'Library ID is required');
         }
 
         $library = $this->libraryManager->getLibrary($libraryId);
         if ($library === null) {
-            return (new Response())->status(404)->json(['error' => 'Library not found']);
+            return (new Response())->errorPlain(404, 'Library not found');
         }
 
         if (($library['type'] ?? '') !== 'book') {
-            return (new Response())->status(404)->json(['error' => 'Not a book library']);
+            return (new Response())->errorPlain(404, 'Not a book library');
         }
 
         $offsetParam = $request->query['offset'] ?? null;
@@ -291,19 +291,19 @@ class BookController
         $bookId = $params['id'] ?? null;
 
         if ($bookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Book ID is required']);
+            return (new Response())->errorPlain(400, 'Book ID is required');
         }
 
         $book = $this->itemRepo->findById($bookId);
 
         if ($book === null || ($book['type'] ?? '') !== 'book') {
-            return (new Response())->status(404)->json(['error' => 'Book not found']);
+            return (new Response())->errorPlain(404, 'Book not found');
         }
 
         // Parental cap (Finding 3): a capped profile requesting an over-cap book
         // gets a 404 so no signed read/download/cover URLs are ever minted for it.
         if ($this->bookOverCap($request, $book)) {
-            return (new Response())->status(404)->json(['error' => 'Book not found']);
+            return (new Response())->errorPlain(404, 'Book not found');
         }
 
         return (new Response())->json(['book' => $this->withSignedUrls($book, $bookId)]);
@@ -352,20 +352,20 @@ class BookController
         $bookId = $params['id'] ?? null;
 
         if ($bookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Book ID is required']);
+            return (new Response())->errorPlain(400, 'Book ID is required');
         }
 
         $book = $this->itemRepo->findById($bookId);
 
         if ($book === null || ($book['type'] ?? '') !== 'book') {
-            return (new Response())->status(404)->json(['error' => 'Book not found']);
+            return (new Response())->errorPlain(404, 'Book not found');
         }
 
         // Parental cap (Finding 3): defense-in-depth for a session-authenticated
         // reader — a capped profile never gets book data or signed URLs for an
         // over-cap book. No-op for a bare signed-token fetch (no userId).
         if ($this->bookOverCap($request, $book)) {
-            return (new Response())->status(404)->json(['error' => 'Book not found']);
+            return (new Response())->errorPlain(404, 'Book not found');
         }
 
         /** @var array<string, mixed> $metadata */
@@ -417,17 +417,17 @@ class BookController
         $bookId = $params['id'] ?? null;
 
         if ($bookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Book ID is required']);
+            return (new Response())->errorPlain(400, 'Book ID is required');
         }
 
         $userId = is_string($request->userId) && $request->userId !== '' ? $request->userId : null;
 
         if ($userId === null) {
-            return (new Response())->status(401)->json(['error' => 'Authentication required']);
+            return (new Response())->errorPlain(401, 'Authentication required');
         }
 
         if ($this->progressStore === null) {
-            return (new Response())->status(503)->json(['error' => 'Progress tracking not available']);
+            return (new Response())->errorPlain(503, 'Progress tracking not available');
         }
 
         $progress = $this->progressStore->getProgress($userId, $bookId);
@@ -459,18 +459,18 @@ class BookController
         $bookId = $params['id'] ?? null;
 
         if ($bookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Book ID is required']);
+            return (new Response())->errorPlain(400, 'Book ID is required');
         }
 
         // M-6: the save endpoint reads the request's authenticated identity.
         $userId = is_string($request->userId) && $request->userId !== '' ? $request->userId : null;
 
         if ($userId === null) {
-            return (new Response())->status(401)->json(['error' => 'Authentication required']);
+            return (new Response())->errorPlain(401, 'Authentication required');
         }
 
         if ($this->progressStore === null) {
-            return (new Response())->status(503)->json(['error' => 'Progress tracking not available']);
+            return (new Response())->errorPlain(503, 'Progress tracking not available');
         }
 
         // M-6: $request->body is the canonical parsed JSON body (Request::$body);
@@ -590,13 +590,13 @@ class BookController
         $bookId = $params['id'] ?? null;
 
         if ($bookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Book ID is required']);
+            return (new Response())->errorPlain(400, 'Book ID is required');
         }
 
         $book = $this->itemRepo->findById($bookId);
 
         if ($book === null || ($book['type'] ?? '') !== 'book') {
-            return (new Response())->status(404)->json(['error' => 'Book not found']);
+            return (new Response())->errorPlain(404, 'Book not found');
         }
 
         /** @var array<string, mixed> $metadata */
@@ -607,12 +607,12 @@ class BookController
         // roots before reading. realpath()-based containment implies existence,
         // so a missing OR escaping path yields the same 404 (no disclosure).
         if ($coverPath === null || !LibraryRootGuard::assertWithinLibraryRoots($coverPath)) {
-            return (new Response())->status(404)->json(['error' => 'Cover not found']);
+            return (new Response())->errorPlain(404, 'Cover not found');
         }
 
         $content = file_get_contents($coverPath);
         if ($content === false) {
-            return (new Response())->status(500)->json(['error' => 'Failed to read cover']);
+            return (new Response())->errorPlain(500, 'Failed to read cover');
         }
 
         $ext = strtolower(pathinfo($coverPath, PATHINFO_EXTENSION));
@@ -651,13 +651,13 @@ class BookController
         $bookId = $params['id'] ?? null;
 
         if ($bookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Book ID is required']);
+            return (new Response())->errorPlain(400, 'Book ID is required');
         }
 
         $book = $this->itemRepo->findById($bookId);
 
         if ($book === null || ($book['type'] ?? '') !== 'book') {
-            return (new Response())->status(404)->json(['error' => 'Book not found']);
+            return (new Response())->errorPlain(404, 'Book not found');
         }
 
         // Parental cap (Finding 3): serve-time backstop for a session-authenticated
@@ -665,7 +665,7 @@ class BookController
         // book. No-op for a bare signed-token fetch (no userId); the getBook mint
         // gate above is the primary defense there.
         if ($this->bookOverCap($request, $book)) {
-            return (new Response())->status(404)->json(['error' => 'Book not found']);
+            return (new Response())->errorPlain(404, 'Book not found');
         }
 
         $path = is_string($book['path'] ?? null) ? $book['path'] : '';
@@ -674,7 +674,7 @@ class BookController
         // before reading. realpath()-based containment implies existence, so a
         // missing OR escaping path yields the same 404 (no path disclosure).
         if ($path === '' || !LibraryRootGuard::assertWithinLibraryRoots($path)) {
-            return (new Response())->status(404)->json(['error' => 'File not found']);
+            return (new Response())->errorPlain(404, 'File not found');
         }
 
         $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
@@ -700,7 +700,7 @@ class BookController
         clearstatcache(true, $path);
         $fileSize = is_readable($path) ? @filesize($path) : false;
         if ($fileSize === false) {
-            return (new Response())->status(500)->json(['error' => 'Failed to read file']);
+            return (new Response())->errorPlain(500, 'Failed to read file');
         }
 
         // RFC 7233 §3.2: a Range is honoured only while If-Range (when sent)

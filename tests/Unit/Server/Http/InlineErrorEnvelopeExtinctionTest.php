@@ -29,6 +29,7 @@ final class InlineErrorEnvelopeExtinctionTest extends TestCase
     private const AUTHMW_FILE = __DIR__ . '/../../../../src/Server/Http/Middleware/AuthMiddleware.php';
     private const CASTING_FILE = __DIR__ . '/../../../../src/Server/Http/Middleware/CastingEnabledMiddleware.php';
     private const PROFILES_FILE = __DIR__ . '/../../../../src/Server/Http/Controllers/ProfilesController.php';
+    private const BOOK_FILE = __DIR__ . '/../../../../src/Server/Http/Controllers/BookController.php';
 
     /** Inline half-envelope marker: a single-key `['error' => ...]` literal. */
     private const LEGACY_MARKERS = ["'error' =>", '"error" =>'];
@@ -131,6 +132,42 @@ final class InlineErrorEnvelopeExtinctionTest extends TestCase
             5,
             substr_count($source, '(new Response())->error('),
             'ProfilesController error() seam census drifted from batch-4 (5)',
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Batch-4 (SRV-ENVELOPES-B4): BookController.
+    // -----------------------------------------------------------------
+
+    public function test_batch_four_book_file_exists_and_is_non_empty(): void
+    {
+        self::assertFileExists(self::BOOK_FILE);
+        self::assertGreaterThan(0, (int) filesize(self::BOOK_FILE));
+    }
+
+    public function test_batch_four_book_has_no_inline_error_literals(): void
+    {
+        $source = (string) file_get_contents(self::BOOK_FILE);
+        foreach (self::LEGACY_MARKERS as $marker) {
+            $hits = substr_count($source, $marker);
+            self::assertSame(
+                0,
+                $hits,
+                "legacy inline error envelope survived in BookController "
+                . "($hits hits of $marker)",
+            );
+        }
+    }
+
+    public function test_batch_four_book_adopted_call_counts(): void
+    {
+        // Batch-4 Book census at conversion: 24 pure half-envelope sites,
+        // all onto errorPlain(). No error() seam sites exist on this file.
+        $source = (string) file_get_contents(self::BOOK_FILE);
+        self::assertSame(
+            24,
+            substr_count($source, '->errorPlain('),
+            'BookController errorPlain census drifted from batch-4 (24)',
         );
     }
 

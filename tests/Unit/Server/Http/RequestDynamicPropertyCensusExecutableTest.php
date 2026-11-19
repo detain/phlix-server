@@ -1251,7 +1251,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // Measured from the phpunit red at 2116; no production file was added.
     // 2116→2139 (the merge of perf/A, perf/B, perf/C and perf/D onto master, HEAD b1870af9):
     // the merged tree's PHP file count, measured from the phpunit red at 2139 (no per-file breakdown kept here).
-    private const EXPECTED_PHP_FILES = 2139;
+    // 2139→2154 (attributed pre-SRV-4 master drift): landed waves grew the tracked set to 2154
+    // (`git ls-files '*.php'` measured at the tip this lane started from, 375f7992) without a
+    // rotation — the file-count leg was already red at master tip when SRV-4 began.
+    // +2 2154→2156 (SRV-4.1): src/Auth/PasswordHasher.php and tests/Unit/Auth/PasswordHasherTest.php
+    // join the tree. Pinned to the TRACKED-set count after this commit (a clean CI checkout enumerates
+    // exactly this); with concurrent lanes on the shared working tree the disk walk transiently shows
+    // their untracked WIP too — that inflation is not baked in here. Reads/writes denominators are NOT
+    // rotated by this lane: nothing SRV-4 adds speaks on a Request root, and the +3 writes drift
+    // measured at this lane's arrival belongs to the sibling auth/stats waves, not to SRV-4.
+    private const EXPECTED_PHP_FILES = 2156;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

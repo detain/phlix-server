@@ -5803,4 +5803,266 @@ class TranscodeManagerTest extends TestCase
 
         return is_string($result) ? $result : '';
     }
+
+    /**
+     * E-09 cohort-5b C6 grammar oracle — TranscodeManager on-demand video-branch
+     * column grammars (produceSegment :1608/:1612/:1622/:1639 legs).
+     *
+     * Pinned PRE-FOLD behavior so the RowMap folds are value-identical:
+     * numeric-string timelines hydrate through the coercive gates, a
+     * non-string hls_dir takes the interpolated default dir, and an absent
+     * duration collapses the timeline to null. The four text-identical sites
+     * in produceAudioSegment (:2107-:2124) and the regen-rail pair
+     * (:6961/:6962) fold the SAME expressions; their grammar coverage rides
+     * these vectors (register-disclosed — the audio branch needs a full
+     * persisted ladder the harness would re-invent).
+     */
+    public function testEnsureSegmentTimelineAndDirColumnGrammars(): void
+    {
+        $input = $this->segmentDir . '/seg-gram-in.mkv';
+        file_put_contents($input, 'x');
+
+        // (a) numeric-string timeline: duration '60' / segment_seconds '6'
+        // hydrate to the same 10-segment budget as the int row onDemandJobRow
+        // carries; index 3 is in range and the cached segment wins.
+        $dir = $this->segmentDir . '/seg-gram-a';
+        mkdir($dir, 0755, true);
+        file_put_contents("{$dir}/seg-00003.ts", 'cached');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], array_merge(
+            $this->onDemandJobRow($dir, $input),
+            ['duration_seconds' => '60', 'segment_seconds' => '6']
+        ), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        $this->assertSame(
+            "{$dir}/seg-00003.ts",
+            $this->manager($db, $ff)->ensureSegment('seg-job', null, 3)
+        );
+
+        // (b) a non-numeric segment_seconds falls back to the ctor's 6 s grid
+        // (the `> 0` guard line is unchanged), so index 10 stays out of range.
+        $captured = [];
+        $db = $this->mockDb([], 0, [], array_merge(
+            $this->onDemandJobRow($dir, $input),
+            ['duration_seconds' => '60', 'segment_seconds' => 'not-a-number']
+        ), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        $this->assertNull($this->manager($db, $ff)->ensureSegment('seg-job', null, 10));
+
+        // (c) a missing duration hydrates to 0.0 and collapses the timeline.
+        $captured = [];
+        $db = $this->mockDb([], 0, [], array_merge(
+            $this->onDemandJobRow($dir, $input),
+            ['duration_seconds' => null]
+        ), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        $this->assertNull($this->manager($db, $ff)->ensureSegment('seg-job', null, 2));
+
+        // (d) an int hls_dir is NOT a usable dir string: the interpolated
+        // segmentDir/jobId default takes it, and a segment cached THERE hits.
+        $defaultDir = $this->segmentDir . '/seg-job';
+        mkdir($defaultDir, 0755, true);
+        file_put_contents("{$defaultDir}/seg-00002.ts", 'cached');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], array_merge(
+            $this->onDemandJobRow('/nonexistent-gram-d', $input),
+            ['hls_dir' => 7]
+        ), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        $this->assertSame(
+            "{$defaultDir}/seg-00002.ts",
+            $this->manager($db, $ff)->ensureSegment('seg-job', null, 2)
+        );
+    }
+
+    /**
+     * E-09 cohort-5b C6 grammar oracle — reapStaleRunningJobs column grammars
+     * (:6672 id leg, :6677 hls_dir leg). Both KEEP arms are pinned too: the
+     * dirname() fallback leg of the merged :6677-:6679 expression and the
+     * strtotime() guard at :6682 stay as written (A2 ruling), so the vectors
+     * below must hold identically across the fold.
+     */
+    public function testReapStaleRunningJobsColumnGrammars(): void
+    {
+        $rows = [
+            // id is an int (never a string): the '' default makes the loop
+            // skip it even though its dir is a ghost and its start is ancient.
+            [
+                'id' => 7,
+                'hls_dir' => $this->segmentDir . '/gram-ghost-int-id',
+                'output_path' => '',
+                'started_at' => '2020-01-01 00:00:00',
+            ],
+            // hls_dir is an int: the dirname fallback leg must resolve the
+            // ghost parent and reap.
+            [
+                'id' => 'gram-b',
+                'hls_dir' => 7,
+                'output_path' => '/nonexistent-gram-zz/x.mkv',
+                'started_at' => date('Y-m-d H:i:s'),
+            ],
+            // hls_dir '' with an int output_path yields no dir, and an int
+            // started_at keeps the strtotime leg false: the job survives.
+            [
+                'id' => 'gram-c',
+                'hls_dir' => '',
+                'output_path' => 7,
+                'started_at' => 1234567890,
+            ],
+        ];
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, ?array $params = null) use ($rows, &$captured) {
+                $captured[] = [$sql, $params ?? []];
+                if (str_contains($sql, "WHERE status = 'running'") && str_contains($sql, 'SELECT id')) {
+                    return $rows;
+                }
+                return [];
+            }
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $this->assertSame(1, $this->manager($db, $ff)->reapStaleRunningJobs());
+
+        $failUpdate = null;
+        foreach ($captured as [$sql, $params]) {
+            if (str_contains($sql, "SET status = 'failed'") && ($params[1] ?? null) === 'gram-b') {
+                $failUpdate = $params;
+                break;
+            }
+        }
+        $this->assertNotNull($failUpdate, 'dirname-fallback ghost must be marked failed');
+    }
+
+    /**
+     * E-09 cohort-5b C6 grammar oracle — getJobReadiness status/dir legs
+     * (:5598/:5599): non-string status (int, NULL) hydrates the 'running'
+     * default, a string passes verbatim, and an int hls_dir takes the
+     * interpolated default dir (empty => zero segments, playlist absent).
+     */
+    public function testGetJobReadinessStatusAndDirGrammars(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['hls_dir' => 7, 'status' => 5], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $result = $this->manager($db, $ff)->getJobReadiness('gram-job');
+        $this->assertSame(TranscodeManager::STATUS_RUNNING, $result['status']);
+        $this->assertSame(0, $result['segments']);
+        $this->assertFalse($result['playlist_ready']);
+
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['hls_dir' => null, 'status' => null], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $result = $this->manager($db, $ff)->getJobReadiness('gram-job');
+        $this->assertSame(TranscodeManager::STATUS_RUNNING, $result['status']);
+
+        $liveDir = $this->segmentDir . '/gram-ready';
+        mkdir($liveDir, 0755, true);
+        $captured = [];
+        $completedRow = ['hls_dir' => $liveDir, 'status' => TranscodeManager::STATUS_COMPLETED];
+        $db = $this->mockDb([], 0, [], $completedRow, $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $result = $this->manager($db, $ff)->getJobReadiness('gram-job');
+        $this->assertSame(TranscodeManager::STATUS_COMPLETED, $result['status']);
+    }
+
+    /**
+     * E-09 cohort-5b C6 grammar oracle — statusOf (:6125): a non-string
+     * status (int) takes the 'running' default; a string passes verbatim.
+     */
+    public function testStatusOfColumnGrammar(): void
+    {
+        $statusOf = new ReflectionMethod(TranscodeManager::class, 'statusOf');
+
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['status' => 5], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $this->assertSame(
+            TranscodeManager::STATUS_RUNNING,
+            $statusOf->invoke($this->manager($db, $ff), 'gram-job')
+        );
+
+        $captured = [];
+        $doneRow = ['status' => TranscodeManager::STATUS_COMPLETED];
+        $db = $this->mockDb([], 0, [], $doneRow, $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $this->assertSame(
+            TranscodeManager::STATUS_COMPLETED,
+            $statusOf->invoke($this->manager($db, $ff), 'gram-job')
+        );
+    }
+
+    /**
+     * E-09 cohort-5b C6 grammar oracle — dashManifestUrl dir leg (:5981):
+     * a usable string hls_dir wins; an int hls_dir falls to the interpolated
+     * segmentDir/jobId default, which is where the manifest is then found.
+     */
+    public function testDashManifestUrlDirGrammar(): void
+    {
+        $dir = $this->segmentDir . '/gram-dash';
+        mkdir($dir, 0755, true);
+        file_put_contents($dir . '/' . TranscodeManager::MPD_FILENAME, '<?xml version="1.0"?><MPD/>');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['hls_dir' => $dir], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $this->assertSame(
+            '/dash/gram-job/' . TranscodeManager::MPD_FILENAME,
+            $this->manager($db, $ff)->dashManifestUrl('gram-job')
+        );
+
+        $defaultDir = $this->segmentDir . '/gram-job';
+        mkdir($defaultDir, 0755, true);
+        file_put_contents($defaultDir . '/' . TranscodeManager::MPD_FILENAME, '<?xml version="1.0"?><MPD/>');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['hls_dir' => 7], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $this->assertSame(
+            '/dash/gram-job/' . TranscodeManager::MPD_FILENAME,
+            $this->manager($db, $ff)->dashManifestUrl('gram-job')
+        );
+    }
+
+    /**
+     * E-09 cohort-5b C6 grammar oracle — applySubtitleBurnIn dir leg (:1522):
+     * an int hls_dir yields the '' default and the burn degrades unchanged; a
+     * real dir with the extracted .vtt attaches the burn payload. The
+     * findReusableJob id/dir pair (:5938/:5939) folds the SAME strings as the
+     * reap and burn legs and is covered by their vectors.
+     */
+    public function testApplySubtitleBurnInDirGrammar(): void
+    {
+        $burn = new ReflectionMethod(TranscodeManager::class, 'applySubtitleBurnIn');
+
+        $row = ['segment_params' => json_encode(['subtitle_burn_in_index' => 0]), 'hls_dir' => 7];
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $row, $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $base = ['video_codec' => 'libx264'];
+        $this->assertSame(
+            $base,
+            $burn->invoke($this->manager($db, $ff), $row, $base)
+        );
+
+        $dir = $this->segmentDir . '/gram-burn';
+        mkdir($dir, 0755, true);
+        file_put_contents($dir . '/sub-0.vtt', "WEBVTT\n\n");
+        $row = ['segment_params' => json_encode(['subtitle_burn_in_index' => 0]), 'hls_dir' => $dir];
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $row, $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $result = $burn->invoke($this->manager($db, $ff), $row, $base);
+        $this->assertSame(
+            ['path' => $dir . '/sub-0.vtt', 'format' => 'vtt'],
+            $result['subtitle_burn_in']
+        );
+    }
 }

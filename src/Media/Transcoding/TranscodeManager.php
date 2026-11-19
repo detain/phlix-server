@@ -1519,7 +1519,7 @@ class TranscodeManager
             return $segParams;
         }
 
-        $dir = is_string($row['hls_dir'] ?? null) ? (string) $row['hls_dir'] : '';
+        $dir = RowMap::str($row, 'hls_dir', '');
         if ($dir === '') {
             return $segParams;
         }
@@ -1605,11 +1605,9 @@ class TranscodeManager
         array $segParams,
         bool $waitForEncode = true
     ): ?string {
-        $segSeconds = is_numeric($row['segment_seconds'] ?? null)
-            ? (int) $row['segment_seconds']
-            : $this->segmentSeconds;
+        $segSeconds = RowMap::intFromNumeric($row, 'segment_seconds', $this->segmentSeconds);
         $segSeconds = $segSeconds > 0 ? $segSeconds : $this->segmentSeconds;
-        $duration = is_numeric($row['duration_seconds'] ?? null) ? (float) $row['duration_seconds'] : 0.0;
+        $duration = RowMap::floatFromNumeric($row, 'duration_seconds', 0.0);
         if ($duration <= 0.0) {
             return null;
         }
@@ -1619,9 +1617,7 @@ class TranscodeManager
             return null;
         }
 
-        $dir = is_string($row['hls_dir'] ?? null) && $row['hls_dir'] !== ''
-            ? (string) $row['hls_dir']
-            : "{$this->segmentDir}/{$jobId}";
+        $dir = RowMap::nullableNonEmptyStr($row, 'hls_dir') ?? "{$this->segmentDir}/{$jobId}";
         // S56: the container is a property of the JOB (see segmentFormatOf()), so
         // it decides both the cache-hit filename below and, on the CMAF branch,
         // the per-variant init the encode publishes alongside the fragment.
@@ -1636,7 +1632,7 @@ class TranscodeManager
             return $final; // cache hit
         }
 
-        $inputPath = is_string($row['input_path'] ?? null) ? (string) $row['input_path'] : '';
+        $inputPath = RowMap::str($row, 'input_path', '');
         if ($inputPath === '' || !is_file($inputPath)) {
             return null;
         }
@@ -2104,11 +2100,9 @@ class TranscodeManager
             return null;
         }
 
-        $segSeconds = is_numeric($row['segment_seconds'] ?? null)
-            ? (int) $row['segment_seconds']
-            : $this->segmentSeconds;
+        $segSeconds = RowMap::intFromNumeric($row, 'segment_seconds', $this->segmentSeconds);
         $segSeconds = $segSeconds > 0 ? $segSeconds : $this->segmentSeconds;
-        $duration = is_numeric($row['duration_seconds'] ?? null) ? (float) $row['duration_seconds'] : 0.0;
+        $duration = RowMap::floatFromNumeric($row, 'duration_seconds', 0.0);
         if ($duration <= 0.0) {
             return null;
         }
@@ -2118,10 +2112,8 @@ class TranscodeManager
             return null;
         }
 
-        $dir = is_string($row['hls_dir'] ?? null) && $row['hls_dir'] !== ''
-            ? (string) $row['hls_dir']
-            : "{$this->segmentDir}/{$jobId}";
-        $inputPath = is_string($row['input_path'] ?? null) ? (string) $row['input_path'] : '';
+        $dir = RowMap::nullableNonEmptyStr($row, 'hls_dir') ?? "{$this->segmentDir}/{$jobId}";
+        $inputPath = RowMap::str($row, 'input_path', '');
         if ($inputPath === '' || !is_file($inputPath)) {
             return null;
         }
@@ -5535,9 +5527,7 @@ class TranscodeManager
             return [];
         }
 
-        $dir = is_string($row['hls_dir'] ?? null) && $row['hls_dir'] !== ''
-            ? (string) $row['hls_dir']
-            : "{$this->segmentDir}/{$jobId}";
+        $dir = RowMap::nullableNonEmptyStr($row, 'hls_dir') ?? "{$this->segmentDir}/{$jobId}";
 
         $out = [];
         foreach ($decoded as $entry) {
@@ -5595,8 +5585,8 @@ class TranscodeManager
             ];
         }
 
-        $dir = is_string($row['hls_dir'] ?? null) ? (string) $row['hls_dir'] : "{$this->segmentDir}/{$jobId}";
-        $dbStatus = is_string($row['status'] ?? null) ? (string) $row['status'] : self::STATUS_RUNNING;
+        $dir = RowMap::str($row, 'hls_dir', "{$this->segmentDir}/{$jobId}");
+        $dbStatus = RowMap::str($row, 'status', self::STATUS_RUNNING);
 
         $segments = $this->countSegments($dir);
         // The VOD master playlist is written at job creation (before ensureHlsJob
@@ -5935,8 +5925,8 @@ class TranscodeManager
             return null;
         }
         $row = $rows[0];
-        $id = is_string($row['id'] ?? null) ? (string) $row['id'] : '';
-        $dir = is_string($row['hls_dir'] ?? null) ? (string) $row['hls_dir'] : '';
+        $id = RowMap::str($row, 'id', '');
+        $dir = RowMap::str($row, 'hls_dir', '');
         if ($id === '' || $dir === '' || !is_dir($dir)) {
             return null;
         }
@@ -5977,10 +5967,8 @@ class TranscodeManager
             return null;
         }
 
-        $row = $this->getJobRow($jobId);
-        $dir = is_string($row['hls_dir'] ?? null) && $row['hls_dir'] !== ''
-            ? (string) $row['hls_dir']
-            : "{$this->segmentDir}/{$jobId}";
+        $row = $this->getJobRow($jobId) ?? [];
+        $dir = RowMap::nullableNonEmptyStr($row, 'hls_dir') ?? "{$this->segmentDir}/{$jobId}";
 
         return $this->dashManifestUrlIn($jobId, $dir);
     }
@@ -6121,8 +6109,8 @@ class TranscodeManager
      */
     private function statusOf(string $jobId): string
     {
-        $row = $this->getJobRow($jobId);
-        return is_string($row['status'] ?? null) ? (string) $row['status'] : self::STATUS_RUNNING;
+        $row = $this->getJobRow($jobId) ?? [];
+        return RowMap::str($row, 'status', self::STATUS_RUNNING);
     }
 
     /**
@@ -6669,14 +6657,13 @@ class TranscodeManager
         $reaped = 0;
 
         foreach ($rows as $row) {
-            $id = is_string($row['id'] ?? null) ? (string) $row['id'] : '';
+            $id = RowMap::str($row, 'id', '');
             if ($id === '') {
                 continue;
             }
 
-            $dir = is_string($row['hls_dir'] ?? null) && $row['hls_dir'] !== ''
-                ? (string) $row['hls_dir']
-                : (is_string($row['output_path'] ?? null) ? dirname((string) $row['output_path']) : '');
+            $dir = RowMap::nullableNonEmptyStr($row, 'hls_dir')
+                ?? (is_string($row['output_path'] ?? null) ? dirname((string) $row['output_path']) : '');
             $dirGone = $dir !== '' && !is_dir($dir);
 
             $startedAt = is_string($row['started_at'] ?? null) ? strtotime((string) $row['started_at']) : false;
@@ -6958,9 +6945,8 @@ class TranscodeManager
         // regenerated playlist can never disagree with the segments
         // segmentFormatOf() will go on producing.
         $segmentFormat = self::segmentFormatOfRow($row);
-        $duration = is_numeric($row['duration_seconds'] ?? null) ? (float) $row['duration_seconds'] : 0.0;
-        $segSeconds = is_numeric($row['segment_seconds'] ?? null) ? (int) $row['segment_seconds'] :
-            $this->segmentSeconds;
+        $duration = RowMap::floatFromNumeric($row, 'duration_seconds', 0.0);
+        $segSeconds = RowMap::intFromNumeric($row, 'segment_seconds', $this->segmentSeconds);
 
         if ($duration <= 0.0) {
             return false;

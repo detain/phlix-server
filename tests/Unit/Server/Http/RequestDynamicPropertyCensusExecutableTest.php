@@ -1309,7 +1309,23 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // untracked src/Common/Process WIP files of the live SRV-PROCESS lane remain excluded
     // (disk inflation, not tracked truth — same discipline as every step above). Reads/writes
     // legs stay RED: SRV-ROWMAP speaks on zero Request roots.
-    private const EXPECTED_PHP_FILES = 2180;
+    //
+    // Staircase continued -- SRV-ENVELOPES batch 1 (E-10/A-05) atop c50e8bb1 (live master; pin measured at stage time).
+    // +2 mine: tests/Unit/Server/Http/InlineErrorEnvelopeAdoptionTest.php -- 25-shape
+    //   golden corpus pinning Response::errorPlain byte-identical to the legacy
+    //   ->status(N)->json(['error' => X]) renders captured at the pristine base
+    //   (register: gates/ENVEL-legacy-bytes-base.txt), plus
+    //   InlineErrorEnvelopeExtinctionTest.php -- extinction census: zero inline
+    //   half-envelope literals left in the two batch-1 files, exact 56/36 adoption
+    //   counts, planted-form canary proving the counter has teeth.
+    // Reads/writes legs stay RED and UNROTATED (law, repeated): the 92-site
+    // conversion touches zero Request property reads/writes -- every adopted site
+    // is a Response-only render, so there is nothing here to launder.
+    // Pin: measured tracked set at commit time (git ls-files '*.php' over the
+    // staged index; my two new tests are the +2). The 2180->2185 drift rode with
+    // siblings' committed walks (3525bfe9 +1, b5ae02f4 +2, c50e8bb1 +1, one from
+    // an earlier step's arithmetic) -- named, not absorbed; FILES green on measurement.
+    private const EXPECTED_PHP_FILES = 2187;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

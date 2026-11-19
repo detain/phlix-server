@@ -601,7 +601,7 @@ class WebPortalRouter
         $library = $this->libraryManager->getLibrary($params['id']);
 
         if (!$library) {
-            return (new Response())->status(404)->json(['error' => 'Library not found']);
+            return (new Response())->errorPlain(404, 'Library not found');
         }
 
         // L-4: admin-only `paths`, same as getLibraries() (see there).
@@ -739,7 +739,7 @@ class WebPortalRouter
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // Parental cap on the detail read path. A capped profile that deep-links
@@ -753,7 +753,7 @@ class WebPortalRouter
         $ratingFilter = $this->resolveRatingFilter($request);
         $gate = $this->gate();
         if ($ratingFilter !== null && $gate !== null && !$gate->isAllowed($item, $ratingFilter)) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // Determine whether the requesting user is an admin so the shaper can
@@ -937,9 +937,10 @@ class WebPortalRouter
             'service' => $service,
         ]);
 
-        return (new Response())->status(503)->json([
-            'error' => "{$surface} isn't available on this server. The {$service} service isn't running.",
-        ]);
+        return (new Response())->errorPlain(
+            503,
+            "{$surface} isn't available on this server. The {$service} service isn't running."
+        );
     }
 
     /**
@@ -1601,7 +1602,7 @@ class WebPortalRouter
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // Parental cap: an over-cap item (by effective rating) is 404 here too, so
@@ -1610,7 +1611,7 @@ class WebPortalRouter
         $filter = $this->resolveRatingFilter($request);
         $gate = $this->gate();
         if ($filter !== null && $gate !== null && !$gate->isAllowed($item, $filter)) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // Get marker data for skip buttons
@@ -1747,7 +1748,7 @@ class WebPortalRouter
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // Parental cap: an over-cap item (by effective rating) is 404 here too.
@@ -1755,7 +1756,7 @@ class WebPortalRouter
         $filter = $this->resolveRatingFilter($request);
         $gate = $this->gate();
         if ($filter !== null && $gate !== null && !$gate->isAllowed($item, $filter)) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         $markerSet = $this->markerService->getMarkers($params['id']);
@@ -1799,22 +1800,22 @@ class WebPortalRouter
     public function searchByMarker(Request $request, array $params): Response
     {
         if ($this->chapterSearchService === null) {
-            return (new Response())->status(503)->json(['error' => 'Chapter search not available']);
+            return (new Response())->errorPlain(503, 'Chapter search not available');
         }
 
         $userId = $request->userId ?? '';
         if ($userId === '') {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         $typeStr = $request->queryString('type');
         if ($typeStr === null || $typeStr === '') {
-            return (new Response())->status(400)->json(['error' => 'Media type is required']);
+            return (new Response())->errorPlain(400, 'Media type is required');
         }
 
         $type = MarkerType::tryFrom($typeStr);
         if ($type === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid marker type']);
+            return (new Response())->errorPlain(400, 'Invalid marker type');
         }
 
         $position = $request->queryInt('position', 0);
@@ -1828,13 +1829,13 @@ class WebPortalRouter
         $limit = $request->queryPageSize('limit', 20);
 
         if ($around < 1 || $around > 300) {
-            return (new Response())->status(400)->json(['error' => 'The around value must be between 1 and 300']);
+            return (new Response())->errorPlain(400, 'The around value must be between 1 and 300');
         }
 
         // Resolve profile ID from user for watch-history exclusion
         $profileId = $this->resolveProfileId($request, $userId);
         if ($profileId === null) {
-            return (new Response())->status(503)->json(['error' => 'Profile not available']);
+            return (new Response())->errorPlain(503, 'Profile not available');
         }
 
         $items = $this->chapterSearchService->searchByMarkerProximity(
@@ -1887,7 +1888,7 @@ class WebPortalRouter
         $query = $request->queryString('q') ?? '';
 
         if ($query === '') {
-            return (new Response())->status(400)->json(['error' => 'Search text is required']);
+            return (new Response())->errorPlain(400, 'Search text is required');
         }
 
         // SECURITY: single shared clamp policy (PageLimit) rather than a
@@ -1944,12 +1945,12 @@ class WebPortalRouter
     public function searchMediaMarkers(Request $request, array $params): Response
     {
         if ($this->chapterSearchService === null) {
-            return (new Response())->status(503)->json(['error' => 'Chapter search not available']);
+            return (new Response())->errorPlain(503, 'Chapter search not available');
         }
 
         $item = $this->itemRepository->findById($params['id']);
         if (!$item) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // Parental cap: an over-cap item (by effective rating) is 404 here too, so
@@ -1957,17 +1958,17 @@ class WebPortalRouter
         $filter = $this->resolveRatingFilter($request);
         $gate = $this->gate();
         if ($filter !== null && $gate !== null && !$gate->isAllowed($item, $filter)) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         $typeStr = $request->queryString('type');
         if ($typeStr === null || $typeStr === '') {
-            return (new Response())->status(400)->json(['error' => 'Media type is required']);
+            return (new Response())->errorPlain(400, 'Media type is required');
         }
 
         $type = MarkerType::tryFrom($typeStr);
         if ($type === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid marker type']);
+            return (new Response())->errorPlain(400, 'Invalid marker type');
         }
 
         $markers = $this->chapterSearchService->getMarkersByType($params['id'], $type);
@@ -2010,7 +2011,7 @@ class WebPortalRouter
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         $items = $this->playbackController->getContinueWatching($userId);
@@ -2058,7 +2059,7 @@ class WebPortalRouter
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         if ($this->watchHistory === null) {
@@ -2119,7 +2120,7 @@ class WebPortalRouter
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         $items = $this->playbackController->getRecentlyWatched($userId);
@@ -2172,7 +2173,7 @@ class WebPortalRouter
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         if ($this->watchHistory === null) {
@@ -2183,7 +2184,7 @@ class WebPortalRouter
         // DELETE legs act on, so the page lists exactly what it can clear.
         $profileId = $this->resolveProfileId($request, $userId);
         if ($profileId === null) {
-            return (new Response())->status(404)->json(['error' => 'No active profile found']);
+            return (new Response())->errorPlain(404, 'No active profile found');
         }
 
         $limit = $request->queryPageSize('limit', 50);
@@ -2267,7 +2268,7 @@ class WebPortalRouter
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         if ($this->watchHistory === null) {
@@ -2285,12 +2286,12 @@ class WebPortalRouter
         // this gap could take.
         $profileId = $this->resolveProfileId($request, $userId);
         if ($profileId === null) {
-            return (new Response())->status(404)->json(['error' => 'No active profile found']);
+            return (new Response())->errorPlain(404, 'No active profile found');
         }
 
         $mediaItemId = $params['mediaItemId'] ?? '';
         if ($mediaItemId === '') {
-            return (new Response())->status(400)->json(['error' => 'Media item ID is required']);
+            return (new Response())->errorPlain(400, 'Media item ID is required');
         }
 
         $this->watchHistory->removeFromHistory($profileId, $mediaItemId);
@@ -2314,7 +2315,7 @@ class WebPortalRouter
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         if ($this->watchHistory === null) {
@@ -2332,7 +2333,7 @@ class WebPortalRouter
         // this gap could take.
         $profileId = $this->resolveProfileId($request, $userId);
         if ($profileId === null) {
-            return (new Response())->status(404)->json(['error' => 'No active profile found']);
+            return (new Response())->errorPlain(404, 'No active profile found');
         }
 
         $this->watchHistory->clearHistory($profileId);
@@ -2470,7 +2471,7 @@ class WebPortalRouter
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         $this->itemRepository->delete($params['id']);
@@ -2570,13 +2571,13 @@ class WebPortalRouter
 
         $itemId = $params['id'] ?? '';
         if ($itemId === '') {
-            return (new Response())->status(400)->json(['error' => 'Item ID is required']);
+            return (new Response())->errorPlain(400, 'Item ID is required');
         }
 
         // Check that the item exists.
         $item = $this->itemRepository->findById($itemId);
         if ($item === null) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // SECURITY: clamped to PageLimit::MAX server-side before it reaches `LIMIT ?`.
@@ -2673,13 +2674,13 @@ class WebPortalRouter
 
         $itemId = $params['id'] ?? '';
         if ($itemId === '') {
-            return (new Response())->status(400)->json(['error' => 'Item ID is required']);
+            return (new Response())->errorPlain(400, 'Item ID is required');
         }
 
         // Check that the item exists.
         $item = $this->itemRepository->findById($itemId);
         if ($item === null) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // Parental cap: an over-cap item (by effective rating) is 404 here too, so
@@ -2687,13 +2688,13 @@ class WebPortalRouter
         $filter = $this->resolveRatingFilter($request);
         $gate = $this->gate();
         if ($filter !== null && $gate !== null && !$gate->isAllowed($item, $filter)) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         $collection = $this->collectionService->getCollectionForItem($itemId);
 
         if ($collection === null) {
-            return (new Response())->status(404)->json(['error' => 'Item is not part of any collection']);
+            return (new Response())->errorPlain(404, 'Item is not part of any collection');
         }
 
         return (new Response())->json(['collection' => $collection]);
@@ -2747,17 +2748,17 @@ class WebPortalRouter
 
         $collectionId = $params['id'] ?? '';
         if ($collectionId === '') {
-            return (new Response())->status(400)->json(['error' => 'Collection ID is required']);
+            return (new Response())->errorPlain(400, 'Collection ID is required');
         }
 
         if (!is_numeric($collectionId)) {
-            return (new Response())->status(400)->json(['error' => 'Invalid collection ID']);
+            return (new Response())->errorPlain(400, 'Invalid collection ID');
         }
 
         $collection = $this->collectionService->getCollectionById((int) $collectionId);
 
         if ($collection === null) {
-            return (new Response())->status(404)->json(['error' => 'Collection not found']);
+            return (new Response())->errorPlain(404, 'Collection not found');
         }
 
         $members = $this->collectionService->getCollectionMembers((int) $collectionId);
@@ -2864,7 +2865,7 @@ class WebPortalRouter
 
         $personId = $params['personId'] ?? '';
         if ($personId === '' || !ctype_digit($personId)) {
-            return (new Response())->status(400)->json(['error' => 'Invalid person ID']);
+            return (new Response())->errorPlain(400, 'Invalid person ID');
         }
 
         $wRaw = $request->query['w'] ?? '';
@@ -2934,7 +2935,7 @@ class WebPortalRouter
 
         $userId = $request->userId ?? '';
         if ($userId === '') {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         // SECURITY: single shared clamp policy (PageLimit); an over-large limit
@@ -2977,12 +2978,12 @@ class WebPortalRouter
 
         $userId = $request->userId ?? '';
         if ($userId === '') {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         $mediaItemId = $params['mediaItemId'] ?? '';
         if ($mediaItemId === '') {
-            return (new Response())->status(400)->json(['error' => 'Media item ID is required']);
+            return (new Response())->errorPlain(400, 'Media item ID is required');
         }
 
         $this->recommendationService->dismissRecommendation($userId, $mediaItemId);
@@ -3060,7 +3061,7 @@ class WebPortalRouter
     {
         $userId = $request->userId ?? '';
         if ($userId === '') {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         // Load server config defaults
@@ -3128,7 +3129,7 @@ class WebPortalRouter
     {
         $userId = $request->userId ?? '';
         if ($userId === '') {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         if ($this->userRepository === null) {
@@ -3178,7 +3179,7 @@ class WebPortalRouter
             // flat {error} 400 envelope updateUserSettings() uses (contract
             // law: no new error codes), never an uncaught 500 over stored
             // history.
-            return (new Response())->status(400)->json(['error' => $e->getMessage()]);
+            return (new Response())->errorPlain(400, $e->getMessage());
         }
 
         return (new Response())->json(['message' => 'Playback preferences updated']);
@@ -3216,7 +3217,7 @@ class WebPortalRouter
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         // Sensible defaults applied when a user has never saved settings (or when
@@ -3304,12 +3305,12 @@ class WebPortalRouter
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         $settings = $this->extractSettingsPayload($request);
         if ($settings === null) {
-            return (new Response())->status(400)->json(['error' => 'The submitted settings are not valid']);
+            return (new Response())->errorPlain(400, 'The submitted settings are not valid');
         }
 
         if ($this->userRepository === null) {
@@ -3323,7 +3324,7 @@ class WebPortalRouter
             // The repository rejected a submitted value (e.g. an unknown theme
             // id) BEFORE writing anything — same flat {error} envelope the
             // payload-shape 400 above uses; no new error codes (contract law).
-            return (new Response())->status(400)->json(['error' => $e->getMessage()]);
+            return (new Response())->errorPlain(400, $e->getMessage());
         }
 
         return (new Response())->json(['message' => 'Settings updated']);
@@ -3348,7 +3349,7 @@ class WebPortalRouter
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         if ($this->avatarStorage === null || $this->userAvatarController === null) {
@@ -3377,7 +3378,7 @@ class WebPortalRouter
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         if ($this->avatarStorage === null || $this->userAvatarController === null) {
@@ -3481,16 +3482,16 @@ class WebPortalRouter
 
         $body = $request->body;
         if (!is_array($body)) {
-            return (new Response())->status(400)->json(['error' => 'Invalid request body']);
+            return (new Response())->errorPlain(400, 'Invalid request body');
         }
 
         $path = $body['path'] ?? null;
         if (!is_string($path) || $path === '') {
-            return (new Response())->status(400)->json(['error' => 'Path is required']);
+            return (new Response())->errorPlain(400, 'Path is required');
         }
 
         if (!is_dir($path) || !is_readable($path)) {
-            return (new Response())->status(400)->json(['error' => 'Path is not a readable directory']);
+            return (new Response())->errorPlain(400, 'Path is not a readable directory');
         }
 
         $result = $this->musicLibraryService->scanDirectory($path);

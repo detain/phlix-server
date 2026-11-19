@@ -215,6 +215,42 @@ class Response
     }
 
     /**
+     * Renders the legacy HALF-envelope: `{ "error": <message>, ...extra }` with
+     * NO `code` key — byte-identical to the hand-rolled
+     * `(new Response())->status(N)->json(['error' => ...])` chains it replaces.
+     *
+     * This is the single-site rendering seam for batch-1 adoption (E-10/A-05):
+     * these wire shapes predate the error-code registry and their clients
+     * text-match the bare `error` field, so promoting them to `{error, code}`
+     * would be a wire change — deliberately NOT this wave (owner-gated future
+     * normalization). Adoption is mechanical: the call site writes the same
+     * message and status, the bytes on the wire do not move. The census guard
+     * (InlineErrorEnvelopeAdoptionTest) pins this method's output against
+     * legacy bytes captured at the pristine base commit.
+     *
+     * Unlike {@see error()} this method carries no code parameter, so the
+     * ErrorCodesContractTest emitter scan never sees it — there is nothing to
+     * register. Additive `$extra` follows the same left-biased union law as
+     * {@see error()} (the {error, message} chapter sites ride this seam).
+     *
+     * @param int $status HTTP status code
+     * @param string $message value for the `error` field
+     * @param array<string, mixed> $extra additional top-level keys (message, …)
+     * @return self For method chaining
+     *
+     * @throws \JsonException If JSON encoding fails
+     *
+     * @example
+     * ```php
+     * (new Response())->errorPlain(404, 'Library not found');
+     * ```
+     */
+    public function errorPlain(int $status, string $message, array $extra = []): self
+    {
+        return $this->json(['error' => $message] + $extra, $status);
+    }
+
+    /**
      * The canonical `{error, code}` body for a tripped limiter (W4 PREP /
      * finding A-04, M-16 SSOT): the server's only hand-rolled copy lived in
      * `Application::rateLimitResponse()`; the seam now owns the vocabulary so

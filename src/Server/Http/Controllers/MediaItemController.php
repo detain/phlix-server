@@ -229,7 +229,7 @@ class MediaItemController
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // Parental cap: a capped profile requesting an over-cap item (by
@@ -237,7 +237,7 @@ class MediaItemController
         // is disclosed. No-op for the owner / un-capped profile.
         $filter = $this->resolveRatingFilter($request);
         if ($filter !== null && $this->ratingGate !== null && !$this->ratingGate->isAllowed($item, $filter)) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // Enrich into the public media-item shape (poster URLs, genres, overview,
@@ -270,7 +270,7 @@ class MediaItemController
         $query = $request->queryString('q', '') ?? '';
 
         if ($query === '') {
-            return (new Response())->status(400)->json(['error' => 'Query parameter "q" is required']);
+            return (new Response())->errorPlain(400, 'Query parameter "q" is required');
         }
 
         $items = $this->itemRepository->searchFuzzy($query);
@@ -287,7 +287,7 @@ class MediaItemController
         $limit = $request->queryPageSize('limit', 20);
 
         if (!$libraryId) {
-            return (new Response())->status(400)->json(['error' => 'Library ID is required']);
+            return (new Response())->errorPlain(400, 'Library ID is required');
         }
 
         $items = $this->itemRepository->getRecentlyAdded($libraryId, $limit);
@@ -302,7 +302,7 @@ class MediaItemController
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         $this->itemRepository->delete($params['id']);
@@ -320,7 +320,7 @@ class MediaItemController
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // Parental cap: an over-cap item (by effective rating) is 404 here too, so
@@ -328,7 +328,7 @@ class MediaItemController
         // for the owner / un-capped profile.
         $filter = $this->resolveRatingFilter($request);
         if ($filter !== null && $this->ratingGate !== null && !$this->ratingGate->isAllowed($item, $filter)) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
@@ -585,12 +585,12 @@ class MediaItemController
         $itemId = $params['id'] ?? '';
 
         if ($itemId === '') {
-            return (new Response())->status(400)->json(['error' => 'Media item ID is required']);
+            return (new Response())->errorPlain(400, 'Media item ID is required');
         }
 
         $item = $this->itemRepository->findById($itemId);
         if ($item === null) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // M-2: the trickplay sprite/timeline/BIF set is a frame-accurate copy of
@@ -598,7 +598,7 @@ class MediaItemController
         // rating gets the exact show() refusal (404, never 403). Anonymous hits
         // keep the documented public posture — see identifiedRequestIsOverCap().
         if ($this->identifiedRequestIsOverCap($request, $item)) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // Check if trickplay data exists for this item
@@ -645,18 +645,18 @@ class MediaItemController
         $indexStr = $params['index'] ?? '';
 
         if ($itemId === '' || $indexStr === '') {
-            return (new Response())->status(400)->json(['error' => 'Media item ID and chapter index are required']);
+            return (new Response())->errorPlain(400, 'Media item ID and chapter index are required');
         }
 
         $index = (int) $indexStr;
         if ($index < 0) {
-            return (new Response())->status(400)->json(['error' => 'Chapter index must be non-negative']);
+            return (new Response())->errorPlain(400, 'Chapter index must be non-negative');
         }
 
         // First verify the media item exists
         $item = $this->itemRepository->findById($itemId);
         if ($item === null) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // M-2: same invariant as getTrickplay() — a chapter thumbnail is a frame
@@ -664,7 +664,7 @@ class MediaItemController
         // BEFORE any chapter parsing or file I/O; anonymous requests are
         // unaffected (documented public posture).
         if ($this->identifiedRequestIsOverCap($request, $item)) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // Get chapters from the item's chapters_json
@@ -681,8 +681,7 @@ class MediaItemController
 
         // Validate chapter index
         if (!isset($chapters[$index])) {
-            return (new Response())->status(404)->json([
-                'error' => 'Chapter not found',
+            return (new Response())->errorPlain(404, 'Chapter not found', [
                 'message' => 'That chapter does not exist.',
             ]);
         }
@@ -695,8 +694,7 @@ class MediaItemController
             : (is_numeric($chapter['start'] ?? null) ? (int) ($chapter['start']) : null);
 
         if ($startSeconds === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Chapter not found',
+            return (new Response())->errorPlain(404, 'Chapter not found', [
                 'message' => 'Chapter start time is invalid.',
             ]);
         }
@@ -713,8 +711,7 @@ class MediaItemController
         }
 
         if ($chapterMarker === null || $chapterMarker->thumbnailPath === null || $chapterMarker->thumbnailPath === '') {
-            return (new Response())->status(404)->json([
-                'error' => 'Chapter not found',
+            return (new Response())->errorPlain(404, 'Chapter not found', [
                 'message' => 'Chapter thumbnail not found.',
             ]);
         }
@@ -723,8 +720,7 @@ class MediaItemController
 
         // Check if file exists
         if (!file_exists($thumbnailPath)) {
-            return (new Response())->status(404)->json([
-                'error' => 'Chapter not found',
+            return (new Response())->errorPlain(404, 'Chapter not found', [
                 'message' => 'Chapter thumbnail not found.',
             ]);
         }
@@ -792,7 +788,7 @@ class MediaItemController
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         // Parental cap: never mint a signed download/stream URL for an over-cap
@@ -810,12 +806,12 @@ class MediaItemController
         // item is under that profile's cap.
         $filter = $this->resolveRatingFilter($request);
         if ($filter !== null && $this->ratingGate !== null && !$this->ratingGate->isAllowed($item, $filter)) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         $path = $item['path'] ?? null;
         if (!is_string($path) || $path === '' || !file_exists($path)) {
-            return (new Response())->status(404)->json(['error' => 'File not found on disk']);
+            return (new Response())->errorPlain(404, 'File not found on disk');
         }
 
         $fileSize = (int) filesize($path);
@@ -846,12 +842,12 @@ class MediaItemController
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         $type = $item['type'] ?? '';
         if ($type !== 'series' && $type !== 'show') {
-            return (new Response())->status(400)->json(['error' => 'Item is not a series']);
+            return (new Response())->errorPlain(400, 'Item is not a series');
         }
 
         $metadataJson = $item['metadata_json'] ?? null;
@@ -910,13 +906,13 @@ class MediaItemController
         $mediaId = is_string($body['media_id'] ?? null) ? $body['media_id'] : null;
 
         if ($mediaId === null) {
-            return (new Response())->status(400)->json(['error' => 'Media ID is required']);
+            return (new Response())->errorPlain(400, 'Media ID is required');
         }
 
         $item = $this->itemRepository->findById($mediaId);
 
         if (!$item) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         $itemType = is_string($item['type'] ?? null) ? $item['type'] : '';
@@ -936,7 +932,7 @@ class MediaItemController
                     'mode' => 'single',
                 ]);
             }
-            return (new Response())->status(404)->json(['error' => 'No playable items found']);
+            return (new Response())->errorPlain(404, 'No playable items found');
         }
 
         $ids = array_column($children, 'id');
@@ -962,7 +958,7 @@ class MediaItemController
     private function shuffleMusicContainer(Request $request, string $mediaId, string $type): Response
     {
         if ($this->musicLibrary === null) {
-            return (new Response())->status(404)->json(['error' => 'No playable items found']);
+            return (new Response())->errorPlain(404, 'No playable items found');
         }
 
         $trackIds = $type === 'album'
@@ -970,7 +966,7 @@ class MediaItemController
             : $this->musicLibrary->getTrackMediaItemIdsForArtist($mediaId);
 
         if ($trackIds === []) {
-            return (new Response())->status(404)->json(['error' => 'No playable items found']);
+            return (new Response())->errorPlain(404, 'No playable items found');
         }
 
         $filter = $this->resolveRatingFilter($request);
@@ -989,7 +985,7 @@ class MediaItemController
             }
 
             if ($trackIds === []) {
-                return (new Response())->status(404)->json(['error' => 'No playable items found']);
+                return (new Response())->errorPlain(404, 'No playable items found');
             }
         }
 
@@ -1066,12 +1062,12 @@ class MediaItemController
         $item = $this->itemRepository->findById($params['id']);
 
         if (!$item) {
-            return (new Response())->status(404)->json(['error' => 'Item not found']);
+            return (new Response())->errorPlain(404, 'Item not found');
         }
 
         $body = $request->body;
         if (!is_array($body)) {
-            return (new Response())->status(400)->json(['error' => 'Request body must be a JSON object']);
+            return (new Response())->errorPlain(400, 'Request body must be a JSON object');
         }
 
         $updateData = [];
@@ -1105,7 +1101,7 @@ class MediaItemController
         }
 
         if (empty($updateData)) {
-            return (new Response())->status(400)->json(['error' => 'No valid fields to update']);
+            return (new Response())->errorPlain(400, 'No valid fields to update');
         }
 
         $this->itemRepository->update($params['id'], $updateData);
@@ -1165,25 +1161,23 @@ class MediaItemController
         $errorResponse = null;
 
         if (!is_array($submitted)) {
-            $errorResponse = (new Response())->status(400)
-                ->json(['error' => 'Metadata JSON (metadata_json) must be a JSON object']);
+            $errorResponse = (new Response())->errorPlain(400, 'Metadata JSON (metadata_json) must be a JSON object');
             return null;
         }
 
         if (strlen((string) json_encode($submitted)) > self::METADATA_PATCH_MAX_BYTES) {
-            $errorResponse = (new Response())->status(400)->json([
-                'error' => 'Metadata JSON (metadata_json) exceeds the '
-                    . self::METADATA_PATCH_MAX_BYTES . '-byte limit',
-            ]);
+            $errorResponse = (new Response())->errorPlain(400, 'Metadata JSON (metadata_json) exceeds the '
+                . self::METADATA_PATCH_MAX_BYTES . '-byte limit');
             return null;
         }
 
         $unknownKeys = array_keys(array_diff_key($submitted, self::METADATA_PATCH_KEYS));
         if ($unknownKeys !== []) {
             $names = array_map(static fn (int|string $key): string => (string) $key, $unknownKeys);
-            $errorResponse = (new Response())->status(400)->json([
-                'error' => 'Metadata JSON (metadata_json) contains unsupported keys: ' . implode(', ', $names),
-            ]);
+            $errorResponse = (new Response())->errorPlain(
+                400,
+                'Metadata JSON (metadata_json) contains unsupported keys: ' . implode(', ', $names)
+            );
             return null;
         }
 
@@ -1258,8 +1252,6 @@ class MediaItemController
 
     private function metadataShapeViolation(string $key, string $expectedShape): Response
     {
-        return (new Response())->status(400)->json([
-            'error' => "metadata_json.{$key} must be {$expectedShape}",
-        ]);
+        return (new Response())->errorPlain(400, "metadata_json.{$key} must be {$expectedShape}");
     }
 }

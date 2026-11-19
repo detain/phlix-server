@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Common\Time\HttpDate;
 use Phlix\Common\Uuid;
 use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Transcoding\TranscodeManager;
@@ -134,7 +135,7 @@ trait TranscodeFileServer
         $completeVod = self::isCompletedVodPlaylist($path, $file, $fileSize);
         $cacheControl = self::cacheControlFor($file, $completeVod);
         $mtime = filemtime($path);
-        $lastModified = $mtime !== false ? gmdate('D, d M Y H:i:s', $mtime) . ' GMT' : null;
+        $lastModified = $mtime !== false ? HttpDate::gmt($mtime) : null;
         $stat = stat($path);
         $etag = null;
         if ($completeVod && $stat !== false) {
@@ -205,7 +206,7 @@ trait TranscodeFileServer
                 $rangeMtime = filemtime($path);
                 $rangeValidator = $rangeMtime === false
                     ? null
-                    : gmdate('D, d M Y H:i:s', $rangeMtime) . ' GMT';
+                    : HttpDate::gmt($rangeMtime);
                 $rangeStale = $rangeValidator === null || $ifRangeValue !== $rangeValidator;
             }
         }

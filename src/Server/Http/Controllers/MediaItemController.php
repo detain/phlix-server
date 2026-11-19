@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Common\Time\HttpDate;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Media\Library\ItemRepository;
@@ -732,7 +733,7 @@ class MediaItemController
         $fileSize = (int) @filesize($thumbnailPath);
         $mtime = (int) @filemtime($thumbnailPath);
         $etag = '"' . md5((string) $mtime . (string) $fileSize) . '"';
-        $lastModified = gmdate('D, d M Y H:i:s', $mtime) . ' GMT';
+        $lastModified = HttpDate::gmt($mtime);
 
         // Honor conditional GET: If-None-Match (ETag) or If-Modified-Since.
         $ifNoneMatch = $request->getHeader('If-None-Match');

@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Dlna;
 
+use Phlix\Common\Time\HttpDate;
 use Phlix\Common\Version;
 
 /**
@@ -265,7 +266,7 @@ final class SsdpSearchResponder
             "USN: %s\r\n" .
             "\r\n",
             self::MAX_AGE_SECONDS,
-            gmdate('D, d M Y H:i:s') . ' GMT',
+            HttpDate::fromNow(),
             $location,
             self::serverHeader(),
             $target,

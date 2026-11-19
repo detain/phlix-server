@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Stats;
 
 use DateTimeInterface;
+use Phlix\Common\Database\PruneDeadline;
+use Phlix\Common\Database\RetentionPrune;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Uuid;
@@ -1226,83 +1228,26 @@ class StatsCollector
      * Drains up to RETENTION_SWEEP_MAX_BATCHES_PER_TABLE expired batches from
      * one table, stopping early when a batch comes back short (queue drained).
      *
+     * D-14: the two-phase harvest/delete and the bounded deadlock retry are
+     * the estate retention-prune engine's law ({@see RetentionPrune}); this
+     * sweeper is its HARD-posture exemplar — a failing sweep propagates to
+     * {@see sweepRetention()}'s caller (the timer catch), which logs and lets
+     * the next tick retry, exactly as documented there.
+     *
      * @param string $table  Qualified only by this class's two call sites.
      * @param string $column Time column of that table.
      */
     private function sweepExpiredRows(string $table, string $column, int $retentionDays): int
     {
-        $deleted = 0;
-
-        for ($batch = 0; $batch < self::RETENTION_SWEEP_MAX_BATCHES_PER_TABLE; $batch++) {
-            $batchDeleted = $this->deleteExpiredBatch($table, $column, $retentionDays);
-            $deleted += $batchDeleted;
-
-            if ($batchDeleted < self::RETENTION_SWEEP_BATCH_SIZE) {
-                break;
-            }
-        }
-
-        return $deleted;
-    }
-
-    /**
-     * One two-phase batch: harvest ids, delete them. Deadlock-retried x3.
-     *
-     * @return int Rows deleted by this batch (0 when nothing is expired).
-     */
-    private function deleteExpiredBatch(string $table, string $column, int $retentionDays): int
-    {
-        for ($attempt = 1;; $attempt++) {
-            try {
-                /** @var mixed $idRows */
-                $idRows = $this->db->query(
-                    "SELECT id FROM {$table} WHERE {$column} < DATE_SUB(NOW(), INTERVAL ? DAY)"
-                    . " ORDER BY id LIMIT " . self::RETENTION_SWEEP_BATCH_SIZE,
-                    [$retentionDays]
-                );
-
-                $ids = [];
-                if (is_array($idRows)) {
-                    foreach ($idRows as $row) {
-                        if (!is_array($row)) {
-                            continue;
-                        }
-                        $id = $row['id'] ?? null;
-                        // These tables' real PKs are CHAR(36) UUIDs (both
-                        // record* helpers mint generateUuid() ids); depending
-                        // on driver mode SELECT can also hand back ints or
-                        // numeric strings. Accept any non-empty scalar id and
-                        // bind it through verbatim — the DELETE matches by
-                        // placeholder, so the id never interpolates into SQL.
-                        if ((is_int($id) && $id >= 0) || (is_string($id) && $id !== '')) {
-                            $ids[] = $id;
-                        }
-                    }
-                }
-
-                if ($ids === []) {
-                    return 0;
-                }
-
-                $placeholders = implode(',', array_fill(0, count($ids), '?'));
-                $result = $this->db->query(
-                    "DELETE FROM {$table} WHERE id IN ({$placeholders})",
-                    $ids
-                );
-
-                return is_numeric($result) ? (int) $result : 0;
-            } catch (\PDOException $e) {
-                // Same retry law as hub ServerReaper::sweepHeartbeats: retry the
-                // deadlock victim a bounded number of times, propagate anything
-                // else (and a third deadlock) immediately.
-                if (
-                    $attempt >= self::RETENTION_SWEEP_MAX_RETRIES
-                    || stripos($e->getMessage(), 'deadlock') === false
-                ) {
-                    throw $e;
-                }
-                usleep(50_000 * $attempt);
-            }
-        }
+        return RetentionPrune::sweepByIds(
+            $this->db,
+            $table,
+            $column,
+            PruneDeadline::beforeDateSubNowDays($retentionDays),
+            self::RETENTION_SWEEP_BATCH_SIZE,
+            self::RETENTION_SWEEP_MAX_BATCHES_PER_TABLE,
+            self::RETENTION_SWEEP_MAX_RETRIES,
+            failLoud: true
+        );
     }
 }

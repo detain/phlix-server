@@ -116,8 +116,8 @@ final class HttpDateTest extends TestCase
             $this->assertFileExists($path);
             $source = (string) file_get_contents($path);
 
-            $this->assertStringNotContainsString(
-                "'D, d M Y H:i:s'",
+            $this->assertDoesNotMatchRegularExpression(
+                self::grammar_intrusion_pattern(),
                 $source,
                 $relative . ' must not hand-build the HTTP-date grammar anymore.'
             );
@@ -127,5 +127,34 @@ final class HttpDateTest extends TestCase
                 $relative . ' must mint its HTTP dates through the SSOT.'
             );
         }
+    }
+
+    /**
+     * M4 canary (review SRV-MICRO-r3 Minor): the census must catch a re-inline
+     * spelled with ANY PHP quoting, not only the historical single-quoted one.
+     * PSR-12 permits both spellings, so a double-quoted `gmdate("D, d M ...")`
+     * copy is a silent-growth vector the census exists to close.
+     */
+    public function test_the_census_pattern_catches_a_double_quoted_re_inline(): void
+    {
+        $canary = "<?php\n\$lastModified = gmdate(\"D, d M Y H:i:s\", \$mtime) . ' GMT';\n";
+
+        $this->assertMatchesRegularExpression(
+            self::grammar_intrusion_pattern(),
+            $canary,
+            'A double-quoted grammar copy must trip the census (M4 class).'
+        );
+    }
+
+    /**
+     * Grammar intrusion pattern used by BOTH the carrier census and its canary
+     * leg, so the two can never drift apart. Deliberately quote-agnostic (r3
+     * review Minor / M4 probe): the grammar bytes appearing ANYWHERE in a
+     * migrated carrier are a hand-built copy, whichever PHP quoting the
+     * re-inline chose — PSR-12 permits both spellings.
+     */
+    private static function grammar_intrusion_pattern(): string
+    {
+        return '/D, d M Y H:i:s/';
     }
 }

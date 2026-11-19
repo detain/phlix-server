@@ -1556,7 +1556,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // +5 507→512 (perf/C gate-profile fix): TranscodeController::start() and status() each read
     // `$request->gatedProfileId`, and three reads of it in ApplicationScheduleGateTest. Measured from
     // the phpunit red at 512.
-    private const EXPECTED_DECLARED_READS = 512;
+    // +5 512→517 (census-rotate closeout, measured at 016ea759): five program-era reads, all on
+    // declared members — 379ea2bf's rawParam helper adds two `$request->query[$key] ??
+    // $request->input($key)` query reads (the lines it replaced were $request->input() METHOD calls,
+    // never counted), and 7506f306's DECODE-ADOPT regression pins add three assertSame reads
+    // (rawBody once, body twice; the src json_decode→Json::decodeInbound swap is read-neutral 1:1).
+    // Measured from the phpunit red (517), not predicted; per-delta attribution in
+    // /tmp/opencode/refactor-exec-1119/SRV-CENSUS-ROTATE.md.
+    private const EXPECTED_DECLARED_READS = 517;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1920,7 +1927,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // Measured from the phpunit red ("1273 is identical to 1270").
     // 1273→1274 (the merge of perf/A, perf/B, perf/C and perf/D onto master, HEAD b1870af9):
     // the merged tree's declared-member write count, measured from the phpunit red ("1274").
-    private const EXPECTED_DECLARED_WRITES = 1274;
+    // +41 1274→1315 (census-rotate closeout, measured at 016ea759): the whole drift since the pins
+    // were last green (0c4ab6e6) — every rung whole-property writes on recognized Request roots in
+    // test and fixture files. Pre-program: 0dcdccf8 +3 (stream-memo builder seeds method/path/
+    // userId). Program era: 379ea2bf +16 (stats-clamp fixtures' body/query seeds), a2aa8ad9 +6
+    // (since query/body seeds; that commit's tree already measured 514/1299 with these pins red),
+    // 3b010225 +2 (W4 EnvelopeWireCorpusTest method/headers), c04196a0 +5 (playback from/to seeds),
+    // 80b7e557 +2 (A-13 parity helper seeds), 7506f306 +4 (DECODE-ADOPT method/body/method/
+    // rawBody), 2d2ac30b +3 (ENVELOPES-B3 path/headers/path). Measured from the phpunit red (1315),
+    // not predicted; per-delta attribution in /tmp/opencode/refactor-exec-1119/SRV-CENSUS-ROTATE.md.
+    private const EXPECTED_DECLARED_WRITES = 1315;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

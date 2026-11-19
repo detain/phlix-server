@@ -1325,7 +1325,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // staged index; my two new tests are the +2). The 2180->2185 drift rode with
     // siblings' committed walks (3525bfe9 +1, b5ae02f4 +2, c50e8bb1 +1, one from
     // an earlier step's arithmetic) -- named, not absorbed; FILES green on measurement.
-    private const EXPECTED_PHP_FILES = 2189;
+    //
+    // Staircase continued -- SRV-STOREFAMILIES (D-10 job-store fold, commit 1 of 3).
+    // +1 mine: tests/Unit/Media/Support/JsonJobStoreFormatTest.php -- the pre-fold
+    //   byte-grammar pins for the Similarity/Collection/MetadataWrite clone trio
+    //   (payload lines, LOCK_EX idempotence, sanitised file name, content-time drain
+    //   order, corrupt/empty-line refusal, eviction-at-bound), green at the pristine
+    //   parent so the fold's byte-identity claim is falsifiable against real bytes.
+    //   Commit 2 adds src/Media/Support/JsonJobStore.php (+1) at the fold itself.
+    // Reads/writes legs stay RED and UNROTATED (law, repeated): this lane's files
+    //   contain zero $request roots (grep census: five lane files, all 0 hits).
+    // Pin: 2189 tracked at stage time (git ls-files '*.php'), +1 mine = 2190.
+    private const EXPECTED_PHP_FILES = 2190;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -54,13 +54,22 @@ final class WatchHistoryRow
      */
     public static function fromRow(array $row): self
     {
-        $durationRaw = $row['duration_ticks'] ?? null;
-        $duration = is_numeric($durationRaw) ? (int) $durationRaw : null;
-
-        $mediaName = isset($row['media_name']) && is_string($row['media_name'])
-            ? $row['media_name'] : null;
-        $mediaType = isset($row['media_type']) && is_string($row['media_type'])
-            ? $row['media_type'] : null;
+        // E-09: this DTO's private asString/nullableString/asInt/asFloat
+        // helpers were further hand-rolled members of the estate's
+        // coercion families and now live in the RowMap convention table
+        // WITHOUT semantic change. Their legacy contracts are the
+        // SCALAR-CAST family here: 55 hydrates to "55" (where the strict
+        // Webhook records emit 0), numeric strings truncate through
+        // (int)/(float), and a non-scalar nullable timestamp becomes ''
+        // rather than null — the drift E-09 documents, preserved, not
+        // harmonized. Byte-identity pin:
+        // tests/Unit/Auth/Dto/WatchHistoryRowByteIdentityTest.php.
+        // The metadata_json decode keeps its array_key_exists() presence
+        // test verbatim: key presence (not just nullness) selects whether
+        // the metadata block exists at all, which scalar accessors do not
+        // model (out of pilot scope).
+        $mediaName = RowMap::nullableStr($row, 'media_name');
+        $mediaType = RowMap::nullableStr($row, 'media_type');
 
         $metadata = [];
         if (array_key_exists('metadata_json', $row)) {
@@ -68,16 +77,16 @@ final class WatchHistoryRow
         }
 
         return new self(
-            id: self::asString($row['id'] ?? ''),
-            profileId: self::asString($row['profile_id'] ?? ''),
-            mediaItemId: self::asString($row['media_item_id'] ?? ''),
-            positionTicks: self::asInt($row['position_ticks'] ?? 0),
-            durationTicks: $duration,
-            playbackStatus: self::asString($row['playback_status'] ?? ''),
-            progressPercent: self::asFloat($row['progress_percent'] ?? 0),
-            lastWatchedAt: self::asString($row['last_watched_at'] ?? ''),
-            createdAt: self::nullableString($row['created_at'] ?? null),
-            completedAt: self::nullableString($row['completed_at'] ?? null),
+            id: RowMap::stringFromScalar($row, 'id', ''),
+            profileId: RowMap::stringFromScalar($row, 'profile_id', ''),
+            mediaItemId: RowMap::stringFromScalar($row, 'media_item_id', ''),
+            positionTicks: RowMap::intFromNumeric($row, 'position_ticks', 0),
+            durationTicks: RowMap::nullableIntFromNumeric($row, 'duration_ticks'),
+            playbackStatus: RowMap::stringFromScalar($row, 'playback_status', ''),
+            progressPercent: RowMap::floatFromNumeric($row, 'progress_percent', 0.0),
+            lastWatchedAt: RowMap::stringFromScalar($row, 'last_watched_at', ''),
+            createdAt: RowMap::nullableStringFromScalar($row, 'created_at'),
+            completedAt: RowMap::nullableStringFromScalar($row, 'completed_at'),
             mediaName: $mediaName,
             mediaType: $mediaType,
             metadata: $metadata,
@@ -155,34 +164,5 @@ final class WatchHistoryRow
         }
         $decoded = json_decode($value, true);
         return RowMap::fromMixed($decoded);
-    }
-
-    private static function asString(mixed $value): string
-    {
-        if (is_string($value)) {
-            return $value;
-        }
-        if (is_int($value) || is_float($value) || is_bool($value)) {
-            return (string) $value;
-        }
-        return '';
-    }
-
-    private static function nullableString(mixed $value): ?string
-    {
-        if ($value === null) {
-            return null;
-        }
-        return self::asString($value);
-    }
-
-    private static function asInt(mixed $value): int
-    {
-        return is_numeric($value) ? (int) $value : 0;
-    }
-
-    private static function asFloat(mixed $value): float
-    {
-        return is_numeric($value) ? (float) $value : 0.0;
     }
 }

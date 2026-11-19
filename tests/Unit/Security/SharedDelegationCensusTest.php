@@ -1221,7 +1221,8 @@ final class SharedDelegationCensusTest extends TestCase
         'Phlix\Shared\Relay\RelayFrameType' => 'frame vocabulary enum (type names, not the encode grammar)',
         'Phlix\Shared\Relay\RelayHttpRequest' => 'tunnel wire DTO',
         'Phlix\Shared\Relay\RelayHttpRequestChunk' => 'tunnel wire DTO',
-        'Phlix\Shared\Relay\RelayHttpRequestCodec' => 'tunnel codec — instantiated collaborator; candidate family for a future delegation wave',
+        'Phlix\Shared\Relay\RelayHttpRequestCodec' =>
+            'tunnel codec — instantiated collaborator; candidate family for a future delegation wave',
         'Phlix\Shared\Relay\RelayHttpRequestHead' => 'tunnel wire DTO',
         'Phlix\Shared\Relay\RelayHttpResponseCodec' => 'tunnel codec — same future-wave note',
         'Phlix\Shared\Relay\RelayHttpResponseHead' => 'tunnel wire DTO',

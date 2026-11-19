@@ -1409,6 +1409,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   mine = 2207 tracked at this commit. Reads/writes legs stay RED and
     //   UNROTATED: zero own-delta (src untouched); foreign 517 vs 512 / 1315 vs
     //   1274 per law.
+    // Currency (CENSUS2 r1 review, 2026-11-19): that RED sentence was
+    //   false-to-disk at landing — the direct parent 520c6b37 had ALREADY
+    //   rotated READS to 517 and WRITES to 1315, and the full class is GREEN
+    //   at tip (OK 6 tests, 7 assertions). 'UNROTATED / zero own-delta' stays
+    //   true of this diff (staircase rows + the 2206→2207 bump only).
     private const EXPECTED_PHP_FILES = 2207;
 
     /**

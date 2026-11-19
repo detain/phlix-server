@@ -4559,4 +4559,140 @@ class ItemRepositoryTest extends TestCase
             $this->assertLessThan($maxIdx, $minIdx, 'floor bind must precede the cap bind');
         }
     }
+    public function testServiceTierRowDecodeLegsAreByteIdenticalToLegacyAcrossVectors(): void
+    {
+        // E-09 cohort 5a (ItemRepository): the pre-fold strict-guard ternaries in
+        // getVideoStreamColorMetadata()/fetchRatingRows()/valueBuckets()/
+        // letterCounts() transcribed verbatim from the parent tree; the folded
+        // RowMap legs must produce the identical value for every vector,
+        // including exception parity. Green at parent by construction: the
+        // production legs ARE the legacy expressions there.
+        $colorVectors = [
+            [
+                [
+                    'color_space' => 'bt2020',
+                    'color_transfer' => 'smpte2084',
+                    'color_primaries' => 'bt2020',
+                    'max_luminance' => 1000.5,
+                    'avg_luminance' => 200.25,
+                ],
+                'typed',
+            ],
+            [
+                [
+                    'color_space' => '',
+                    'color_transfer' => null,
+                    'color_primaries' => 5,
+                    'max_luminance' => null,
+                    'avg_luminance' => 'x',
+                ],
+                'empty/null/wrong-type colors',
+            ],
+            [[], 'all keys missing'],
+            [
+                ['color_space' => 'bt709', 'max_luminance' => '4000', 'avg_luminance' => 12.0],
+                'stringy luminance + absent arms',
+            ],
+            [['color_space' => 'bt709', 'max_luminance' => true, 'avg_luminance' => [1]], 'non-numeric luminance'],
+            [['color_transfer' => 'hlg'], 'single color leg'],
+        ];
+        foreach ($colorVectors as [$row, $label]) {
+            $service = new ItemRepository($this->rowConnection([$row], 'FROM media_streams'));
+            $expected = self::legacyColorRow($row);
+            $this->assertSame($expected, $service->getVideoStreamColorMetadata('item-1'), $label);
+        }
+
+        // :2974 id leg: keyed-in vs skipped, observed through the public batch walk.
+        $ratingVectors = [
+            ['id' => 'lookup-1', 'label' => 'string id'],
+            ['id' => 7, 'label' => 'int id'],
+            ['id' => null, 'label' => 'null id'],
+            ['label' => 'missing id'],
+            ['id' => '', 'label' => 'empty id'],
+            ['id' => 1.5, 'label' => 'float id'],
+        ];
+        foreach ($ratingVectors as $row) {
+            $row = array_merge($row, ['content_rating' => 'PG-MARK', 'parent_id' => null]);
+            unset($row['label']);
+            $service = new ItemRepository($this->rowConnection([$row], 'WHERE id IN'));
+            $result = $service->effectiveContentRatingsForIds(['lookup-1']);
+            $legacyId = isset($row['id']) && is_string($row['id']) ? $row['id'] : null;
+            $expected = $legacyId !== null && $legacyId !== '' ? 'PG-MARK' : null;
+            $this->assertSame(['lookup-1' => $expected], $result);
+        }
+
+        // :3445 item_count leg (bucket_value pass-through leg kept verbatim).
+        $bucketVectors = [
+            ['item_count' => 12],
+            ['item_count' => '12'],
+            ['item_count' => 12.9],
+            ['item_count' => '1e3'],
+            ['item_count' => true],
+            ['item_count' => null],
+            ['item_count' => 'x'],
+            []
+        ];
+        foreach ($bucketVectors as $row) {
+            $feed = array_merge(['bucket_value' => '2024'], $row);
+            $service = new ItemRepository($this->rowConnection([$feed], 'bucket_value'));
+            $count = isset($feed['item_count']) && is_numeric($feed['item_count']) ? (int) $feed['item_count'] : 0;
+            $this->assertSame([['value' => '2024', 'count' => $count]], $service->valueBuckets('year', []));
+        }
+
+        // :3785 n leg (letter pass-through leg kept verbatim).
+        foreach ($bucketVectors as $row) {
+            $feed = array_merge(['letter' => 'A'], $row);
+            $service = new ItemRepository($this->rowConnection([$feed], 'AS letter'));
+            $count = isset($feed['n']) && is_numeric($feed['n']) ? (int) $feed['n'] : 0;
+            $this->assertSame([['letter' => 'A', 'count' => $count]], $service->letterCounts([]));
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     *
+     * @return array{
+     *     color_space: string,
+     *     color_transfer: string,
+     *     color_primaries: string,
+     *     max_luminance: float,
+     *     avg_luminance: float
+     * }|null
+     */
+    private static function legacyColorRow(array $row): ?array
+    {
+        $colorSpace = is_string($row['color_space'] ?? null) && $row['color_space'] !== ''
+            ? (string) $row['color_space'] : null;
+        $colorTransfer = is_string($row['color_transfer'] ?? null) && $row['color_transfer'] !== ''
+            ? (string) $row['color_transfer'] : null;
+        $colorPrimaries = is_string($row['color_primaries'] ?? null) && $row['color_primaries'] !== ''
+            ? (string) $row['color_primaries'] : null;
+
+        if ($colorSpace === null && $colorTransfer === null && $colorPrimaries === null) {
+            return null;
+        }
+
+        return [
+            'color_space' => $colorSpace ?? 'bt2020nc',
+            'color_transfer' => $colorTransfer ?? 'bt709',
+            'color_primaries' => $colorPrimaries ?? 'bt2020',
+            'max_luminance' => is_numeric($row['max_luminance'] ?? null) ? (float) $row['max_luminance'] : 1000.0,
+            'avg_luminance' => is_numeric($row['avg_luminance'] ?? null) ? (float) $row['avg_luminance'] : 200.0,
+        ];
+    }
+
+    /**
+     * A Connection mock whose query() returns [$row] (or the list) only for the
+     * SQL discriminator, [] otherwise.
+     *
+     * @param list<array<string, mixed>> $rows
+     */
+    private function rowConnection(array $rows, string $discriminator): Connection
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static fn(mixed $sql): array => is_string($sql) && str_contains($sql, $discriminator) ? $rows : []
+        );
+        return $db;
+    }
 }

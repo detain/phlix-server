@@ -14,6 +14,7 @@ namespace Phlix\Media\Library;
 use Phlix\Collections\SmartRuleVocabulary;
 use Phlix\Common\Database\MysqlError;
 use Phlix\Common\Http\PageLimit;
+use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
 use Phlix\Server\Http\RequestContext;
 use Phlix\Stats\StatsCollector;
@@ -2245,13 +2246,14 @@ class ItemRepository
         if (!is_array($row)) {
             return null;
         }
+        $row = RowMap::fromMixed($row);
 
-        $colorSpace = is_string($row['color_space'] ?? null) && $row['color_space'] !== ''
-            ? (string) $row['color_space'] : null;
-        $colorTransfer = is_string($row['color_transfer'] ?? null) && $row['color_transfer'] !== ''
-            ? (string) $row['color_transfer'] : null;
-        $colorPrimaries = is_string($row['color_primaries'] ?? null) && $row['color_primaries'] !== ''
-            ? (string) $row['color_primaries'] : null;
+        // E-09 cohort 5a: RowMap fold of the pre-fold strict-guard ternaries
+        // (fallbacks transcribed); byte-identity pinned by the legacy-oracle
+        // vectors in tests/Unit/Media/Library/ItemRepositoryTest.php.
+        $colorSpace = RowMap::nullableNonEmptyStr($row, 'color_space');
+        $colorTransfer = RowMap::nullableNonEmptyStr($row, 'color_transfer');
+        $colorPrimaries = RowMap::nullableNonEmptyStr($row, 'color_primaries');
 
         // Pre-073 / un-rescanned / ffprobe reported no color info: NONE of the
         // color columns are populated → the HDR decision cannot be sourced here,
@@ -2267,8 +2269,8 @@ class ItemRepository
             'color_space' => $colorSpace ?? 'bt2020nc',
             'color_transfer' => $colorTransfer ?? 'bt709',
             'color_primaries' => $colorPrimaries ?? 'bt2020',
-            'max_luminance' => is_numeric($row['max_luminance'] ?? null) ? (float) $row['max_luminance'] : 1000.0,
-            'avg_luminance' => is_numeric($row['avg_luminance'] ?? null) ? (float) $row['avg_luminance'] : 200.0,
+            'max_luminance' => RowMap::floatFromNumeric($row, 'max_luminance', 1000.0),
+            'avg_luminance' => RowMap::floatFromNumeric($row, 'avg_luminance', 200.0),
         ];
     }
 
@@ -2971,7 +2973,8 @@ class ItemRepository
                 if (!is_array($row)) {
                     continue;
                 }
-                $id = isset($row['id']) && is_string($row['id']) ? $row['id'] : null;
+                $row = RowMap::fromMixed($row);
+                $id = RowMap::nullableStr($row, 'id');
                 if ($id === null || $id === '') {
                     continue;
                 }
@@ -3437,14 +3440,13 @@ class ItemRepository
                 if (!is_array($row)) {
                     continue;
                 }
+                $row = RowMap::fromMixed($row);
                 $rawValue = $row['bucket_value'];
                 // Normalise to int|string (mysql YEAR() → int; others → string).  A
                 // NULL from a buggy row is cast to '' so the return shape is always
                 // int|string per the docblock and never mixed.
                 $value = is_int($rawValue) ? $rawValue : (is_string($rawValue) ? $rawValue : '');
-                $count = isset($row['item_count']) && is_numeric($row['item_count'])
-                    ? (int) $row['item_count']
-                    : 0;
+                $count = RowMap::intFromNumeric($row, 'item_count', 0);
                 $out[] = ['value' => $value, 'count' => $count];
             }
         }
@@ -3770,6 +3772,7 @@ class ItemRepository
                 if (!is_array($row)) {
                     continue;
                 }
+                $row = RowMap::fromMixed($row);
                 $rawLetter = $row['letter'] ?? null;
                 // An empty sort key (a name that is only an article like "The ",
                 // or all whitespace) yields LEFT('',1)='' — bucket it under '#'
@@ -3782,7 +3785,7 @@ class ItemRepository
                 // position in the grid — a pre-existing rail/grid skew for
                 // multilingual libraries, out of scope for the article rule.
                 $letter = is_string($rawLetter) && $rawLetter !== '' ? $rawLetter : '#';
-                $count = isset($row['n']) && is_numeric($row['n']) ? (int) $row['n'] : 0;
+                $count = RowMap::intFromNumeric($row, 'n', 0);
                 $out[] = ['letter' => $letter, 'count' => $count];
             }
         }

@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Collections;
 
+use Phlix\Auth\SignedUrl;
 use Phlix\Media\CollectionService;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Metadata\BackdropSrcset;
 use Phlix\Media\Metadata\TmdbProvider;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
@@ -461,5 +463,260 @@ final class CollectionServiceTest extends TestCase
             $calls,
             static fn (array $call): bool => str_contains($call['sql'], $needle)
         ));
+    }
+
+    // -----------------------------------------------------------------
+    // E-09 cohort 5a — RowMap fold legacy-oracle vectors
+    // -----------------------------------------------------------------
+
+    /**
+     * The three collection-level read exits must keep producing the exact
+     * legacy scalar shape for every NULL / wrong-type / missing-key variation
+     * of the media_collections row, byte-identical to a verbatim transcription
+     * of the pre-E-09 inline blocks (the triple-duplicate that now lives in
+     * CollectionService::collectionRecordFromRow()).
+     *
+     * All three hosts run every vector, so per-block drift after the
+     * extract-once would fail on the first vector.
+     */
+    public function testCollectionRecordShapingIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var array<string, array<string, mixed>> $vectors */
+        $vectors = [
+            'typed' => [
+                'id' => self::LOCAL_COLLECTION_ID,
+                'tmdb_collection_id' => self::TMDB_COLLECTION_ID,
+                'name' => 'The Saga Collection',
+                'overview' => 'Eight films',
+                'poster_url' => null,
+                'backdrop_url' => null,
+            ],
+            'nulls' => [
+                'id' => null,
+                'tmdb_collection_id' => null,
+                'name' => null,
+                'overview' => null,
+                'poster_url' => null,
+                'backdrop_url' => null,
+            ],
+            'missing-keys' => [
+                'poster_url' => null,
+                'backdrop_url' => null,
+            ],
+            'numeric-strings-are-not-ints' => [
+                'id' => '42',
+                'tmdb_collection_id' => '10',
+                'name' => 'S',
+                'overview' => 7,
+                'poster_url' => null,
+                'backdrop_url' => null,
+            ],
+            'floats-and-bools' => [
+                'id' => 4.2,
+                'tmdb_collection_id' => true,
+                'name' => true,
+                'overview' => 1.0,
+                'poster_url' => null,
+                'backdrop_url' => null,
+            ],
+            'array-values' => [
+                'id' => [1],
+                'tmdb_collection_id' => [],
+                'name' => ['x'],
+                'overview' => ['a' => 'b'],
+                'poster_url' => null,
+                'backdrop_url' => null,
+            ],
+            'tmdb-art' => [
+                'id' => self::LOCAL_COLLECTION_ID,
+                'tmdb_collection_id' => self::TMDB_COLLECTION_ID,
+                'name' => 'S',
+                'overview' => null,
+                'poster_url' => 'https://image.tmdb.org/t/p/w500/p.jpg',
+                'backdrop_url' => 'https://image.tmdb.org/t/p/w1280/b.jpg',
+            ],
+            'wrong-type-art' => [
+                'id' => self::LOCAL_COLLECTION_ID,
+                'tmdb_collection_id' => self::TMDB_COLLECTION_ID,
+                'name' => 'S',
+                'overview' => null,
+                'poster_url' => 99,
+                'backdrop_url' => true,
+            ],
+            'empty-string-art' => [
+                'id' => self::LOCAL_COLLECTION_ID,
+                'tmdb_collection_id' => self::TMDB_COLLECTION_ID,
+                'name' => 'S',
+                'overview' => '',
+                'poster_url' => '',
+                'backdrop_url' => '',
+            ],
+        ];
+
+        foreach ($vectors as $label => $row) {
+            $service = $this->recordShapeService($row);
+            $expected = $this->legacyCollectionRecord($row);
+
+            $this->assertSame(
+                $expected,
+                $service->getCollectionById(self::LOCAL_COLLECTION_ID),
+                "getCollectionById() must match the legacy block for vector [$label]"
+            );
+            $this->assertSame(
+                $expected,
+                $service->getCollectionForItem(self::MOVIE_UUID),
+                "getCollectionForItem() must match the legacy block for vector [$label]"
+            );
+            $this->assertSame(
+                $expected,
+                $service->getOrCreateCollection(self::TMDB_COLLECTION_ID),
+                "getOrCreateCollection() must match the legacy block for vector [$label]"
+            );
+        }
+    }
+
+    /**
+     * The getCollectionMembers() join-loop must keep the exact legacy shape
+     * for the four strict-scalar sites (id/name/type string-guarded,
+     * tmdb_part_order int-guarded) plus the raw metadata_json passthrough,
+     * byte-identical to a verbatim transcription of the pre-E-09 block.
+     *
+     * Vectors keep metadata_json NULL/absent so the artwork legs resolve
+     * deterministically through the empty decoded-metadata path.
+     */
+    public function testCollectionMemberShapingIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var array<string, array<string, mixed>> $vectors */
+        $vectors = [
+            'typed' => [
+                'id' => self::MOVIE_UUID,
+                'name' => 'The Fellowship of the Ring',
+                'type' => 'movie',
+                'metadata_json' => null,
+                'tmdb_part_order' => 1,
+            ],
+            'nulls' => [
+                'id' => null,
+                'name' => null,
+                'type' => null,
+                'metadata_json' => null,
+                'tmdb_part_order' => null,
+            ],
+            'missing-keys' => [],
+            'numeric-string-part-order' => [
+                'id' => self::MOVIE_UUID,
+                'name' => 'M',
+                'type' => 'movie',
+                'metadata_json' => null,
+                'tmdb_part_order' => '3',
+            ],
+            'wrong-type-fields' => [
+                'id' => 99,
+                'name' => 1.5,
+                'type' => true,
+                'metadata_json' => null,
+                'tmdb_part_order' => [4],
+            ],
+        ];
+
+        foreach ($vectors as $label => $row) {
+            $service = $this->recordShapeService($row);
+
+            $this->assertSame(
+                [$this->legacyMemberRecord($row)],
+                $service->getCollectionMembers(self::LOCAL_COLLECTION_ID),
+                "getCollectionMembers() must match the legacy block for vector [$label]"
+            );
+        }
+    }
+
+    /**
+     * A CollectionService whose Connection answers EVERY SELECT with the one
+     * given row (the four read exits each re-issue their own SELECT; every
+     * vector row is shaped to satisfy whichever table the SQL targets).
+     *
+     * @param array<string, mixed> $row
+     */
+    private function recordShapeService(array $row): CollectionService
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            /**
+             * @param array<int, mixed> $params
+             * @return array<int, array<string, mixed>>
+             */
+            static fn (string $sql, array $params = []): array => str_starts_with(ltrim($sql), 'SELECT')
+                ? [$row]
+                : []
+        );
+
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('hasApiKey')->willReturn(true);
+        $tmdb->method('getCollection')->willReturn([
+            'name' => 'The Saga Collection',
+            'overview' => null,
+            'poster_path' => null,
+            'backdrop_path' => null,
+            'parts' => [],
+        ]);
+
+        return new CollectionService($db, $this->createMock(ItemRepository::class), $tmdb);
+    }
+
+    /**
+     * Verbatim transcription of the pre-E-09 inline decode block (the
+     * byte-identical triple at CollectionService.php:178-190/:401-413/:442-454
+     * as of commit 8d6dc80f).
+     *
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private function legacyCollectionRecord(array $row): array
+    {
+        $storedPoster = is_string($row['poster_url'] ?? null) ? $row['poster_url'] : null;
+        $storedBackdrop = is_string($row['backdrop_url'] ?? null) ? $row['backdrop_url'] : null;
+
+        return [
+            'id' => is_int($row['id'] ?? null) ? $row['id'] : 0,
+            'tmdb_collection_id' => is_int($row['tmdb_collection_id'] ?? null) ? $row['tmdb_collection_id'] : 0,
+            'name' => is_string($row['name'] ?? null) ? $row['name'] : '',
+            'overview' => is_string($row['overview'] ?? null) ? $row['overview'] : null,
+            'poster_url' => SignedUrl::refreshArtworkUrl($storedPoster),
+            'backdrop_url' => SignedUrl::refreshArtworkUrl(
+                BackdropSrcset::largeUrl($storedBackdrop) ?? $storedBackdrop
+            ),
+        ];
+    }
+
+    /**
+     * Verbatim transcription of the pre-E-09 getCollectionMembers() block
+     * (CollectionService.php:341-365 as of commit 8d6dc80f) for vectors whose
+     * metadata_json decodes to the empty array.
+     *
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private function legacyMemberRecord(array $row): array
+    {
+        /** @var array<string, mixed> $metadata */
+        $metadata = [];
+        $storedPoster = is_string($metadata['poster_url'] ?? null) && $metadata['poster_url'] !== ''
+            ? $metadata['poster_url']
+            : null;
+        $storedBackdrop = is_string($metadata['backdrop_url'] ?? null) && $metadata['backdrop_url'] !== ''
+            ? $metadata['backdrop_url']
+            : null;
+
+        return [
+            'id' => is_string($row['id'] ?? null) ? $row['id'] : '',
+            'name' => is_string($row['name'] ?? null) ? $row['name'] : '',
+            'type' => is_string($row['type'] ?? null) ? $row['type'] : '',
+            'metadata_json' => $row['metadata_json'] ?? null,
+            'poster_url' => SignedUrl::refreshArtworkUrl($storedPoster),
+            'backdrop_url' => SignedUrl::refreshArtworkUrl(
+                BackdropSrcset::rowUrl($storedBackdrop) ?? $storedBackdrop
+            ),
+            'tmdb_part_order' => is_int($row['tmdb_part_order'] ?? null) ? $row['tmdb_part_order'] : 0,
+        ];
     }
 }

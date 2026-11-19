@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media;
 
 use Phlix\Auth\SignedUrl;
+use Phlix\Common\Util\RowMap;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Metadata\BackdropSrcset;
 use Phlix\Media\Metadata\TmdbProvider;
@@ -175,19 +176,7 @@ final class CollectionService
             return null;
         }
 
-        $storedPoster = is_string($row['poster_url'] ?? null) ? $row['poster_url'] : null;
-        $storedBackdrop = is_string($row['backdrop_url'] ?? null) ? $row['backdrop_url'] : null;
-
-        return [
-            'id' => is_int($row['id'] ?? null) ? $row['id'] : 0,
-            'tmdb_collection_id' => is_int($row['tmdb_collection_id'] ?? null) ? $row['tmdb_collection_id'] : 0,
-            'name' => is_string($row['name'] ?? null) ? $row['name'] : '',
-            'overview' => is_string($row['overview'] ?? null) ? $row['overview'] : null,
-            'poster_url' => SignedUrl::refreshArtworkUrl($storedPoster),
-            'backdrop_url' => SignedUrl::refreshArtworkUrl(
-                BackdropSrcset::largeUrl($storedBackdrop) ?? $storedBackdrop
-            ),
-        ];
+        return self::collectionRecordFromRow($row);
     }
 
     /**
@@ -337,6 +326,10 @@ final class CollectionService
             if (!is_array($row)) {
                 continue;
             }
+            // E-09 cohort 5a: string-key normalization at the loop head (the
+            // C4 fromMixed boundary law); int keys are never read below, so
+            // dropping them is behavior-neutral.
+            $row = RowMap::fromMixed($row);
 
             // S436: media_items has no poster_url/backdrop_url columns; artwork
             // lives inside metadata_json as decoded keys (same source MediaItemShaper uses).
@@ -349,9 +342,9 @@ final class CollectionService
                 : null;
 
             $members[] = [
-                'id' => is_string($row['id'] ?? null) ? $row['id'] : '',
-                'name' => is_string($row['name'] ?? null) ? $row['name'] : '',
-                'type' => is_string($row['type'] ?? null) ? $row['type'] : '',
+                'id' => RowMap::str($row, 'id', ''),
+                'name' => RowMap::str($row, 'name', ''),
+                'type' => RowMap::str($row, 'type', ''),
                 'metadata_json' => $row['metadata_json'] ?? null,
                 'poster_url' => SignedUrl::refreshArtworkUrl($storedPoster),
                 // LIST-ROW budget, not the hero one: this is up to N member rows
@@ -361,7 +354,7 @@ final class CollectionService
                 'backdrop_url' => SignedUrl::refreshArtworkUrl(
                     BackdropSrcset::rowUrl($storedBackdrop) ?? $storedBackdrop
                 ),
-                'tmdb_part_order' => is_int($row['tmdb_part_order'] ?? null) ? $row['tmdb_part_order'] : 0,
+                'tmdb_part_order' => RowMap::int($row, 'tmdb_part_order', 0),
             ];
         }
 
@@ -398,19 +391,7 @@ final class CollectionService
             return null;
         }
 
-        $storedPoster = is_string($row['poster_url'] ?? null) ? $row['poster_url'] : null;
-        $storedBackdrop = is_string($row['backdrop_url'] ?? null) ? $row['backdrop_url'] : null;
-
-        return [
-            'id' => is_int($row['id'] ?? null) ? $row['id'] : 0,
-            'tmdb_collection_id' => is_int($row['tmdb_collection_id'] ?? null) ? $row['tmdb_collection_id'] : 0,
-            'name' => is_string($row['name'] ?? null) ? $row['name'] : '',
-            'overview' => is_string($row['overview'] ?? null) ? $row['overview'] : null,
-            'poster_url' => SignedUrl::refreshArtworkUrl($storedPoster),
-            'backdrop_url' => SignedUrl::refreshArtworkUrl(
-                BackdropSrcset::largeUrl($storedBackdrop) ?? $storedBackdrop
-            ),
-        ];
+        return self::collectionRecordFromRow($row);
     }
 
     /**
@@ -439,14 +420,35 @@ final class CollectionService
             return null;
         }
 
-        $storedPoster = is_string($row['poster_url'] ?? null) ? $row['poster_url'] : null;
-        $storedBackdrop = is_string($row['backdrop_url'] ?? null) ? $row['backdrop_url'] : null;
+        return self::collectionRecordFromRow($row);
+    }
+
+    /**
+     * Shape one `media_collections` row into the shared collection record.
+     *
+     * E-09 cohort 5a: the three collection-level read exits carried a
+     * byte-identical inline decode block (verified md5 3b8be08a each at
+     * 8d6dc80f); this is the extract-once adoption onto {@see RowMap}.
+     * Every per-column fallback is the legacy ternary's default transcribed,
+     * never harmonized — byte-identity is pinned by the legacy-oracle vectors
+     * in tests/Unit/Collections/CollectionServiceTest.php, which run all
+     * three hosts against a verbatim copy of the pre-fold block.
+     *
+     * @param array<array-key, mixed> $row Row as the driver returned it
+     * @return array{id: int, tmdb_collection_id: int, name: string, overview: string|null,
+     *     poster_url: string|null, backdrop_url: string|null}
+     */
+    private static function collectionRecordFromRow(array $row): array
+    {
+        $row = RowMap::fromMixed($row);
+        $storedPoster = RowMap::nullableStr($row, 'poster_url');
+        $storedBackdrop = RowMap::nullableStr($row, 'backdrop_url');
 
         return [
-            'id' => is_int($row['id'] ?? null) ? $row['id'] : 0,
-            'tmdb_collection_id' => is_int($row['tmdb_collection_id'] ?? null) ? $row['tmdb_collection_id'] : 0,
-            'name' => is_string($row['name'] ?? null) ? $row['name'] : '',
-            'overview' => is_string($row['overview'] ?? null) ? $row['overview'] : null,
+            'id' => RowMap::int($row, 'id', 0),
+            'tmdb_collection_id' => RowMap::int($row, 'tmdb_collection_id', 0),
+            'name' => RowMap::str($row, 'name', ''),
+            'overview' => RowMap::nullableStr($row, 'overview'),
             'poster_url' => SignedUrl::refreshArtworkUrl($storedPoster),
             'backdrop_url' => SignedUrl::refreshArtworkUrl(
                 BackdropSrcset::largeUrl($storedBackdrop) ?? $storedBackdrop

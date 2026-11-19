@@ -265,7 +265,7 @@ class PhlixMySQLConnection extends Connection
      * socket, rolls back, poisons the connection, and throws with a message
      * that says so; {@see commitTrans()} then refuses exactly once
      * (see the `$txPoisoned` field docblock). The design rationale is in
-     * /tmp/opencode/refactor-exec-1119/DESIGN-TX-MUTEX.md §P2.5-1.1.
+     * /tmp/opencode/refactor-exec-1119/DESIGN-TX-MUTEX.md §P2.3-1.1.
      *
      * @param string $query
      * @param mixed  $parameters
@@ -280,7 +280,7 @@ class PhlixMySQLConnection extends Connection
             $errno = MysqlError::driverCode($e->errorInfo) ?? 0;
             if ($errno === MysqlError::CR_SERVER_GONE_ERROR || $errno === MysqlError::CR_SERVER_LOST) {
                 if ($this->pdo instanceof \PDO && $this->pdo->inTransaction()) {
-                    // TXMUTEX-A A1 (design §P2.5-1.1, port of the hub's arm):
+                    // TXMUTEX-A A1 (design §P2.3-1.1, port of the hub's arm):
                     // a gone-away INSIDE an open transaction is NOT retried.
                     // The first attempt may have been received and applied by
                     // the server before the socket died, so replaying it risks
@@ -727,7 +727,7 @@ class PhlixMySQLConnection extends Connection
             return true;
         }
 
-        // TXMUTEX-A A1 (design §P2.5-1.1): a connection execute() poisoned by
+        // TXMUTEX-A A1 (design §P2.3-1.1): a connection execute() poisoned by
         // losing the socket mid-transaction must not COMMIT onto the
         // replacement socket — the server never saw most of the work. Refuse
         // once (hub wording, verbatim) and clear, so the next transaction on

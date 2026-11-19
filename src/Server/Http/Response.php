@@ -215,6 +215,49 @@ class Response
     }
 
     /**
+     * The canonical `{error, code}` body for a tripped limiter (W4 PREP /
+     * finding A-04, M-16 SSOT): the server's only hand-rolled copy lived in
+     * `Application::rateLimitResponse()`; the seam now owns the vocabulary so
+     * S1 adoption of the shared Envelope is mechanical.
+     *
+     * @return array{error: string, code: string}
+     */
+    private static function rateLimitedBody(): array
+    {
+        return ['error' => 'Too Many Requests', 'code' => 'rate_limited'];
+    }
+
+    /**
+     * The single Retry-After formatter (A-04): the limiter layers already
+     * clamp non-negative, so the header is the decimal seconds verbatim.
+     */
+    private static function retryAfterHeader(int $retryAfterSeconds): string
+    {
+        return (string) $retryAfterSeconds;
+    }
+
+    /**
+     * Build the canonical HTTP 429 `rate_limited` envelope.
+     *
+     * Byte-identical to the hand-rolled shape it replaces (verified by
+     * `EnvelopeWireCorpusTest` before and after adoption): `Retry-After` is
+     * written BEFORE `json()`, so the header order on the wire is
+     * Retry-After, Content-Type, Cache-Control. `$extra` merges additively
+     * after `error`/`code` (left-biased union, same law as {@see error()}).
+     *
+     * @param int                  $retryAfterSeconds seconds until the window resets (never negative)
+     * @param array<string, mixed> $extra             additive top-level body keys
+     */
+    public static function rateLimited(int $retryAfterSeconds, array $extra = []): self
+    {
+        $response = (new self())
+            ->status(429)
+            ->header('Retry-After', self::retryAfterHeader($retryAfterSeconds));
+
+        return $response->json(self::rateLimitedBody() + $extra);
+    }
+
+    /**
      * Creates an HTML response.
      *
      * @param string $html The HTML content

@@ -2931,14 +2931,13 @@ class Application
      * S171 — pinned by `PublicFrontControllerRemovalGuardTest` — and this class's
      * CGI-era `run()`/`handleException()` path with it (review minor 5), so the
      * Workerman catch is now the whole map.) Static + side-effect-free so tests
-     * exercise it directly.
+     * exercise it directly. W4 PREP: the envelope bytes now come from the one
+     * canonical seam, {@see Response::rateLimited()} — S1/S2 adoption of the
+     * shared Envelope will re-point that seam, not this caller.
      */
     public static function rateLimitResponse(RateLimitException $e): Response
     {
-        return (new Response())
-            ->status(429)
-            ->header('Retry-After', (string) $e->retryAfterSeconds())
-            ->json(['error' => 'Too Many Requests', 'code' => 'rate_limited']);
+        return Response::rateLimited($e->retryAfterSeconds());
     }
 
     /**

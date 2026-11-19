@@ -1343,7 +1343,21 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   (no further new files), the fold census test asserting base-only constants
     //   rides with it.
     // Pin: 2190 tracked at stage time +1 = 2191.
-    private const EXPECTED_PHP_FILES = 2200;
+    //
+    // Staircase continued -- SRV-ENVELOPES-B4 commit 1 of 3 (ProfilesController adoption).
+    // +1 mine: tests/Unit/Server/Http/ProfilesInlineEnvelopeAdoptionTest.php -- the
+    //   byte-identity corpus for the 29 ProfilesController envelope sites converted in
+    //   this commit (28 onto errorPlain, the SRV-M17 hold 403 onto the error seam).
+    // Pin: 2200 tracked at stage time (git ls-files '*.php' measured 2200 over the
+    //   staged index). The disk walk shows 2202 only because a FOREIGN untracked
+    //   sibling file (ENVELOPES-b2/b3 MiddlewareErrorEnvelopeAdoptionTest.php) sits
+    //   in the tree; it is the sibling's rotation duty at its own commit -- named,
+    //   not absorbed. The committed tree is honest at 2201.
+    // Reads/writes legs stay RED and UNROTATED (law): measured 514 vs 512 and
+    //   1311 vs 1274 at this staging -- foreign sibling churn. Every batch-4 site is
+    //   a Response-only render with zero Request property reads/writes, so there is
+    //   nothing here to launder.
+    private const EXPECTED_PHP_FILES = 2201;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

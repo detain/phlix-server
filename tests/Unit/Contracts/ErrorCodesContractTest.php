@@ -149,7 +149,7 @@ final class ErrorCodesContractTest extends TestCase
         ['file' => 'Server/Http/Controllers/AuthController.php', 'expr' => '$e->errorCode', 'channel' => 'rest', 'reason' => 'exception-carried code; bridged via DYNAMIC_CODE_CHANNELS'],
         ['file' => 'Server/Http/Controllers/WebAuthnController.php', 'expr' => '$e->errorCode', 'channel' => 'rest', 'reason' => 'exception-carried code; bridged via DYNAMIC_CODE_CHANNELS (SRV-M17 hold leg)'],
         ['file' => 'Server/Http/Controllers/Auth/QuickConnectController.php', 'expr' => '$e->errorCode', 'channel' => 'rest', 'reason' => 'exception-carried code; bridged via DYNAMIC_CODE_CHANNELS (SRV-M17 hold leg)'],
-        ['file' => 'Server/Http/Controllers/ProfilesController.php', 'expr' => '$e->errorCode', 'channel' => 'rest', 'reason' => 'exception-carried code; bridged via DYNAMIC_CODE_CHANNELS (SRV-M17 hold leg)'],
+        ['file' => 'Server/Http/Controllers/ProfilesController.php', 'expr' => 'error($e->errorCode)', 'channel' => 'rest', 'reason' => 'exception-carried code bridged via DYNAMIC_CODE_CHANNELS, adopted onto the Response::error() seam in SRV-ENVELOPES-B4 (SRV-M17 hold leg)'],
         // Logger contexts on Workerman socket errors (int errno, own vocabulary).
         ['file' => 'Server/WebSocket/WebSocketServer.php', 'expr' => '$code', 'channel' => 'rest', 'reason' => 'Workerman socket-error int into logger context'],
     ];

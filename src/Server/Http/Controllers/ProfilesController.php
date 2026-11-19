@@ -95,7 +95,7 @@ final class ProfilesController
     {
         $userId = $request->userId ?? '';
         if ($userId === '') {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         return (new Response())->json([
@@ -120,13 +120,13 @@ final class ProfilesController
     {
         $userId = $request->userId ?? '';
         if ($userId === '') {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         $data = is_array($request->body) ? $request->body : [];
         $name = $data['name'] ?? null;
         if (!is_string($name) || trim($name) === '') {
-            return (new Response())->status(400)->json(['error' => 'Profile name is required']);
+            return (new Response())->errorPlain(400, 'Profile name is required');
         }
 
         $payload = [
@@ -143,7 +143,7 @@ final class ProfilesController
         try {
             $profileId = $this->profiles->create($userId, $payload);
         } catch (\InvalidArgumentException $e) {
-            return (new Response())->status(400)->json(['error' => $e->getMessage()]);
+            return (new Response())->errorPlain(400, $e->getMessage());
         }
 
         return (new Response())->status(201)->json([
@@ -167,7 +167,7 @@ final class ProfilesController
     {
         $profileId = $this->parseProfileId($params['profileId'] ?? null);
         if ($profileId === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid profile ID']);
+            return (new Response())->errorPlain(400, 'Invalid profile ID');
         }
 
         $denied = $this->denyUnlessProfileManageable($request, $profileId);
@@ -177,7 +177,7 @@ final class ProfilesController
 
         $profile = $this->profiles->findByIdWithSettings($profileId);
         if ($profile === null) {
-            return (new Response())->status(404)->json(['error' => 'Profile not found']);
+            return (new Response())->errorPlain(404, 'Profile not found');
         }
 
         // pin_hash never leaves the server (findByIdWithSettings joins it in).
@@ -205,7 +205,7 @@ final class ProfilesController
     {
         $profileId = $this->parseProfileId($params['profileId'] ?? null);
         if ($profileId === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid profile ID']);
+            return (new Response())->errorPlain(400, 'Invalid profile ID');
         }
 
         $denied = $this->denyUnlessProfileManageable($request, $profileId);
@@ -225,7 +225,7 @@ final class ProfilesController
         }
         if (array_key_exists('content_rating', $data)) {
             if (!is_string($data['content_rating'])) {
-                return (new Response())->status(400)->json(['error' => 'The content rating must be text']);
+                return (new Response())->errorPlain(400, 'The content rating must be text');
             }
             $payload['content_rating'] = $data['content_rating'];
         }
@@ -236,7 +236,7 @@ final class ProfilesController
         try {
             $this->profiles->update($profileId, $payload);
         } catch (\InvalidArgumentException $e) {
-            return (new Response())->status(400)->json(['error' => $e->getMessage()]);
+            return (new Response())->errorPlain(400, $e->getMessage());
         }
 
         return (new Response())->json(['message' => 'Profile updated successfully.']);
@@ -262,7 +262,7 @@ final class ProfilesController
     {
         $profileId = $this->parseProfileId($params['profileId'] ?? null);
         if ($profileId === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid profile ID']);
+            return (new Response())->errorPlain(400, 'Invalid profile ID');
         }
 
         $denied = $this->denyUnlessProfileManageable($request, $profileId);
@@ -302,7 +302,7 @@ final class ProfilesController
     {
         $profileId = $this->parseProfileId($params['profileId'] ?? null);
         if ($profileId === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid profile ID']);
+            return (new Response())->errorPlain(400, 'Invalid profile ID');
         }
 
         $denied = $this->denyUnlessProfileManageable($request, $profileId);
@@ -319,18 +319,18 @@ final class ProfilesController
         }
 
         if (!is_string($pin)) {
-            return (new Response())->status(400)->json(['error' => 'The PIN must be text']);
+            return (new Response())->errorPlain(400, 'The PIN must be text');
         }
 
         if (
             strlen($pin) !== UserProfileManager::PIN_LENGTH_4
             && strlen($pin) !== UserProfileManager::PIN_LENGTH_6
         ) {
-            return (new Response())->status(400)->json(['error' => 'Invalid PIN length']);
+            return (new Response())->errorPlain(400, 'Invalid PIN length');
         }
 
         if (!ctype_digit($pin)) {
-            return (new Response())->status(400)->json(['error' => 'PIN must contain only digits']);
+            return (new Response())->errorPlain(400, 'PIN must contain only digits');
         }
 
         $this->profiles->setPin($profileId, $pin);
@@ -351,7 +351,7 @@ final class ProfilesController
     {
         $profileId = $this->parseProfileId($params['profileId'] ?? null);
         if ($profileId === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid profile ID']);
+            return (new Response())->errorPlain(400, 'Invalid profile ID');
         }
 
         $denied = $this->denyUnlessProfileManageable($request, $profileId);
@@ -386,7 +386,7 @@ final class ProfilesController
     {
         $profileId = $this->parseProfileId($params['profileId'] ?? null);
         if ($profileId === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid profile ID']);
+            return (new Response())->errorPlain(400, 'Invalid profile ID');
         }
 
         $denied = $this->denyUnlessProfileManageable($request, $profileId);
@@ -399,7 +399,7 @@ final class ProfilesController
         $data = is_array($request->body) ? $request->body : [];
         $pin = $data['pin'] ?? null;
         if (!is_string($pin) || $pin === '') {
-            return (new Response())->status(400)->json(['error' => 'PIN is required']);
+            return (new Response())->errorPlain(400, 'PIN is required');
         }
 
         if (!$this->profiles->hasPin($profileId)) {
@@ -434,7 +434,7 @@ final class ProfilesController
     {
         $profileId = $this->parseProfileId($params['profileId'] ?? null);
         if ($profileId === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid profile ID']);
+            return (new Response())->errorPlain(400, 'Invalid profile ID');
         }
 
         $denied = $this->denyUnlessProfileManageable($request, $profileId);
@@ -444,11 +444,11 @@ final class ProfilesController
 
         $userId = $request->userId ?? '';
         if ($userId === '') {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->errorPlain(401, 'Unauthorized');
         }
 
         if (!$this->profiles->switchProfile($userId, $profileId)) {
-            return (new Response())->status(404)->json(['error' => 'Profile not found']);
+            return (new Response())->errorPlain(404, 'Profile not found');
         }
 
         // The mint verifies the profile again, and mints it as-is. A profile deleted between the switch
@@ -456,17 +456,14 @@ final class ProfilesController
         try {
             return (new Response())->json($this->auth->buildAuthResponseForOwnedProfile($userId, $profileId));
         } catch (ProfileNotOwnedException) {
-            return (new Response())->status(404)->json(['error' => 'Profile not found']);
+            return (new Response())->errorPlain(404, 'Profile not found');
         } catch (PasswordChangeRequiredException $e) {
             // SRV-M17: the switch itself committed (active profile moved), but
             // the re-mint is refused by the account-hold seam (SRV-M18) — the
             // held caller keeps its current session claim until the password
             // changes. Answer the contracts-registered distinct 403, never a
             // bare 500.
-            return (new Response())->status(403)->json([
-                'error' => $e->getMessage(),
-                'code' => $e->errorCode,
-            ]);
+            return (new Response())->error(403, $e->errorCode, $e->getMessage());
         }
     }
 
@@ -492,7 +489,7 @@ final class ProfilesController
     {
         $profileId = $this->parseProfileId($params['profileId'] ?? null);
         if ($profileId === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid profile ID']);
+            return (new Response())->errorPlain(400, 'Invalid profile ID');
         }
 
         $denied = $this->denyUnlessProfileManageable($request, $profileId);
@@ -504,32 +501,30 @@ final class ProfilesController
         $file = $files['avatar'] ?? $files['file'] ?? null;
 
         if ($file === null) {
-            return (new Response())->status(400)->json(['error' => 'No file uploaded']);
+            return (new Response())->errorPlain(400, 'No file uploaded');
         }
 
         $error = is_array($file) && isset($file['error']) && is_int($file['error'])
             ? $file['error']
             : UPLOAD_ERR_NO_FILE;
         if ($error !== UPLOAD_ERR_OK) {
-            return (new Response())->status(400)->json([
-                'error' => 'Upload error: ' . UploadErrorMessages::describe($error),
-            ]);
+            return (new Response())->errorPlain(400, 'Upload error: ' . UploadErrorMessages::describe($error));
         }
 
         $tmpPath = is_array($file) && isset($file['tmp_name']) ? $file['tmp_name'] : '';
         if ($tmpPath === '' || !is_string($tmpPath)) {
-            return (new Response())->status(400)->json(['error' => 'Invalid file data']);
+            return (new Response())->errorPlain(400, 'Invalid file data');
         }
 
         try {
             $avatarPath = $this->avatars->store($profileId, $tmpPath);
         } catch (\InvalidArgumentException $e) {
-            return (new Response())->status(400)->json(['error' => $e->getMessage()]);
+            return (new Response())->errorPlain(400, $e->getMessage());
         } catch (\RuntimeException $e) {
             // R20-05: generic client copy; exception detail goes to the HTTP
             // channel log only (mirror of UserAvatarController's upload arm).
             LoggerFactory::get(LogChannels::HTTP)->error('profile avatar storage error', ['exception' => $e]);
-            return (new Response())->status(500)->json(['error' => 'Storage error, please try again later']);
+            return (new Response())->errorPlain(500, 'Storage error, please try again later');
         }
 
         $this->profiles->update($profileId, ['avatar_url' => $avatarPath]);
@@ -549,7 +544,7 @@ final class ProfilesController
             return null;
         }
 
-        return (new Response())->status(404)->json(['error' => 'Profile not found']);
+        return (new Response())->errorPlain(404, 'Profile not found');
     }
 
     /**

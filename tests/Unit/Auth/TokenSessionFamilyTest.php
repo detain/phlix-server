@@ -1096,4 +1096,68 @@ final class TokenSessionFamilyTest extends TestCase
             'processors' => ['context' => true, 'request_id' => false, 'user_id' => false],
         ]);
     }
+
+    /**
+     * E-09 cohort-5b oracle: the `id` column grammar inside the revoked-family
+     * sweep across the driver-reachable domain. The fold to RowMap::nullableStr
+     * is byte-identical: strings (including '' which the legacy is_string arm
+     * keeps) ride into the DELETE binds, every non-string is dropped. Green
+     * before AND after the fold — that is the proof.
+     */
+    public function testPruneRevokedFamiliesIdColumnGrammar(): void
+    {
+        $rows = [
+            ['id' => 'fam-a'],
+            ['id' => 7],
+            ['id' => null],
+            [],
+            ['id' => ''],
+            ['id' => ['nested']],
+            ['id' => 'fam-b'],
+        ];
+        $calls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $binds = []) use (&$calls, $rows): mixed {
+                $calls[] = [$sql, $binds];
+
+                return str_starts_with($sql, 'SELECT') ? $rows : 1;
+            }
+        );
+
+        (new TokenSessionRepository($db))->pruneRevokedFamilies('user-9');
+
+        $this->assertSame(['fam-a', '', 'fam-b'], $calls[1][1]);
+        $this->assertSame(['fam-a', '', 'fam-b'], $calls[2][1]);
+    }
+
+    /**
+     * E-09 cohort-5b oracle: the device-column grammars of listActiveSessions()
+     * (RowMap::nullableStr fold is byte-identical: isset+is_string on a row
+     * accessed through ??-null is exactly the nullableStr vocabulary; the
+     * declared id/created_at/last_used_at legs stay raw). Green before AND
+     * after the fold — that is the proof.
+     */
+    public function testListActiveSessionsColumnGrammars(): void
+    {
+        $rows = [
+            ['id' => 's1', 'created_at' => 'c1', 'last_used_at' => 'l1', 'device_type' => 'tv', 'device_name' => 'Den'],
+            ['id' => 's2', 'created_at' => 'c2', 'last_used_at' => 'l2', 'device_type' => '', 'device_name' => null],
+            ['id' => 's3', 'created_at' => 'c3', 'last_used_at' => 'l3', 'device_type' => 7],
+            ['id' => 's4', 'created_at' => 'c4', 'last_used_at' => 'l4', 'device_name' => ['nested']],
+        ];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static fn (string $sql, array $binds = []): mixed => str_starts_with($sql, 'SELECT') ? $rows : 1
+        );
+
+        $sessions = (new TokenSessionRepository($db))->listActiveSessions('user-9');
+
+        $this->assertSame([
+            ['id' => 's1', 'created_at' => 'c1', 'last_used_at' => 'l1', 'device_type' => 'tv', 'device_name' => 'Den'],
+            ['id' => 's2', 'created_at' => 'c2', 'last_used_at' => 'l2', 'device_type' => '', 'device_name' => null],
+            ['id' => 's3', 'created_at' => 'c3', 'last_used_at' => 'l3', 'device_type' => null, 'device_name' => null],
+            ['id' => 's4', 'created_at' => 'c4', 'last_used_at' => 'l4', 'device_type' => null, 'device_name' => null],
+        ], $sessions);
+    }
 }

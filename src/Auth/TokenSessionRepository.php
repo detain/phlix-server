@@ -354,8 +354,9 @@ class TokenSessionRepository
 
             $ids = [];
             foreach ($rows as $row) {
-                if (is_string($row['id'] ?? null)) {
-                    $ids[] = $row['id'];
+                $id = RowMap::nullableStr($row, 'id');
+                if ($id !== null) {
+                    $ids[] = $id;
                 }
             }
             if ($ids === []) {
@@ -533,10 +534,8 @@ class TokenSessionRepository
                 'id' => $row['id'],
                 'created_at' => $row['created_at'],
                 'last_used_at' => $row['last_used_at'],
-                'device_type' => isset($row['device_type']) && is_string($row['device_type'])
-                    ? $row['device_type'] : null,
-                'device_name' => isset($row['device_name']) && is_string($row['device_name'])
-                    ? $row['device_name'] : null,
+                'device_type' => RowMap::nullableStr($row, 'device_type'),
+                'device_name' => RowMap::nullableStr($row, 'device_name'),
             ];
         }
 

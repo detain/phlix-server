@@ -9,6 +9,8 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Metadata;
 
+use Phlix\Common\Util\RowMap;
+
 /**
  * Represents a single rating record from a source (TMDB, IMDb, or user).
  */
@@ -31,14 +33,20 @@ final readonly class Rating
      */
     public static function fromDbRow(array $row): self
     {
-        $id = is_int($row['id'] ?? null) ? $row['id'] : 0;
-        $mediaItemId = is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '';
-        $sourceStr = is_string($row['source'] ?? null) ? $row['source'] : 'tmdb';
-        $ratingTypeStr = is_string($row['rating_type'] ?? null) ? $row['rating_type'] : 'average';
-        $score = is_numeric($row['score'] ?? null) ? (float) $row['score'] : 0.0;
-        $votes = isset($row['votes']) && is_int($row['votes']) ? $row['votes'] : null;
-        $createdAtStr = is_string($row['created_at'] ?? null) ? $row['created_at'] : 'now';
-        $updatedAtStr = is_string($row['updated_at'] ?? null) ? $row['updated_at'] : 'now';
+        // E-09 cohort 5a: RowMap fold of the pre-fold ??-guarded strict
+        // ternaries (fallbacks transcribed); T1H arms: created_at/updated_at
+        // keep the raw DateTimeImmutable ctor so a garbage string still throws
+        // exactly like the pre-fold block. Byte-identity pinned by the
+        // legacy-oracle vectors in
+        // tests/Unit/Media/Metadata/LibraryMetadataMatcherPluginRatingsTest.php.
+        $id = RowMap::int($row, 'id', 0);
+        $mediaItemId = RowMap::str($row, 'media_item_id', '');
+        $sourceStr = RowMap::str($row, 'source', 'tmdb');
+        $ratingTypeStr = RowMap::str($row, 'rating_type', 'average');
+        $score = RowMap::floatFromNumeric($row, 'score', 0.0);
+        $votes = RowMap::nullableInt($row, 'votes');
+        $createdAtStr = RowMap::str($row, 'created_at', 'now');
+        $updatedAtStr = RowMap::str($row, 'updated_at', 'now');
 
         return new self(
             id: $id,

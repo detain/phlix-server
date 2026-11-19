@@ -310,7 +310,19 @@ class PhlixMySQLConnection extends Connection
                 }
             } else {
                 $this->rollBackTrans();
-                throw new \PDOException('SQL:' . $this->lastSQL() . ' ' . $e->getMessage(), (int) $e->getCode());
+                // TXMUTEX-A A7 (design §P2.5-1.7): this wrapper used to drop
+                // the driver evidence — no previous, and `errorInfo` left
+                // empty — so `MysqlError::driverCode()` was blind on our own
+                // throw and callers fell back to message parsing. Carry both;
+                // the rendered message and the SQLSTATE-as-int code are
+                // unchanged.
+                $wrapped = new \PDOException(
+                    'SQL:' . $this->lastSQL() . ' ' . $e->getMessage(),
+                    (int) $e->getCode(),
+                    $e
+                );
+                $wrapped->errorInfo = $e->errorInfo;
+                throw $wrapped;
             }
         }
         $this->parameters = [];

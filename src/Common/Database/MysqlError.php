@@ -27,8 +27,10 @@ namespace Phlix\Common\Database;
  *     path and on `beginTrans()` failures, so `errorInfo` is intact); and
  *  2. the vendor RE-WRAP — `new PDOException('SQL:' . lastSQL() . ' ' . $msg,
  *     (int) SQLSTATE)` with `errorInfo === null` (Workerman\MySQL\Connection::
- *     execute() / our override), so only the rendered message and the
- *     SQLSTATE-as-int survive.
+ *     execute()), so only the rendered message and the SQLSTATE-as-int
+ *     survive. Our `execute()` override is the deliberate exception since
+ *     TXMUTEX-A A7: its wrapper carries the original `errorInfo` and the
+ *     previous exception, so `driverCode()` keeps wire authority through it.
  *
  * A message-rendered errno (`...: 1062 Duplicate entry`) is DRIVER TEXT, not
  * driver data: `lastSQL()` echoes the raw statement template, so digits in a

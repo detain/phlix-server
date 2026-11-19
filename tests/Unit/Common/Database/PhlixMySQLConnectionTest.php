@@ -1919,6 +1919,65 @@ final class PhlixMySQLConnectionTest extends TestCase
         );
     }
 
+    /**
+     * TXMUTEX-A A7 (2026-11-21, design §P2.5-1.7): a statement that fails for
+     * a NON-gone reason outside any transaction is re-thrown as the `SQL:`-
+     * rendered wrapper — but the wrapper must not launder away the driver
+     * evidence. Pre-fix the re-wrap carried neither the previous exception nor
+     * the `errorInfo` array, so `MysqlError::driverCode()` read of the caught
+     * exception was blind (null) and callers fell back to exactly the message
+     * parsing the MysqlError class docblock condemns. The wrapper must keep
+     * `driverCode()` authoritative on our own throw.
+     */
+    public function testTheNonQueryFailureWrapperCarriesErrorInfoAndPrevious(): void
+    {
+        $handle = new class extends \PDO {
+            public ?\PDOException $lastThrown = null;
+
+            public function __construct()
+            {
+                parent::__construct('sqlite::memory:');
+                $this->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+            }
+
+            /**
+             * @param string $query
+             * @param array<int|string, mixed>|null $options
+             */
+            #[\Override]
+            public function prepare(string $query, ?array $options = null): \PDOStatement|false
+            {
+                $e = new \PDOException(
+                    "SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'x' for key 'PRIMARY'",
+                    23000
+                );
+                $e->errorInfo = ['23000', 1062, "Duplicate entry 'x' for key 'PRIMARY'"];
+                $this->lastThrown = $e;
+                throw $e;
+            }
+        };
+
+        $conn = self::connectionOver($handle);
+        try {
+            $conn->query("INSERT INTO t VALUES ('x')");
+            self::fail('the fabricated duplicate-key failure must propagate');
+        } catch (\PDOException $caught) {
+            self::assertNotSame($handle->lastThrown, $caught, 'the wrapper is a NEW exception, not the raw one');
+            self::assertSame(
+                $handle->lastThrown,
+                $caught->getPrevious(),
+                'the wrapper must carry the original as previous (TXMUTEX-A A7)'
+            );
+            self::assertSame(
+                1062,
+                \Phlix\Common\Database\MysqlError::driverCode($caught->errorInfo),
+                'driverCode() must stay authoritative on the rethrown wrapper'
+            );
+            self::assertSame(23000, (int) $caught->getCode(), 'the SQLSTATE-as-int code must be preserved');
+            self::assertStringStartsWith('SQL:', $caught->getMessage(), 'the SQL: rendering must be preserved');
+        }
+    }
+
     /** Build a connection over a supplied PDO handle without opening a socket. */
     private static function connectionOver(\PDO $pdo): PhlixMySQLConnection
     {

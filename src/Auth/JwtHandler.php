@@ -545,15 +545,31 @@ class JwtHandler
     /**
      * Decode and validate JWT token.
      *
-     * Parses the JWT token format, verifies the signature using HMAC-SHA256,
-     * and returns the decoded payload. Throws exception if signature
+     * Parses the JWT token format, pins the header (alg/typ) BEFORE any
+     * signature work, verifies the signature using HMAC-SHA256, and returns
+     * the decoded payload. Throws exception if the header lies or signature
      * verification fails.
+     *
+     * The header pin is the server half of the B-01/G-08 alg-confusion
+     * divergence: the hub's decode (phlix-hub src/Auth/JwtHandler.php
+     * :461-472) has always rejected a token whose header declares a
+     * different algorithm (or a contradictory typ) outright; this decoder
+     * used to decode the header and `unset()` it unexamined, so a token
+     * labeled `alg:none`/`HS384`/junk-typ still validated whenever its HMAC
+     * happened to be correct. Per-side shape difference kept on purpose
+     * (same family as the measured-reasons note on {@see self::validateClaims()}):
+     * the pin compares against THIS handler's configured algorithm — the
+     * label `encode()` stamps — rather than the hub's `self::ALGORITHM`
+     * constant, because the ctor exposes an algorithm parameter the hub does
+     * not; every production construction resolves to HS256.
      *
      * @param string $token JWT token string to decode
      *
      * @return array<string, mixed> Decoded token payload
      *
-     * @throws \InvalidArgumentException If token format is invalid or signature mismatch
+     * @throws \InvalidArgumentException If token format is invalid, the header
+     *                                   lies about alg/typ, or the signature
+     *                                   mismatch
      *
      * @example
      * ```php
@@ -569,6 +585,24 @@ class JwtHandler
 
         [$headerEncoded, $payloadEncoded, $signature] = $parts;
 
+        // Alg-confusion pin (hub-parity posture): verify what the header
+        // CLAIMS before spending any work on whether the signature proves
+        // it. hash_equals keeps the label comparison itself constant-time.
+        $header = json_decode($this->base64UrlDecode($headerEncoded), true);
+        if (!is_array($header)) {
+            throw new \InvalidArgumentException('Invalid token header');
+        }
+        $alg = $header['alg'] ?? null;
+        if (!is_string($alg) || !hash_equals($this->algorithm, $alg)) {
+            throw new \InvalidArgumentException('Unexpected JWT alg');
+        }
+        if (isset($header['typ'])) {
+            $typ = $header['typ'];
+            if (!is_string($typ) || !hash_equals('JWT', $typ)) {
+                throw new \InvalidArgumentException('Unexpected JWT typ');
+            }
+        }
+
         // Verify signature
         $expectedSignature = $this->base64UrlEncode(
             hash_hmac('sha256', "{$headerEncoded}.{$payloadEncoded}", $this->secretKey, true)
@@ -578,9 +612,7 @@ class JwtHandler
             throw new \InvalidArgumentException('Invalid signature');
         }
 
-        $header = json_decode($this->base64UrlDecode($headerEncoded), true);
         $payload = json_decode($this->base64UrlDecode($payloadEncoded), true);
-        unset($header);
 
         if (!is_array($payload)) {
             throw new \InvalidArgumentException('Invalid token payload');

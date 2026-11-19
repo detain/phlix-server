@@ -150,6 +150,109 @@ class JwtHandlerTest extends TestCase
     }
 
     /**
+     * B-01/G-08 alg-confusion pin (server half; mirrors the hub's
+     * `JwtHandler::decode()` header posture at phlix-hub
+     * src/Auth/JwtHandler.php:461-472): the header must honestly declare
+     * THIS handler's algorithm — and a `typ`, when present, `JWT` — BEFORE
+     * any signature work. A lying header whose HMAC is perfectly correct is
+     * still rejected: this class only ever signs HMAC-SHA256 over the raw
+     * segments, so a mismatched label is a forged or downgraded token, never
+     * a variant this server minted. (The hub shipped this pin long ago; the
+     * server decoded the header and `unset()` it — the delta B-01 names.)
+     *
+     * Every arm below is RED at the unfixed HEAD: the forged tokens carry a
+     * valid HMAC signature under the real secret and a garbage header, and
+     * the old `decode()` never looked at that header.
+     */
+    public function testForgedAlgNoneIsRejectedEvenWithValidSignature(): void
+    {
+        $token = $this->mintWithHonestHmac(['alg' => 'none', 'typ' => 'JWT']);
+
+        $this->assertNull(
+            $this->jwtHandler->validateToken($token),
+            'alg=none must die at the header pin, even with a correct HMAC'
+        );
+    }
+
+    public function testAlgSwapToAnotherNameIsRejectedEvenWithValidSignature(): void
+    {
+        foreach (['HS384', 'HS512', 'RS256', 'ES256', 'none ', ''] as $lies) {
+            $token = $this->mintWithHonestHmac(['alg' => $lies, 'typ' => 'JWT']);
+
+            $this->assertNull(
+                $this->jwtHandler->validateToken($token),
+                "alg '" . $lies . "' must die at the header pin"
+            );
+        }
+    }
+
+    public function testNonStringAlgIsRejectedEvenWithValidSignature(): void
+    {
+        // A header whose alg is a number/array/null cannot name HS256; the
+        // pin is strict about shape before it compares value.
+        foreach ([5, [ 'HS256' ], true, null] as $shape) {
+            $token = $this->mintWithHonestHmac(['alg' => $shape, 'typ' => 'JWT']);
+
+            $this->assertNull(
+                $this->jwtHandler->validateToken($token),
+                'alg shape ' . json_encode($shape) . ' must be rejected'
+            );
+        }
+    }
+
+    public function testGarbageTypIsRejectedEvenWithValidSignature(): void
+    {
+        // typ is OPTIONAL (hub parity: `isset()`-gated) but never contradictory.
+        $this->assertNull($this->jwtHandler->validateToken(
+            $this->mintWithHonestHmac(['alg' => 'HS256', 'typ' => 'JWT;alg=none'])
+        ), 'downgrade-shaped typ must be rejected');
+        $this->assertNull($this->jwtHandler->validateToken(
+            $this->mintWithHonestHmac(['alg' => 'HS256', 'typ' => 11])
+        ), 'non-string typ must be rejected');
+    }
+
+    public function testHonestHeadersStillValidate(): void
+    {
+        // Control arms for the pin: exactly what encode() stamps (alg HS256 +
+        // typ JWT) and the typ-less shape keep validating — the pin rejects
+        // LIES, not old or minimal-but-honest headers.
+        $this->assertNotNull($this->jwtHandler->validateToken(
+            $this->mintWithHonestHmac(['alg' => 'HS256', 'typ' => 'JWT'])
+        ));
+        $this->assertNotNull($this->jwtHandler->validateToken(
+            $this->mintWithHonestHmac(['alg' => 'HS256'])
+        ));
+    }
+
+    /**
+     * Mint a token with a CALLER-SUPPLIED header but a genuinely correct
+     * HMAC-SHA256 signature under the real test secret — isolating the
+     * header-lie as the only reason a token could be rejected.
+     *
+     * @param array<string, mixed> $header
+     */
+    private function mintWithHonestHmac(array $header): string
+    {
+        $payload = [
+            'iss' => 'phlix',
+            'sub' => 'user-123',
+            'iat' => time(),
+            'exp' => time() + 3600,
+            'type' => 'access',
+        ];
+        $headerEncoded = $this->base64Url(json_encode($header, JSON_THROW_ON_ERROR));
+        $payloadEncoded = $this->base64Url(json_encode($payload, JSON_THROW_ON_ERROR));
+        $signature = hash_hmac('sha256', "{$headerEncoded}.{$payloadEncoded}", 'test-secret-key-12345', true);
+
+        return "{$headerEncoded}.{$payloadEncoded}." . $this->base64Url($signature);
+    }
+
+    private function base64Url(string $data): string
+    {
+        return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function decodePayload(string $token): array

@@ -395,4 +395,50 @@ class MusicLibraryManagerTest extends TestCase
         $id3 = 'ID3' . chr(0x04) . chr(0x00) . chr(0x00) . chr(0) . chr(0) . chr(0) . chr(0);
         return $id3 . str_repeat("\x00", 128) . chr(0xFF) . chr(0xFB);
     }
+
+
+    public function testMediaItemFromRowDecodeIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        $manager = (new \ReflectionClass(MusicLibraryManager::class))->newInstanceWithoutConstructor();
+        $method = new \ReflectionMethod(MusicLibraryManager::class, 'mediaItemFromRow');
+        $method->setAccessible(true);
+
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['id' => 'm-1', 'name' => 'Song', 'type' => 'music', 'path' => '/m/1.flac'],
+            ['id' => 'm-2', 'name' => 7, 'type' => null, 'path' => 3.5],
+            ['id' => '', 'name' => '', 'type' => '', 'path' => '', 'metadata' => null],
+            [
+                'id' => 'm-4',
+                'name' => 'X',
+                'type' => 'music',
+                'path' => '/x',
+                'metadata' => ['a' => 1, 'b' => ['c'], 0 => 'dropped'],
+            ],
+            ['name' => 'only-name', 'metadata' => ['k' => ['nested']]],
+        ];
+
+        foreach ($vectors as $row) {
+            $itemId = is_string($row['id'] ?? null) ? $row['id'] : '';
+            $itemName = is_string($row['name'] ?? null) ? $row['name'] : '';
+            $itemType = is_string($row['type'] ?? null) ? $row['type'] : '';
+            $itemPath = is_string($row['path'] ?? null) ? $row['path'] : '';
+            $metadata = [];
+            $rawMeta = $row['metadata'] ?? null;
+            if (is_array($rawMeta)) {
+                foreach ($rawMeta as $key => $value) {
+                    if (is_string($key)) {
+                        $metadata[$key] = $value;
+                    }
+                }
+            }
+
+            $item = $method->invoke($manager, $row);
+            $this->assertSame($itemId, $item->id);
+            $this->assertSame($itemName, $item->name);
+            $this->assertSame($itemType, $item->type);
+            $this->assertSame($itemPath, $item->path);
+            $this->assertSame($metadata, $item->metadata);
+        }
+    }
 }

@@ -301,4 +301,63 @@ final class SubtitleFetchServiceTest extends TestCase
 
         $this->assertSame(SubtitleFetchService::RESULT_PROVIDER_UNAVAILABLE, $result['status']);
     }
+
+    /**
+     * E-09 cohort 5a (W5): legacy-oracle vectors for the quota get() fold
+     * leg (sibling placement: no dedicated quota-repository suite exists;
+     * named in the src E-09 comment). Only the provider ternary was
+     * folded; the variable-based legs below transcribe as pre-fold shapes
+     * verbatim from git show 1d509d91.
+     */
+    public function testQuotaRowDecodeIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            [
+                'provider' => 'os',
+                'downloads_remaining' => '12',
+                'reset_time_utc' => '2026-01-01T00:00:00Z',
+                'updated_at' => '2025-12-31 20:00:00',
+            ],
+            [
+                'provider' => 7,
+                'downloads_remaining' => 'x',
+                'reset_time_utc' => '',
+                'updated_at' => null,
+            ],
+            [
+                'provider' => null,
+                'downloads_remaining' => 2.5,
+                'reset_time_utc' => ['a'],
+                'updated_at' => 'ok',
+            ],
+            [
+                'provider' => '',
+                'downloads_remaining' => true,
+                'reset_time_utc' => 'r',
+                'updated_at' => ['b'],
+            ],
+            ['downloads_remaining' => 3, 'reset_time_utc' => null, 'updated_at' => ''],
+        ];
+
+        foreach ($vectors as $row) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([$row]);
+            $repo = new SubtitleProviderQuotaRepository($db);
+
+            $remaining = $row['downloads_remaining'] ?? null;
+            $reset = $row['reset_time_utc'] ?? null;
+            $updated = $row['updated_at'] ?? null;
+            $expected = [
+                'provider' => is_string($row['provider'] ?? null)
+                    ? $row['provider']
+                    : 'test-provider',
+                'downloads_remaining' => is_numeric($remaining) ? (int) $remaining : null,
+                'reset_time_utc' => is_string($reset) && $reset !== '' ? $reset : null,
+                'updated_at' => is_string($updated) && $updated !== '' ? $updated : null,
+            ];
+
+            self::assertSame($expected, $repo->get('test-provider'));
+        }
+    }
 }

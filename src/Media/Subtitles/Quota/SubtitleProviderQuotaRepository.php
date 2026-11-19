@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Subtitles\Quota;
 
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -62,13 +63,18 @@ final class SubtitleProviderQuotaRepository
             return null;
         }
         $row = $rows[0];
+        $row = RowMap::fromMixed($row);
 
         $remaining = $row['downloads_remaining'] ?? null;
         $reset = $row['reset_time_utc'] ?? null;
         $updated = $row['updated_at'] ?? null;
 
         return [
-            'provider' => is_string($row['provider'] ?? null) ? $row['provider'] : $provider,
+            // E-09 cohort 5a: RowMap fold (dynamic default $provider kept
+            // verbatim; the variable-based legs below are pre-fold shapes).
+            // Pinned by the legacy-oracle vectors in
+            // tests/Unit/Media/Subtitles/SubtitleProviderQuotaRepositoryTest.php.
+            'provider' => RowMap::str($row, 'provider', $provider),
             'downloads_remaining' => is_numeric($remaining) ? (int) $remaining : null,
             'reset_time_utc' => is_string($reset) && $reset !== '' ? $reset : null,
             'updated_at' => is_string($updated) && $updated !== '' ? $updated : null,

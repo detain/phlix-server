@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Auth;
 
+use Phlix\Common\Database\PruneDeadline;
+use Phlix\Common\Database\RetentionPrune;
 use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Uuid;
 use RuntimeException;
@@ -297,20 +299,23 @@ final class QuickConnectStateStore implements QuickConnectStateStoreInterface
      * Scoped to `provider = quick_connect` (unlike the OAuth siblings' global
      * sweep) so a pairing poll can never touch another surface's state mid-flow.
      * Best-effort: the shared table may legitimately lack old rows; failure here
-     * must not sink the pairing that just called issue().
+     * must not sink the pairing that just called issue(). This site is the
+     * estate doctrine source for the engine's SOFT failure posture ({@see
+     * RetentionPrune class docblock}); the swallow now lives in D-14's
+     * shared retention-prune engine.
      */
     public function purgeExpired(): void
     {
-        try {
-            $this->db->query(
-                'DELETE FROM oauth_state_store WHERE provider = ? AND expires_at <= NOW() LIMIT ?',
-                [self::PROVIDER, self::CLEANUP_BATCH_SIZE],
-            );
-        } catch (\Throwable) {
-            // The sweep is janitorial, never load-bearing. issue() validates its
-            // own INSERT separately, so a swallowed sweep failure cannot produce
-            // a phantom pairing.
-        }
+        RetentionPrune::sweep(
+            $this->db,
+            'oauth_state_store',
+            'expires_at',
+            PruneDeadline::notAfterNow(),
+            self::CLEANUP_BATCH_SIZE,
+            extraWhere: 'provider = ?',
+            extraParams: [self::PROVIDER],
+            failLoud: false
+        );
     }
 
     /**

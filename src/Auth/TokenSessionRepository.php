@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Auth;
 
+use Phlix\Common\Database\PruneDeadline;
+use Phlix\Common\Database\RetentionPrune;
 use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
@@ -277,24 +279,28 @@ class TokenSessionRepository
      */
     public function pruneExpired(): void
     {
-        try {
-            $this->db->query(
-                'DELETE FROM auth_refresh_grants WHERE expires_at < NOW() - INTERVAL '
-                . self::PRUNE_GRACE_SECONDS . ' SECOND LIMIT ?',
-                [self::PRUNE_BATCH_SIZE]
-            );
-            $this->db->query(
-                'DELETE FROM auth_refresh_grants WHERE expires_at IS NULL'
-                . ' AND created_at < NOW() - INTERVAL '
-                . self::UNSTAMPED_RETENTION_SECONDS . ' SECOND LIMIT ?',
-                [self::PRUNE_BATCH_SIZE]
-            );
-        } catch (\Throwable) {
-            // The sweep is janitorial, never load-bearing. The INSERT that
-            // follows on the write path is validated by its own caller
-            // (a throw there is the real failure), so swallowing only here
-            // cannot leave an unregistered grant silently.
-        }
+        // D-14: shared retention-prune engine, SOFT posture — the engine owns
+        // the janitor swallow formerly inlined here. The INSERT that follows
+        // on the write path is validated by its own caller (a throw there is
+        // the real failure), so swallowing only here cannot leave an
+        // unregistered grant silently.
+        RetentionPrune::sweep(
+            $this->db,
+            'auth_refresh_grants',
+            'expires_at',
+            PruneDeadline::beforeNowMinusSeconds(self::PRUNE_GRACE_SECONDS),
+            self::PRUNE_BATCH_SIZE,
+            failLoud: false
+        );
+        RetentionPrune::sweep(
+            $this->db,
+            'auth_refresh_grants',
+            'created_at',
+            PruneDeadline::beforeNowMinusSeconds(self::UNSTAMPED_RETENTION_SECONDS),
+            self::PRUNE_BATCH_SIZE,
+            extraWhere: 'expires_at IS NULL',
+            failLoud: false
+        );
     }
 
     /**

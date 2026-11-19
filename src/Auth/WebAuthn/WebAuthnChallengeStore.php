@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Auth\WebAuthn;
 
+use Phlix\Common\Database\PruneDeadline;
+use Phlix\Common\Database\RetentionPrune;
 use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Uuid;
 use RuntimeException;
@@ -181,13 +183,25 @@ final class WebAuthnChallengeStore
 
     /**
      * Bounded opportunistic sweep of this provider's expired rows.
+     *
+     * D-14: shared retention-prune engine, SOFT posture — this sweep runs at
+     * the top of issue(), so a failing janitor must not 500 a registration
+     * ceremony that has done nothing wrong (migration cured the previously-
+     * throwing janitor; disclosed in the D-14 register). The batch limit is
+     * now BOUND (`LIMIT ?`) like every other engine site — rendered
+     * identically under emulated prepares (disclosed D-14 text delta).
      */
     private function purgeExpired(): void
     {
-        $this->db->query(
-            'DELETE FROM oauth_state_store WHERE provider = ? AND expires_at <= NOW() LIMIT '
-            . self::CLEANUP_BATCH_SIZE,
-            [self::PROVIDER],
+        RetentionPrune::sweep(
+            $this->db,
+            'oauth_state_store',
+            'expires_at',
+            PruneDeadline::notAfterNow(),
+            self::CLEANUP_BATCH_SIZE,
+            extraWhere: 'provider = ?',
+            extraParams: [self::PROVIDER],
+            failLoud: false
         );
     }
 }

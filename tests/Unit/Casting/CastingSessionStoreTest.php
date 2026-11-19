@@ -130,8 +130,12 @@ final class CastingSessionStoreTest extends TestCase
 
         self::assertCount(2, $this->log);
         self::assertStringStartsWith('DELETE', $this->log[0]['sql']);
-        $horizon = 'last_seen_at < DATE_SUB(NOW(), INTERVAL 86400 SECOND) LIMIT 200';
+        $horizon = 'last_seen_at < DATE_SUB(NOW(), INTERVAL 86400 SECOND)';
         self::assertStringContainsString($horizon, $this->log[0]['sql']);
+        // D-14: the batch ceiling moved from inlined text ('LIMIT 200') to a bound
+        // parameter — the engine's uniform one-phase shape. Same answer, safer text.
+        self::assertStringContainsString(' LIMIT ?', $this->log[0]['sql'], 'sweep batch is bound, not interpolated');
+        self::assertSame([200], $this->log[0]['params'], 'SWEEP_BATCH_LIMIT still governs the sweep, as a parameter');
 
         self::assertStringStartsWith('INSERT', $this->log[1]['sql']);
         self::assertSame(

@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Common\RateLimit;
 
 use Closure;
+use Phlix\Common\Database\PruneDeadline;
+use Phlix\Common\Database\RetentionPrune;
 use Workerman\MySQL\Connection;
 
 /**
@@ -213,15 +215,26 @@ final class DbRateLimiter implements RateLimiterInterface
     }
 
     /**
-     * Bounded sweep of expired rows. The `LIMIT` is bound as a native int so
-     * the project's emulated prepares don't quote it (see class docblock — a
-     * string LIMIT renders `LIMIT '100'` → MySQL 1064).
+     * Bounded sweep of expired rows via the shared retention-prune engine
+     * (D-14). The `LIMIT` is bound as a native int so the project's emulated
+     * prepares don't quote it (see class docblock — a string LIMIT renders
+     * `LIMIT '100'` → MySQL 1064).
+     *
+     * SOFT posture (B-03.3 janitor law): this sweep rides the rate-limit
+     * decision path, so a failing sweep must not 500 the request that merely
+     * triggered cleanup — the engine swallows and the next call retries.
+     * Migration cured the previously-throwing janitor to this documented
+     * posture (disclosed in the D-14 register).
      */
     private function sweepExpired(int $now): void
     {
-        $this->db->query(
-            'DELETE FROM rate_limit_buckets WHERE reset_at <= ? LIMIT ?',
-            [$now, self::CLEANUP_BATCH_SIZE]
+        RetentionPrune::sweep(
+            $this->db,
+            'rate_limit_buckets',
+            'reset_at',
+            PruneDeadline::atMostUnixTime($now),
+            self::CLEANUP_BATCH_SIZE,
+            failLoud: false
         );
     }
 

@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\Oidc;
 
+use Phlix\Common\Database\PruneDeadline;
+use Phlix\Common\Database\RetentionPrune;
 use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Uuid;
 use Workerman\MySQL\Connection;
@@ -218,12 +220,21 @@ final class DbOidcStateStore implements OidcStateStore
      *
      * Called after each {@see consume()} to lazily clean up stale entries.
      * This approach avoids adding overhead to every put() call.
+     *
+     * D-14: shared retention-prune engine, SOFT posture — the sweep rides
+     * the OIDC callback path, so a failing cleanup must never sink a token
+     * exchange that already succeeded (migration cured the previously-
+     * throwing janitor; disclosed in the D-14 register).
      */
     private function cleanupExpiredEntries(): void
     {
-        $this->db->query(
-            "DELETE FROM oauth_state_store WHERE expires_at <= NOW() LIMIT ?",
-            [self::CLEANUP_BATCH_SIZE]
+        RetentionPrune::sweep(
+            $this->db,
+            'oauth_state_store',
+            'expires_at',
+            PruneDeadline::notAfterNow(),
+            self::CLEANUP_BATCH_SIZE,
+            failLoud: false
         );
     }
 }

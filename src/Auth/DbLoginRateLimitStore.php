@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Auth;
 
+use Phlix\Common\Database\PruneDeadline;
+use Phlix\Common\Database\RetentionPrune;
 use Phlix\Common\Database\WriteResult;
 use Workerman\MySQL\Connection;
 
@@ -234,22 +236,36 @@ final class DbLoginRateLimitStore
      *
      * Called after each recordFailedAttempt() to lazily clean up stale entries.
      *
+     * D-14: shared retention-prune engine, SOFT posture — this sweep rides
+     * the failure-recording path, so a failing cleanup must never 500 the
+     * login refusal it follows (migration cured the previously-throwing
+     * janitor; disclosed in the D-14 register).
+     *
+     * Bind BOTH params as integers. The project DB layer
+     * (PhlixMySQLConnection/PooledMySQLConnection) uses emulated prepares with
+     * type-aware binding: a PHP string maps to PDO::PARAM_STR, which PDO QUOTES,
+     * so a stringified LIMIT would render `LIMIT '100'` → MySQL error 1064.
+     * `reset_at` is INT UNSIGNED (migration 074), so time() is the correct type too.
+     *
      * @return void
      */
     private function cleanupExpiredEntries(): void
     {
-        // Bind BOTH params as integers. The project DB layer
-        // (PhlixMySQLConnection/PooledMySQLConnection) uses emulated prepares with
-        // type-aware binding: a PHP string maps to PDO::PARAM_STR, which PDO QUOTES,
-        // so a stringified LIMIT would render `LIMIT '100'` → MySQL error 1064.
-        // `reset_at` is INT UNSIGNED (migration 074), so time() is the correct type too.
-        $this->db->query(
-            'DELETE FROM login_rate_limit WHERE reset_at <= ? LIMIT ?',
-            [time(), self::CLEANUP_BATCH_SIZE]
+        RetentionPrune::sweep(
+            $this->db,
+            'login_rate_limit',
+            'reset_at',
+            PruneDeadline::atMostUnixTime(time()),
+            self::CLEANUP_BATCH_SIZE,
+            failLoud: false
         );
-        $this->db->query(
-            'DELETE FROM login_rate_limit_account WHERE reset_at <= ? LIMIT ?',
-            [time(), self::CLEANUP_BATCH_SIZE]
+        RetentionPrune::sweep(
+            $this->db,
+            'login_rate_limit_account',
+            'reset_at',
+            PruneDeadline::atMostUnixTime(time()),
+            self::CLEANUP_BATCH_SIZE,
+            failLoud: false
         );
     }
 }

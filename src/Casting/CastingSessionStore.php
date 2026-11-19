@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Casting;
 
 use JsonException;
+use Phlix\Common\Database\PruneDeadline;
+use Phlix\Common\Database\RetentionPrune;
 use Phlix\Common\Database\WriteResult;
 use RuntimeException;
 use Workerman\MySQL\Connection;
@@ -291,24 +293,26 @@ final class CastingSessionStore implements CastingSessionStoreInterface
     /**
      * Best-effort bounded removal of rows untouched beyond the horizon.
      *
-     * The horizon literal is an int cast of a constructor-bounded value — the
-     * only string-interpolated token in this class, and safe by construction.
-     * Prepared `INTERVAL ? SECOND` would also work under the house's emulated
-     * prepares; inlining keeps the sweep one obvious statement. Failures are
-     * swallowed: a sweep that cannot run must never sink the lookup that asked
-     * for it (QuickConnect::purgeExpired() is the doctrine source).
+     * D-14: shared retention-prune engine, SOFT posture — "a sweep that
+     * cannot run must never sink the lookup that asked for it" remains this
+     * class's doctrine (QuickConnect::purgeExpired() is the doctrine source);
+     * the engine's soft arm now owns the swallow. The horizon travels as a
+     * guard-checked non-negative int inlined by {@see PruneDeadline} (the
+     * value is constructor-bounded — safe by construction, same token trust
+     * law as before); the batch limit is now BOUND (`LIMIT ?`) like every
+     * other engine site — rendered identically under emulated prepares
+     * (disclosed D-14 text delta).
      */
     private function purgeStale(): void
     {
-        try {
-            $this->db->query(
-                'DELETE FROM casting_sessions'
-                . ' WHERE last_seen_at < DATE_SUB(NOW(), INTERVAL ' . $this->staleHorizonSeconds . ' SECOND)'
-                . ' LIMIT ' . self::SWEEP_BATCH_LIMIT
-            );
-        } catch (\Throwable) {
-            // Janitorial only.
-        }
+        RetentionPrune::sweep(
+            $this->db,
+            'casting_sessions',
+            'last_seen_at',
+            PruneDeadline::beforeDateSubNowSeconds($this->staleHorizonSeconds),
+            self::SWEEP_BATCH_LIMIT,
+            failLoud: false
+        );
     }
 
     /**

@@ -52,6 +52,12 @@ final class UserProfileRow
     /**
      * Hydrate from a raw DB row.
      *
+     * Coercion law lives in {@see RowMap} (E-09 cohort 3; the four private
+     * asString/nullableString/asInt/asBool helpers this replaces were
+     * byte-identical to the scalar-cast/truthy/numeric accessor shapes).
+     * The decodeGenres() JSON fold is deliberately NOT part of the pilot —
+     * the jsonList accessor variant is still owed (SRV-ROWMAP §7).
+     *
      * @param array<string, mixed> $row
      */
     public static function fromRow(array $row): self
@@ -59,10 +65,10 @@ final class UserProfileRow
         $settings = null;
         if (isset($row['content_rating'])) {
             $settings = [
-                'content_rating' => self::asString($row['content_rating']),
-                'pin_required_for_admin' => self::asBool($row['pin_required_for_admin'] ?? false),
-                'max_daily_watch_time' => self::asInt($row['max_daily_watch_time'] ?? 0),
-                'allow_unrated' => self::asBool($row['allow_unrated'] ?? true),
+                'content_rating' => RowMap::stringFromScalar($row, 'content_rating', ''),
+                'pin_required_for_admin' => RowMap::boolFromCast($row, 'pin_required_for_admin', false),
+                'max_daily_watch_time' => RowMap::intFromNumeric($row, 'max_daily_watch_time', 0),
+                'allow_unrated' => RowMap::boolFromCast($row, 'allow_unrated', true),
             ];
 
             $allowed = self::decodeGenres($row['allowed_genres'] ?? null);
@@ -76,14 +82,14 @@ final class UserProfileRow
         }
 
         return new self(
-            id: self::asString($row['id'] ?? ''),
-            userId: self::asString($row['user_id'] ?? ''),
-            name: self::asString($row['name'] ?? ''),
-            avatarUrl: self::nullableString($row['avatar_url'] ?? null),
-            isActive: self::asBool($row['is_active'] ?? false),
-            isAdmin: self::asBool($row['is_admin'] ?? false),
-            createdAt: self::nullableString($row['created_at'] ?? null),
-            updatedAt: self::nullableString($row['updated_at'] ?? null),
+            id: RowMap::stringFromScalar($row, 'id', ''),
+            userId: RowMap::stringFromScalar($row, 'user_id', ''),
+            name: RowMap::stringFromScalar($row, 'name', ''),
+            avatarUrl: RowMap::nullableStringFromScalar($row, 'avatar_url'),
+            isActive: RowMap::boolFromCast($row, 'is_active', false),
+            isAdmin: RowMap::boolFromCast($row, 'is_admin', false),
+            createdAt: RowMap::nullableStringFromScalar($row, 'created_at'),
+            updatedAt: RowMap::nullableStringFromScalar($row, 'updated_at'),
             settings: $settings,
         );
     }
@@ -157,34 +163,5 @@ final class UserProfileRow
     private static function asListOfMixed(array $arr): array
     {
         return array_values($arr);
-    }
-
-    private static function asString(mixed $value): string
-    {
-        if (is_string($value)) {
-            return $value;
-        }
-        if (is_int($value) || is_float($value) || is_bool($value)) {
-            return (string) $value;
-        }
-        return '';
-    }
-
-    private static function nullableString(mixed $value): ?string
-    {
-        if ($value === null) {
-            return null;
-        }
-        return self::asString($value);
-    }
-
-    private static function asInt(mixed $value): int
-    {
-        return is_numeric($value) ? (int) $value : 0;
-    }
-
-    private static function asBool(mixed $value): bool
-    {
-        return (bool) $value;
     }
 }

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Access;
 
 use DateTimeInterface;
+use Phlix\Common\Util\RowMap;
 
 /**
  * Represents a time-based access control schedule for a profile.
@@ -57,6 +58,9 @@ final class AccessSchedule
     /**
      * Create an AccessSchedule from a database row.
      *
+     * Coercion law lives in {@see \Phlix\Common\Util\RowMap} (E-09 cohort 3);
+     * every fallback below is an EXPLICIT call-site default.
+     *
      * @param array<string, mixed> $row Raw database row with keys:
      *                                  id, profile_id, name, start_time, end_time,
      *                                  days_of_week, is_active.
@@ -65,20 +69,20 @@ final class AccessSchedule
      */
     public static function fromRow(array $row): self
     {
-        $id = isset($row['id']) && is_numeric($row['id']) ? (int) $row['id'] : 0;
+        $id = RowMap::intFromNumeric($row, 'id', 0);
         // `access_schedules.profile_id` is CHAR(36) — a `user_profiles.id` UUID
         // (see the explicit "FIX:" note at the head of migration 061). It used
         // to be narrowed with `is_numeric()` + `(int)`, which no UUID can pass,
         // so EVERY hydrated schedule carried `profileId === 0` and shipped
-        // `profile_id: 0` in `toArray()`. Narrow with `is_string()` — the same
-        // way {@see ProfileStreamLimit::fromRow()} already does.
-        $profileId = isset($row['profile_id']) && is_string($row['profile_id']) ? $row['profile_id'] : '';
-        $name = isset($row['name']) && is_string($row['name']) ? $row['name'] : '';
-        $startTime = isset($row['start_time']) && is_string($row['start_time']) ? $row['start_time'] : '00:00:00';
-        $endTime = isset($row['end_time']) && is_string($row['end_time']) ? $row['end_time'] : '23:59:59';
-        $isActive = isset($row['is_active']) ? (bool) $row['is_active'] : true;
+        // `profile_id: 0` in `toArray()`. Narrow strictly with RowMap::str() —
+        // the same way {@see ProfileStreamLimit::fromRow()} does.
+        $profileId = RowMap::str($row, 'profile_id', '');
+        $name = RowMap::str($row, 'name', '');
+        $startTime = RowMap::str($row, 'start_time', '00:00:00');
+        $endTime = RowMap::str($row, 'end_time', '23:59:59');
+        $isActive = RowMap::boolFromCast($row, 'is_active', true);
 
-        $daysOfWeekStr = isset($row['days_of_week']) && is_string($row['days_of_week']) ? $row['days_of_week'] : '';
+        $daysOfWeekStr = RowMap::str($row, 'days_of_week', '');
         $daysOfWeek = $daysOfWeekStr !== '' ? explode(',', $daysOfWeekStr) : [];
 
         return new self(

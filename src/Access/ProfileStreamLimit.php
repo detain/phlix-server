@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Access;
 
+use Phlix\Common\Util\RowMap;
+
 /**
  * Represents the stream limit settings for a profile.
  *
@@ -46,14 +48,14 @@ final class ProfileStreamLimit
      */
     public static function fromRow(array $row): self
     {
-        $profileId = isset($row['profile_id']) && is_string($row['profile_id']) ? $row['profile_id'] : '';
-        $maxConcurrentStreams = isset($row['max_concurrent_streams']) && is_numeric($row['max_concurrent_streams'])
-            ? (int) $row['max_concurrent_streams']
-            : 1;
-        $maxTotalBandwidthKbps = null;
-        if (isset($row['max_total_bandwidth_kbps']) && is_numeric($row['max_total_bandwidth_kbps'])) {
-            $maxTotalBandwidthKbps = (int) $row['max_total_bandwidth_kbps'];
-        }
+        // Coercion law lives in {@see \Phlix\Common\Util\RowMap} (E-09 cohort
+        // 3); every fallback below is an EXPLICIT call-site default. The
+        // profile_id narrowing is the ratified S121-law shape: CHAR(36) UUID
+        // columns take a STRICT string read — never is_numeric+(int), which
+        // no UUID can pass.
+        $profileId = RowMap::str($row, 'profile_id', '');
+        $maxConcurrentStreams = RowMap::intFromNumeric($row, 'max_concurrent_streams', 1);
+        $maxTotalBandwidthKbps = RowMap::nullableIntFromNumeric($row, 'max_total_bandwidth_kbps');
 
         return new self(
             profileId: $profileId,

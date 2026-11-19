@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Access;
 
+use Phlix\Common\Util\RowMap;
+
 /**
  * Represents a tag restriction for a profile.
  *
@@ -51,6 +53,9 @@ final class ProfileTag
     /**
      * Create a ProfileTag from a database row.
      *
+     * Coercion law lives in {@see \Phlix\Common\Util\RowMap} (E-09 cohort 3);
+     * every fallback below is an EXPLICIT call-site default.
+     *
      * @param array<string, mixed> $row Raw database row with keys:
      *                                   id, profile_id, tag, tag_type.
      *
@@ -58,16 +63,16 @@ final class ProfileTag
      */
     public static function fromRow(array $row): self
     {
-        $id = isset($row['id']) && is_numeric($row['id']) ? (int) $row['id'] : 0;
+        $id = RowMap::intFromNumeric($row, 'id', 0);
         // `profile_tags.profile_id` is CHAR(36) — a `user_profiles.id` UUID
         // (see the explicit "FIX:" note at the head of migration 062). It used
         // to be narrowed with `is_numeric()` + `(int)`, which no UUID can pass,
         // so EVERY hydrated tag carried `profileId === 0` and shipped
-        // `profile_id: 0` in `toArray()`. Narrow with `is_string()` — the same
-        // way {@see ProfileStreamLimit::fromRow()} already does.
-        $profileId = isset($row['profile_id']) && is_string($row['profile_id']) ? $row['profile_id'] : '';
-        $tag = isset($row['tag']) && is_string($row['tag']) ? $row['tag'] : '';
-        $tagType = isset($row['tag_type']) && is_string($row['tag_type']) ? $row['tag_type'] : self::TYPE_BLOCKED;
+        // `profile_id: 0` in `toArray()`. Narrow strictly with RowMap::str() —
+        // the same way {@see ProfileStreamLimit::fromRow()} does.
+        $profileId = RowMap::str($row, 'profile_id', '');
+        $tag = RowMap::str($row, 'tag', '');
+        $tagType = RowMap::str($row, 'tag_type', self::TYPE_BLOCKED);
 
         return new self(
             id: $id,

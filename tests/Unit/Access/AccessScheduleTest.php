@@ -7,6 +7,8 @@ namespace Phlix\Tests\Unit\Access;
 use DateTimeImmutable;
 use Phlix\Access\AccessSchedule;
 use Phlix\Access\AccessScheduleService;
+use Phlix\Access\ProfileStreamLimit;
+use Phlix\Access\ProfileTag;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -254,5 +256,146 @@ class AccessScheduleTest extends TestCase
 
         $this->assertFalse($schedule->isActiveAt($this->at('12:00:00')));
         $this->assertFalse($schedule->isActiveAt($this->at('23:59:59')));
+    }
+
+    /**
+     * E-09 cohort-3 byte-identity oracle (SRV-ROWMAP): the Access trio's
+     * hand-written fromRow() narrowings are re-expressed VERBATIM here and
+     * compared against the live bodies over a fixed type-class corpus. The
+     * suite is green against BOTH the legacy narrowings (pre-migration
+     * characterization, log ROWMAP-C3-0) and the migrated RowMap-accessor
+     * bodies (post-migration regression) — the wire output may not move.
+     */
+    public function testAccessTrioFromRowRemainsByteIdenticalToLegacyNarrowings(): void
+    {
+        $scalars = [
+            'string' => 'abc',
+            'empty-string' => '',
+            'space' => ' ',
+            'int-5' => 5,
+            'int-0' => 0,
+            'float-7.9' => 7.9,
+            'bool-true' => true,
+            'bool-false' => false,
+            'array' => ['x'],
+            'numeric-string' => '12',
+            'numeric-string-0' => '0',
+            'hex-string' => '0x1A',
+            'exp-string' => '1e3',
+            'uuid' => '2f1e0c3c-0000-4000-8000-000000000001',
+        ];
+
+        $rows = ['missing-all' => []];
+        $columns = ['id', 'profile_id', 'name', 'start_time', 'end_time', 'is_active', 'days_of_week'];
+        foreach ($columns as $col) {
+            $rows['null:' . $col] = [$col => null];
+            foreach ($scalars as $label => $value) {
+                $rows[$col . ':' . $label] = [$col => $value];
+            }
+        }
+        $rows['days-csv-3'] = ['days_of_week' => 'mon,tue,wed'];
+        $rows['days-comma-only'] = ['days_of_week' => ','];
+        $rows['days-trailing-comma'] = ['days_of_week' => 'mon,'];
+        foreach ($rows as $label => $row) {
+            $this->assertSame(
+                self::legacyScheduleArray($row),
+                AccessSchedule::fromRow($row)->toArray(),
+                'schedule row [' . $label . ']'
+            );
+        }
+
+        $tagRows = ['missing-all' => [], 'tag-type-null' => ['tag_type' => null]];
+        foreach (['id', 'profile_id', 'tag', 'tag_type'] as $col) {
+            $tagRows['null:' . $col] = [$col => null];
+            foreach ($scalars as $label => $value) {
+                $tagRows[$col . ':' . $label] = [$col => $value];
+            }
+        }
+        $tagRows['blocked'] = ['tag_type' => 'blocked'];
+        $tagRows['allowed'] = ['tag_type' => 'allowed'];
+        foreach ($tagRows as $label => $row) {
+            $this->assertSame(
+                self::legacyTagArray($row),
+                ProfileTag::fromRow($row)->toArray(),
+                'tag row [' . $label . ']'
+            );
+        }
+
+        $limitRows = ['missing-all' => [], 'bandwidth-null' => ['max_total_bandwidth_kbps' => null]];
+        foreach (['profile_id', 'max_concurrent_streams', 'max_total_bandwidth_kbps'] as $col) {
+            $limitRows['null:' . $col] = [$col => null];
+            foreach ($scalars as $label => $value) {
+                $limitRows[$col . ':' . $label] = [$col => $value];
+            }
+        }
+        foreach ($limitRows as $label => $row) {
+            $this->assertSame(
+                self::legacyStreamLimitArray($row),
+                ProfileStreamLimit::fromRow($row)->toArray(),
+                'limit row [' . $label . ']'
+            );
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private static function legacyScheduleArray(array $row): array
+    {
+        $id = isset($row['id']) && is_numeric($row['id']) ? (int) $row['id'] : 0;
+        $profileId = isset($row['profile_id']) && is_string($row['profile_id']) ? $row['profile_id'] : '';
+        $name = isset($row['name']) && is_string($row['name']) ? $row['name'] : '';
+        $startTime = isset($row['start_time']) && is_string($row['start_time']) ? $row['start_time'] : '00:00:00';
+        $endTime = isset($row['end_time']) && is_string($row['end_time']) ? $row['end_time'] : '23:59:59';
+        $isActive = isset($row['is_active']) ? (bool) $row['is_active'] : true;
+        $daysOfWeekStr = isset($row['days_of_week']) && is_string($row['days_of_week']) ? $row['days_of_week'] : '';
+        $daysOfWeek = $daysOfWeekStr !== '' ? explode(',', $daysOfWeekStr) : [];
+
+        return (new AccessSchedule(
+            id: $id,
+            profileId: $profileId,
+            name: $name,
+            startTime: $startTime,
+            endTime: $endTime,
+            daysOfWeek: $daysOfWeek,
+            isActive: $isActive,
+        ))->toArray();
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private static function legacyTagArray(array $row): array
+    {
+        $id = isset($row['id']) && is_numeric($row['id']) ? (int) $row['id'] : 0;
+        $profileId = isset($row['profile_id']) && is_string($row['profile_id']) ? $row['profile_id'] : '';
+        $tag = isset($row['tag']) && is_string($row['tag']) ? $row['tag'] : '';
+        $tagType = isset($row['tag_type']) && is_string($row['tag_type']) ? $row['tag_type'] : ProfileTag::TYPE_BLOCKED;
+
+        return (new ProfileTag(id: $id, profileId: $profileId, tag: $tag, tagType: $tagType))->toArray();
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private static function legacyStreamLimitArray(array $row): array
+    {
+        $profileId = isset($row['profile_id']) && is_string($row['profile_id']) ? $row['profile_id'] : '';
+        $maxConcurrentStreams = isset($row['max_concurrent_streams']) && is_numeric($row['max_concurrent_streams'])
+            ? (int) $row['max_concurrent_streams']
+            : 1;
+        $maxTotalBandwidthKbps = null;
+        if (isset($row['max_total_bandwidth_kbps']) && is_numeric($row['max_total_bandwidth_kbps'])) {
+            $maxTotalBandwidthKbps = (int) $row['max_total_bandwidth_kbps'];
+        }
+
+        return (new ProfileStreamLimit(
+            profileId: $profileId,
+            maxConcurrentStreams: $maxConcurrentStreams,
+            maxTotalBandwidthKbps: $maxTotalBandwidthKbps,
+        ))->toArray();
     }
 }

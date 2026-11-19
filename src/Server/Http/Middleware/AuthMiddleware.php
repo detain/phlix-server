@@ -59,10 +59,7 @@ final class AuthMiddleware
     {
         $userId = $request->userId;
         if ($userId === null || $userId === '') {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code'  => 'auth.required',
-            ]);
+            return (new Response())->error(401, 'auth.required', 'Unauthorized');
         }
 
         RequestContext::setUserId($userId);

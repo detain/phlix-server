@@ -114,9 +114,10 @@ final class CastingEnabledMiddleware
             return null;
         }
 
-        return (new Response())->status(404)->json([
-            'error' => ucfirst($this->protocol) . ' casting is disabled on this server.',
-            'code'  => 'casting.disabled',
-        ]);
+        return (new Response())->error(
+            404,
+            'casting.disabled',
+            ucfirst($this->protocol) . ' casting is disabled on this server.'
+        );
     }
 }

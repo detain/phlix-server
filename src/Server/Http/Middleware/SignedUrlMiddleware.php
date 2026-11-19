@@ -140,14 +140,11 @@ final class SignedUrlMiddleware
 
             // Prompt the reader to (re)send credentials.
             return (new Response())
-                ->status(401)
                 ->header('WWW-Authenticate', 'Basic realm="' . $this->realm . '", charset="UTF-8"')
-                ->json(['error' => 'Unauthorized', 'code' => 'auth.required']);
+                ->error(401, 'auth.required', 'Unauthorized');
         }
 
-        return (new Response())
-            ->status(401)
-            ->json(['error' => 'Unauthorized', 'code' => 'auth.required']);
+        return (new Response())->error(401, 'auth.required', 'Unauthorized');
     }
 
     /**

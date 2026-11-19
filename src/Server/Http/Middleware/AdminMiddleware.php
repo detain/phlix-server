@@ -96,15 +96,9 @@ final class AdminMiddleware
             return null;
         }
         if ($status === 401) {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code'  => 'auth.required',
-            ]);
+            return (new Response())->error(401, 'auth.required', 'Unauthorized');
         }
-        return (new Response())->status(403)->json([
-            'error' => 'Forbidden',
-            'code'  => 'auth.not_admin',
-        ]);
+        return (new Response())->error(403, 'auth.not_admin', 'Forbidden');
     }
 
     /**

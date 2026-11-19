@@ -217,10 +217,15 @@ final class InlineErrorEnvelopeExtinctionTest extends TestCase
         // Census at conversion (commit-pinned, register SRV-ENVELOPES-B3):
         // QuickConnectController 15 sites converted + 1 pre-existing seam call
         // (noProfileToApprove's access.scheduled 403) = 16; the five middleware
-        // files 2+2+1+1+1. The (new Response())->error( form is the marker on
-        // purpose (batch-4 law): bare ->error( would collide with logger
-        // emitters; none of these six files has one today, and the stricter
-        // marker keeps that true.
+        // files 2+2+1+1+1. Unlike batch-4's ProfilesController — which must
+        // count the (new Response())->error( form because a LoggerFactory
+        // ->error emitter pollutes it — none of these six files contains any
+        // non-Response ->error( call (measured: bare ->error( totals 22, equal
+        // to the seam sites). The bare marker is REQUIRED here anyway: the
+        // OPDS challenge site chains ->header() between the constructor and
+        // ->error(, so the adjacent-only form would silently undercount it.
+        // The equality pin doubles as a pollution guard: adding a logger
+        // ->error( to any file reddens this census for a conscious re-pin.
         $expected = [
             'QuickConnectController' => 16,
             'SignedUrlMiddleware' => 2,
@@ -232,7 +237,7 @@ final class InlineErrorEnvelopeExtinctionTest extends TestCase
         foreach ($expected as $name => $count) {
             self::assertSame(
                 $count,
-                substr_count((string) file_get_contents(self::BATCH_THREE_FILES[$name]), '(new Response())->error('),
+                substr_count((string) file_get_contents(self::BATCH_THREE_FILES[$name]), '->error('),
                 "$name Response::error seam census drifted from batch-3 ($count)",
             );
         }

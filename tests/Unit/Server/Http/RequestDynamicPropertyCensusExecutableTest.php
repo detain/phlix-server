@@ -1378,7 +1378,22 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   their own commits; named, not absorbed.
     // Reads/writes legs stay RED and UNROTATED: now 517 vs 512 / 1315 vs 1274 (foreign
     //   middleware-decode churn advanced during this lane; untouched per law).
-    private const EXPECTED_PHP_FILES = 2203;
+    //
+    // Staircase continued -- SRV-ENVELOPES-B3 (middleware/QuickConnect batch-3 adoption).
+    // +1 mine: tests/Unit/Server/Http/MiddlewareErrorEnvelopeAdoptionTest.php (golden
+    //   corpus for the 22 {error,code} sites converted here — QuickConnectController 15
+    //   plus five middleware files — incl the OPDS challenge header-order leg; the
+    //   extinction BATCH_THREE census rides the pre-existing InlineErrorEnvelope-
+    //   ExtinctionTest, no new file).
+    // Pin: 2203 tracked at stage time (git ls-files '*.php'), +1 mine = 2204. The disk
+    //   walk shows 2207: three foreign sibling tests sit on top (SRV-CENSUS2
+    //   SharedDelegationCensusTest + its staged-uncommitted WebAuthnLegacyDecodeParity-
+    //   Test, DECODE-ADOPT SmartPlaylistDecodeInboundTest) — those lanes rotate their
+    //   own at their own commits; named, not absorbed. Reads/writes legs stay RED and
+    //   UNROTATED: measured zero own-delta (no $request-> line added or removed across
+    //   the six converted files); foreign churn 517 vs 512 / 1315 vs 1274 untouched per
+    //   law.
+    private const EXPECTED_PHP_FILES = 2204;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

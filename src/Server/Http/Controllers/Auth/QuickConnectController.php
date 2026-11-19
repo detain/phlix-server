@@ -245,7 +245,7 @@ final class QuickConnectController
         if ($userId === null || $userId === '') {
             // Belt to AuthMiddleware's braces: a session-less request must never
             // approve, not even if route wiring regressed.
-            return (new Response())->status(401)->json(['error' => 'Unauthorized', 'code' => 'unauthorized']);
+            return (new Response())->error(401, 'unauthorized', 'Unauthorized');
         }
 
         $this->enforceRateLimit($this->approveLimiter, 'qc-approve:' . $userId);
@@ -258,10 +258,7 @@ final class QuickConnectController
         $body = $request->body;
         $secret = $body['secret'] ?? null;
         if ($code === null || !is_string($secret) || $secret === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Pairing secret is required',
-                'code' => 'invalid_request',
-            ]);
+            return (new Response())->error(400, 'invalid_request', 'Pairing secret is required');
         }
 
         // Resolve the CONCRETE profile now, at approve time: the one the approving session's
@@ -284,12 +281,16 @@ final class QuickConnectController
         }
 
         return match ($result) {
-            QuickConnectStateStore::RESULT_BAD_SECRET => (new Response())
-                ->status(403)
-                ->json(['error' => 'Invalid pairing secret', 'code' => 'invalid_secret']),
-            QuickConnectStateStore::RESULT_NOT_READY => (new Response())
-                ->status(409)
-                ->json(['error' => 'Pairing is not pending', 'code' => 'pairing_not_pending']),
+            QuickConnectStateStore::RESULT_BAD_SECRET => (new Response())->error(
+                403,
+                'invalid_secret',
+                'Invalid pairing secret'
+            ),
+            QuickConnectStateStore::RESULT_NOT_READY => (new Response())->error(
+                409,
+                'pairing_not_pending',
+                'Pairing is not pending'
+            ),
             default => $this->pairingNotFound(),
         };
     }
@@ -318,10 +319,7 @@ final class QuickConnectController
         $body = $request->body;
         $secret = $body['secret'] ?? null;
         if ($code === null || !is_string($secret) || $secret === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Pairing secret is required',
-                'code' => 'invalid_request',
-            ]);
+            return (new Response())->error(400, 'invalid_request', 'Pairing secret is required');
         }
 
         if ($this->pairs === null) {
@@ -367,10 +365,7 @@ final class QuickConnectController
             // password is changed. Burning the pair is deliberate — un-spending
             // a consumed row would fork the pairing state machine outside its
             // single-owner store.
-            return (new Response())->status(403)->json([
-                'error' => $e->getMessage(),
-                'code' => $e->errorCode,
-            ]);
+            return (new Response())->error(403, $e->errorCode, $e->getMessage());
         }
 
         return (new Response())->json([
@@ -420,44 +415,45 @@ final class QuickConnectController
 
         $consent = $body['consent'] ?? false;
         if ($consent !== true) {
-            return (new Response())->status(400)->json([
-                'error' => 'Telemetry requires explicit opt-in consent',
-                'code' => 'consent_required',
-            ]);
+            return (new Response())->error(400, 'consent_required', 'Telemetry requires explicit opt-in consent');
         }
 
         $instanceId = $body['instance_id'] ?? null;
         if (!is_string($instanceId) || preg_match(self::INSTANCE_ID_PATTERN, $instanceId) !== 1) {
-            return (new Response())->status(400)->json([
-                'error' => 'Instance ID must be an opaque ID of 8-64 [A-Za-z0-9._-] characters',
-                'code' => 'invalid_payload',
-            ]);
+            return (new Response())->error(
+                400,
+                'invalid_payload',
+                'Instance ID must be an opaque ID of 8-64 [A-Za-z0-9._-] characters'
+            );
         }
 
         $version = $body['version'] ?? null;
         if (!is_string($version) || $version === '' || strlen($version) > self::MAX_VERSION_LENGTH) {
-            return (new Response())->status(400)->json([
-                'error' => 'Version is required (max ' . self::MAX_VERSION_LENGTH . ' characters)',
-                'code' => 'invalid_payload',
-            ]);
+            return (new Response())->error(
+                400,
+                'invalid_payload',
+                'Version is required (max ' . self::MAX_VERSION_LENGTH . ' characters)'
+            );
         }
 
         $clientType = $body['client_type'] ?? null;
         if (!is_string($clientType) || $clientType === '' || strlen($clientType) > self::MAX_CLIENT_TYPE_LENGTH) {
-            return (new Response())->status(400)->json([
-                'error' => 'Client type is required (max ' . self::MAX_CLIENT_TYPE_LENGTH . ' characters)',
-                'code' => 'invalid_payload',
-            ]);
+            return (new Response())->error(
+                400,
+                'invalid_payload',
+                'Client type is required (max ' . self::MAX_CLIENT_TYPE_LENGTH . ' characters)'
+            );
         }
 
         // Absent, empty-string or wrong-typed build tokens collapse to '' — a
         // release build legitimately has none; this field is census, not gate.
         $buildToken = $body['build_token'] ?? '';
         if (!is_string($buildToken) || strlen($buildToken) > self::MAX_BUILD_TOKEN_LENGTH) {
-            return (new Response())->status(400)->json([
-                'error' => 'Build token must be text of at most ' . self::MAX_BUILD_TOKEN_LENGTH . ' characters',
-                'code' => 'invalid_payload',
-            ]);
+            return (new Response())->error(
+                400,
+                'invalid_payload',
+                'Build token must be text of at most ' . self::MAX_BUILD_TOKEN_LENGTH . ' characters'
+            );
         }
 
         if ($this->heartbeats === null) {
@@ -537,10 +533,7 @@ final class QuickConnectController
      */
     private function pairingNotFound(): Response
     {
-        return (new Response())->status(404)->json([
-            'error' => 'Pairing not found',
-            'code' => 'pairing_not_found',
-        ]);
+        return (new Response())->error(404, 'pairing_not_found', 'Pairing not found');
     }
 
     /**
@@ -561,10 +554,11 @@ final class QuickConnectController
      */
     private function pairingWithoutProfile(): Response
     {
-        return (new Response())->status(403)->json([
-            'error' => 'This pairing was approved without a profile. Approve it again from a session with a profile.',
-            'code' => 'profile.not_found',
-        ]);
+        return (new Response())->error(
+            403,
+            'profile.not_found',
+            'This pairing was approved without a profile. Approve it again from a session with a profile.'
+        );
     }
 
     /**
@@ -573,10 +567,11 @@ final class QuickConnectController
      */
     private function profileNoLongerOwned(): Response
     {
-        return (new Response())->status(403)->json([
-            'error' => 'The profile this pairing was approved for is no longer available. Approve the pairing again.',
-            'code' => 'profile.not_found',
-        ]);
+        return (new Response())->error(
+            403,
+            'profile.not_found',
+            'The profile this pairing was approved for is no longer available. Approve the pairing again.'
+        );
     }
 
     /**
@@ -584,10 +579,11 @@ final class QuickConnectController
      */
     private function unavailable(): Response
     {
-        return (new Response())->status(503)->json([
-            'error' => 'Quick-connect storage is not available on this server',
-            'code' => 'storage_unavailable',
-        ]);
+        return (new Response())->error(
+            503,
+            'storage_unavailable',
+            'Quick-connect storage is not available on this server'
+        );
     }
 
     /**

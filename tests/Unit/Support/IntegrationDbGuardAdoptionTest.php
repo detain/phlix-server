@@ -207,7 +207,9 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     private const SHARED_SUPPORT_DIR = 'tests/Support';
 
     /**
-     * Files that must carry `use RequiresRealDatabase;` **in a class body**.
+     * Files that must carry `use RequiresRealDatabase;` — or, since the H-08
+     * scratch extraction (2026-11-19), `use UsesScratchDatabase;`, which
+     * composes the first — **in a class body**.
      *
      * 35 files declared a private probe when S126 was written and every one of
      * them was migrated. Asserted as an exact count, not a floor: a floor of
@@ -541,7 +543,13 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // repository, the reuse ceremony, family isolation, and both FK cascades —
     // over throwaway phlix_s127_* databases).
     // Measured from the phpunit red (82), not predicted.
-    private const EXPECTED_ADOPTERS = 82;
+    // 82→83 by the H-08 scratch-database extraction (SRV-SCRATCHDB, 2026-11-19,
+    // this commit): +tests/Unit/Support/UsesScratchDatabaseTest.php — the trait's
+    // own shape proof, which declares `use UsesScratchDatabase;` in its class
+    // body and lives outside the tests/Support exemption dir. From here a
+    // scratch-DB test may carry either trait spelling; see the matcher.
+    // Measured from the phpunit red (83), not predicted.
+    private const EXPECTED_ADOPTERS = 83;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any
@@ -759,7 +767,8 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * The migrated tree must actually be using the shared guard — a rule that is
      * silent because nothing calls the guard at all would prove nothing.
      *
-     * Counts real, in-class-body `use RequiresRealDatabase;` trait usage via the
+     * Counts real, in-class-body `use RequiresRealDatabase;` (or `use
+     * UsesScratchDatabase;`, which composes it — H-08) trait usage via the
      * token stream. A whole-file `str_contains()` would also count a file that
      * keeps only the `use Phlix\…\RequiresRealDatabase;` import or a
      * `{@see RequiresRealDatabase}` docblock after the in-class `use` was
@@ -774,7 +783,8 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
             self::EXPECTED_ADOPTERS,
             $adopters,
             sprintf(
-                'S126: %d files declare `use RequiresRealDatabase;` in a class body, expected %d. '
+                'S126: %d files declare `use RequiresRealDatabase;` (or the H-08 '
+                . '`use UsesScratchDatabase;` that composes it) in a class body, expected %d. '
                 . 'If a real-DB test was added or removed, update EXPECTED_ADOPTERS in the same '
                 . 'commit; if the trait was dropped from a test while its import or docblock stayed '
                 . 'behind, restore it. Current adopters: %s',
@@ -836,7 +846,14 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
                     $catchSkips[] = $relative . ':' . $line;
                 }
 
-                if (in_array('RequiresRealDatabase', self::traitUses($tokens), true)) {
+                if (
+                    in_array('RequiresRealDatabase', self::traitUses($tokens), true)
+                    || in_array('UsesScratchDatabase', self::traitUses($tokens), true)
+                ) {
+                    // H-08 (2026-11-19): scratch-DB tests may carry either trait in
+                    // their class body — UsesScratchDatabase composes
+                    // RequiresRealDatabase, so the S126 gate still fires. Either
+                    // spelling counts the file exactly once.
                     $adopters[] = $relative;
                 }
             }

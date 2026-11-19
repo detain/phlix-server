@@ -11,6 +11,23 @@ use Symfony\Component\Console\Application;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 
+/**
+ * Unit tests for {@see UserDeleteCommand}.
+ *
+ * The last-admin gate is proven absolute: it fires BEFORE the confirmation gate
+ * and survives `--force`, so no combination can delete the sole administrator.
+ * Deleting a non-admin never consults the guard.
+ *
+ * Cross-repo law note (A-15/H-04): this "guard precedes confirmation and
+ * survives `--force`" ordering law is a both-hosts law. The hub twin
+ * (`phlix-hub` tests/Unit/Console/Commands/UserDeleteCommandTest.php, HUB-CONSOLE
+ * lane, commit 47715678) asserts the same shape through its count-based guard,
+ * and each repo's UserCommandOutputByteMatrixTest carries the byte-level
+ * expression (`delete.*last_admin*` cases: the refused bytes are the guard
+ * message, never the confirmation message — `--json` envelope included).
+ *
+ * @package Phlix\Tests\Unit\Console\Commands
+ */
 class UserDeleteCommandTest extends TestCase
 {
     private function tester(UserRepository $repository): CommandTester

@@ -131,17 +131,6 @@ final class UserRejectCommand extends Command
         return $user;
     }
 
-    private function fail(InputInterface $input, OutputInterface $output, string $error): int
-    {
-        if ($this->isJsonMode($input)) {
-            $this->emitJsonError($output, $error);
-        } else {
-            $output->writeln('<error>' . $error . '</error>');
-        }
-
-        return Command::FAILURE;
-    }
-
     private static function stringArgument(InputInterface $input, string $name): string
     {
         $value = $input->getArgument($name);

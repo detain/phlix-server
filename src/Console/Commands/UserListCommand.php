@@ -92,30 +92,19 @@ final class UserListCommand extends Command
         $status = is_string($statusArg) ? $statusArg : null;
 
         if ($status !== null && !in_array($status, self::STATUSES, true)) {
-            $error = 'Invalid status "' . $status . '"; must be one of ' . implode(', ', self::STATUSES) . '.';
-            if ($this->isJsonMode($input)) {
-                $this->emitJsonError($output, $error);
-
-                return Command::INVALID;
-            }
-            $output->writeln('<error>' . $error . '</error>');
-
-            return Command::INVALID;
+            return $this->fail(
+                $input,
+                $output,
+                'Invalid status "' . $status . '"; must be one of ' . implode(', ', self::STATUSES) . '.',
+                Command::INVALID,
+            );
         }
 
         try {
             $repository = ($this->userRepositoryFactory)();
             $rows = $status !== null ? $repository->listByStatus($status) : $repository->findAll();
         } catch (Throwable $e) {
-            $error = 'Failed to list users: ' . $e->getMessage();
-            if ($this->isJsonMode($input)) {
-                $this->emitJsonError($output, $error);
-
-                return Command::FAILURE;
-            }
-            $output->writeln('<error>' . $error . '</error>');
-
-            return Command::FAILURE;
+            return $this->fail($input, $output, 'Failed to list users: ' . $e->getMessage(), Command::FAILURE);
         }
 
         $rows = array_map(UserRow::forWire(...), $rows);

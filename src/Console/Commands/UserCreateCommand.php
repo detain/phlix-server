@@ -256,20 +256,6 @@ final class UserCreateCommand extends Command
         return $data === false ? null : rtrim($data, "\r\n");
     }
 
-    /**
-     * Render an error in the active output mode and return the given exit code.
-     */
-    private function fail(InputInterface $input, OutputInterface $output, string $error, int $exitCode): int
-    {
-        if ($this->isJsonMode($input)) {
-            $this->emitJsonError($output, $error);
-        } else {
-            $output->writeln('<error>' . $error . '</error>');
-        }
-
-        return $exitCode;
-    }
-
     private static function stringOption(InputInterface $input, string $name): string
     {
         $value = $input->getOption($name);

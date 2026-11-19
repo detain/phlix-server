@@ -392,6 +392,105 @@ final class PooledMySQLConnectionTest extends TestCase
     }
 
     /**
+     * TXMUTEX-A A6 (2026-11-21): the blocking exhausted-pop arm must carry the
+     * same liveness probe as the non-blocking arm above it. Coroutine A leases
+     * the only slot, then the connection dies under it BEFORE its deferred
+     * release hands the corpse back to the idle channel; coroutine B, parked in
+     * the blocking pop, wakes to that corpse. Without the probe B is handed the
+     * dead connection for its very next statement; with the probe (hub's
+     * exhausted arm shape, mirrored) the corpse is retired — closeConnection,
+     * created slot released — and B runs on a fresh connection.
+     */
+    #[RequiresPhpExtension('swoole')]
+    public function testConnectionWokenFromBlockingPopIsLivenessProbedAndReplacedWhenDead(): void
+    {
+        if (!extension_loaded('swoole')) {
+            $this->markTestSkipped('Swoole extension required');
+        }
+
+        /** @var list<object{alive: bool, closes: int, ownLog: list<string>}> $created */
+        $created = [];
+        $factory = static function () use (&$created): Connection {
+            $conn = new class extends Connection {
+                public bool $alive = true;
+                public int $closes = 0;
+                /** @var list<string> */
+                public array $ownLog = [];
+
+                public function __construct()
+                {
+                    // Deliberately NOT calling parent::__construct() — no
+                    // real socket, mirroring PooledMySQLConnection itself.
+                }
+
+                /**
+                 * @param string                        $query
+                 * @param array<int|string, mixed>|null  $params
+                 * @param int                            $fetchmode
+                 * @return mixed
+                 */
+                public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
+                {
+                    $this->ownLog[] = 'query:' . $query;
+                    if ($query === 'SELECT 1') {
+                        if (!$this->alive) {
+                            throw new \RuntimeException('server has gone away');
+                        }
+                        return [['1' => 1]];
+                    }
+                    return [];
+                }
+
+                public function closeConnection(): void
+                {
+                    $this->closes++;
+                }
+            };
+            $created[] = $conn;
+            return $conn;
+        };
+
+        // One slot, generous acquire timeout: B must WAKE from the blocking
+        // pop (not time out), so 2.0 s is slack, not a test ceiling.
+        $pool = new PooledMySQLConnection('h', 3306, 'u', 'p', 'db', 1, 'utf8mb4', $factory, 2.0);
+        $handoff = new \Swoole\Coroutine\Channel(1);
+
+        // A leases the only slot (held until A exits per the deferred release),
+        // signals B, lets B park in the exhausted pop, then the DB side dies.
+        \Swoole\Coroutine\go(static function () use ($pool, $handoff, &$created): void {
+            $pool->query('SELECT A');
+            $handoff->push(1);
+            \Swoole\Coroutine::sleep(0.08);
+            // S128: the shape is read-only to PHPStan; killing the connection
+            // mid-park IS the simulation.
+            // @phpstan-ignore assign.propertyReadOnly
+            $created[0]->alive = false;
+        });
+        // B arrives after A holds the lease, so its acquire blocks in pop().
+        \Swoole\Coroutine\go(static function () use ($pool, $handoff): void {
+            $handoff->pop(1.0);
+            \Swoole\Coroutine::sleep(0.02);
+            $pool->query('SELECT B');
+        });
+        \Swoole\Event::wait();
+
+        self::assertCount(
+            2,
+            $created,
+            'the woken corpse must be retired and replaced, so B runs on a fresh connection (A6)'
+        );
+        self::assertSame(1, $created[0]->closes, 'the corpse must be closeConnection()\'d, not leased out');
+        self::assertContains(
+            'query:SELECT 1',
+            $created[0]->ownLog,
+            'the exhausted arm must liveness-probe what the blocking pop wakes with'
+        );
+        self::assertContains('query:SELECT B', $created[1]->ownLog, 'coroutine B must run on the replacement');
+        self::assertNotContains('query:SELECT B', $created[0]->ownLog, 'the corpse must never serve a statement');
+        self::assertSame(0, $created[1]->closes, 'the fresh connection must not itself be closed');
+    }
+
+    /**
      * S339 — connection-pool exhaustion under oversubscription is STRUCTURAL,
      * and the fix is per-query borrow outside transactions.
      *

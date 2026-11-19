@@ -523,6 +523,20 @@ final class PooledMySQLConnection extends Connection
                 $this->acquireTimeout
             ));
         }
+        // TXMUTEX-A A6 (2026-11-21): a connection woken from the blocking pop
+        // may have died while it sat in the channel (server restart/idle
+        // timeout). The non-blocking arm above already liveness-probes its
+        // pop; the blocking arm grew no parity probe, so a corpse could be
+        // leased straight to the waiter's first statement (hub's exhausted
+        // arm has had the probe all along — the server mirrors it). Same
+        // cancellation-safety envelope as the non-blocking arm: the probe
+        // catches ALL Throwables, and each retirement frees a created slot,
+        // so the recursive acquire is bounded.
+        if (!$this->isConnectionAlive($conn)) {
+            $conn->closeConnection();
+            $this->created--;
+            return $this->acquire();
+        }
         return $conn;
     }
 

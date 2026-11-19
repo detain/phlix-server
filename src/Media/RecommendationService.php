@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media;
 
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -224,15 +225,19 @@ final class RecommendationService
             if (!is_array($row)) {
                 continue;
             }
+            $row = RowMap::fromMixed($row);
 
-            $mediaItemId = is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '';
+            // E-09 cohort 5a: RowMap fold of the pre-fold strict-guard ternaries
+            // (fallbacks transcribed); byte-identity pinned by the legacy-oracle
+            // vectors in tests/Unit/Media/RecommendationServiceTest.php.
+            $mediaItemId = RowMap::str($row, 'media_item_id', '');
             if ($mediaItemId === '') {
                 continue;
             }
 
-            $score = is_numeric($row['score'] ?? null) ? (float) $row['score'] : 0.0;
-            $reason = is_string($row['reason'] ?? null) ? $row['reason'] : self::REASON;
-            $title = is_string($row['title'] ?? null) ? $row['title'] : '';
+            $score = RowMap::floatFromNumeric($row, 'score', 0.0);
+            $reason = RowMap::str($row, 'reason', self::REASON);
+            $title = RowMap::str($row, 'title', '');
 
             $posterUrl = $this->extractPosterUrl($row['metadata_json'] ?? null);
 
@@ -427,17 +432,18 @@ final class RecommendationService
             if (!is_array($row)) {
                 continue;
             }
+            $row = RowMap::fromMixed($row);
 
-            $seedId = is_string($row['seed_id'] ?? null) ? $row['seed_id'] : '';
-            $similarItemId = is_string($row['similar_item_id'] ?? null) ? $row['similar_item_id'] : '';
+            $seedId = RowMap::str($row, 'seed_id', '');
+            $similarItemId = RowMap::str($row, 'similar_item_id', '');
             if ($seedId === '' || $similarItemId === '') {
                 continue;
             }
 
             $grouped[$seedId][] = [
                 'id' => $similarItemId,
-                'score' => is_numeric($row['score'] ?? null) ? (float) $row['score'] : 0.0,
-                'reason' => is_string($row['reason'] ?? null) ? $row['reason'] : self::FALLBACK_SIMILARITY_REASON,
+                'score' => RowMap::floatFromNumeric($row, 'score', 0.0),
+                'reason' => RowMap::str($row, 'reason', self::FALLBACK_SIMILARITY_REASON),
             ];
         }
 

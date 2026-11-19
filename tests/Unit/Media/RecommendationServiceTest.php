@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Media;
 
 use Phlix\Media\RecommendationService;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 use Workerman\MySQL\Connection;
 
 /**
@@ -450,5 +451,87 @@ final class RecommendationServiceTest extends TestCase
         $service->computeBecauseYouWatched('');
 
         $this->assertSame([], $this->calls);
+    }
+    public function testRecommendationRowDecodeLegsAreByteIdenticalToLegacyAcrossVectors(): void
+    {
+        // E-09 cohort 5a (RecommendationService): the pre-fold strict-guard
+        // ternaries of getBecauseYouWatched()/fetchSimilarBySeed() transcribed
+        // verbatim from the parent tree; the posterUrl leg is NOT a fold site
+        // and is taken from the untouched private helper via reflection.
+        $extract = new ReflectionMethod(RecommendationService::class, 'extractPosterUrl');
+        $extract->setAccessible(true);
+
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            [
+                'media_item_id' => 'm-1',
+                'score' => 4.5,
+                'reason' => 'because_you_watched',
+                'title' => 'Dune',
+                'metadata_json' => '{}'
+            ],
+            ['media_item_id' => '', 'score' => 1, 'reason' => 'x', 'title' => 'T', 'metadata_json' => '{}'],
+            ['media_item_id' => 5, 'score' => 1, 'reason' => 'x', 'title' => 'T', 'metadata_json' => '{}'],
+            ['media_item_id' => null, 'score' => 1, 'reason' => 'x', 'title' => 'T', 'metadata_json' => '{}'],
+            ['media_item_id' => 'm-2', 'score' => '2.75', 'reason' => null, 'title' => null, 'metadata_json' => '{}'],
+            ['media_item_id' => 'm-3', 'score' => 'abc', 'reason' => 7, 'title' => 8, 'metadata_json' => '{}'],
+            ['media_item_id' => 'm-4', 'metadata_json' => '{}'],
+            ['media_item_id' => 'm-5', 'score' => true, 'title' => 'T', 'metadata_json' => '{}'],
+        ];
+        foreach ($vectors as $index => $row) {
+            $service = $this->vectorService($row);
+            $result = $service->getBecauseYouWatched('user-1', 10);
+            $mediaItemId = is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '';
+            if ($mediaItemId === '') {
+                $this->assertSame([], $result, "vector $index skip leg");
+                continue;
+            }
+            $expected = [[
+                'id' => $mediaItemId,
+                'title' => is_string($row['title'] ?? null) ? $row['title'] : '',
+                'posterUrl' => $extract->invoke($service, $row['metadata_json'] ?? null),
+                'reason' => is_string($row['reason'] ?? null) ? $row['reason'] : 'because_you_watched',
+                'score' => is_numeric($row['score'] ?? null) ? (float) $row['score'] : 0.0,
+            ]];
+            $this->assertSame($expected, $result, "vector $index");
+        }
+
+        // fetchSimilarBySeed legs (private; reflection keeps the drive honest).
+        /** @var list<array<string, mixed>> $seedVectors */
+        $seedVectors = [
+            ['seed_id' => 's-1', 'similar_item_id' => 'n-1', 'score' => 3.5, 'reason' => 'genre'],
+            ['seed_id' => '', 'similar_item_id' => 'n-1', 'score' => 1, 'reason' => 'x'],
+            ['seed_id' => 's-2', 'similar_item_id' => null, 'score' => 1, 'reason' => 'x'],
+            ['seed_id' => 's-3', 'similar_item_id' => 'n-3'],
+            ['seed_id' => 's-4', 'similar_item_id' => 'n-4', 'score' => 'x', 'reason' => 9],
+            ['seed_id' => 's-5', 'similar_item_id' => 'n-5', 'score' => 2, 'reason' => ''],
+        ];
+        $method = new ReflectionMethod(RecommendationService::class, 'fetchSimilarBySeed');
+        $method->setAccessible(true);
+        foreach ($seedVectors as $index => $row) {
+            $service = $this->vectorService($row);
+            $grouped = $method->invoke($service, ['s-1'], 20);
+            $seedId = is_string($row['seed_id'] ?? null) ? $row['seed_id'] : '';
+            $similarItemId = is_string($row['similar_item_id'] ?? null) ? $row['similar_item_id'] : '';
+            if ($seedId === '' || $similarItemId === '') {
+                $this->assertSame([], $grouped, "seed vector $index skip leg");
+                continue;
+            }
+            $this->assertSame([[
+                'id' => $similarItemId,
+                'score' => is_numeric($row['score'] ?? null) ? (float) $row['score'] : 0.0,
+                'reason' => is_string($row['reason'] ?? null) ? $row['reason'] : 'genre',
+            ]], $grouped[$seedId] ?? null, "seed vector $index");
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function vectorService(array $row): RecommendationService
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([$row]);
+        return new RecommendationService($db);
     }
 }

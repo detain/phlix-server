@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library;
 
+use Phlix\Common\Util\RowMap;
 use Phlix\Shared\Events\Library\LibraryScanCompleted;
 use Phlix\Shared\Events\Library\LibraryScanStarted;
 use Phlix\Shared\Events\Library\MediaItemAdded;
@@ -2013,7 +2014,7 @@ class MediaScanner
         } catch (\Throwable $e) {
             $this->logger->warning('Could not re-point a moved top-level item at its new path', [
                 'item_id' => $itemId,
-                'old_path' => is_string($row['path'] ?? null) ? $row['path'] : '',
+                'old_path' => RowMap::str($row, 'path', ''),
                 'new_path' => $newPath,
                 'error' => $e->getMessage(),
             ]);
@@ -2036,7 +2037,7 @@ class MediaScanner
 
         $this->logger->info('Top-level item followed its file to a new path instead of being pruned', [
             'item_id' => $itemId,
-            'old_path' => is_string($row['path'] ?? null) ? $row['path'] : '',
+            'old_path' => RowMap::str($row, 'path', ''),
             'new_path' => $newPath,
             'source_redescribed' => $redescribe,
         ]);

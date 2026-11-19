@@ -3375,6 +3375,55 @@ class MediaScannerTest extends TestCase
             $this->removeDir($assetQueue);
         }
     }
+
+
+    public function testAdoptRecordedPathOldPathLegsAreByteIdenticalToLegacyAcrossVectors(): void
+    {
+        $tmp = tempnam(sys_get_temp_dir(), 'phlix_c5a_adopt');
+        $this->assertIsString($tmp);
+
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            ['id' => 'item-1', 'path' => '/old/a.mkv', 'metadata_json' => '{}'],
+            ['id' => 'item-1', 'path' => 7, 'metadata_json' => '{}'],
+            ['id' => 'item-1', 'metadata_json' => '{}'],
+            ['id' => 'item-1', 'path' => null, 'metadata_json' => '{}'],
+            ['id' => 'item-1', 'path' => ['x'], 'metadata_json' => '{}'],
+        ];
+
+        try {
+            foreach ($vectors as $row) {
+                $legacyOldPath = is_string($row['path'] ?? null) ? $row['path'] : '';
+
+                $repo = $this->createMock(ItemRepository::class);
+                $repo->method('findById')->willReturn($row);
+                $repo->method('update')->willThrowException(new \RuntimeException('boom'));
+
+                $captured = null;
+                $logger = $this->createMock(\Phlix\Common\Logger\StructuredLogger::class);
+                $logger->method('warning')->willReturnCallback(
+                    static function (string|\Stringable $message, array $context) use (&$captured): void {
+                        $captured = $context;
+                    }
+                );
+
+                $scanner = new MediaScanner(
+                    $this->createMock(Connection::class),
+                    $repo,
+                    $logger
+                );
+                $candidates = new \ReflectionProperty(MediaScanner::class, 'adoptionCandidates');
+                $candidates->setAccessible(true);
+                $candidates->setValue($scanner, ['item-1' => ['path' => $tmp, 'probe' => null]]);
+
+                $this->assertFalse($scanner->adoptRecordedPath('item-1'));
+                $this->assertIsArray($captured);
+                $this->assertSame($legacyOldPath, $captured['old_path']);
+            }
+        } finally {
+            @unlink($tmp);
+        }
+    }
 }
 
 

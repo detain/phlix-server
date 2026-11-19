@@ -885,4 +885,50 @@ final class AccountLinkControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertSame('provider_unavailable', $body['error']);
     }
+
+    /**
+     * E-09 cohort 5a: pins the RowMap fold of AccountLinkController::
+     * listIdentities() row shaping against a verbatim transcription of the
+     * pre-fold ??-guarded strict ternaries (ca91c293 shape). provider_data
+     * stays omitted on both sides by construction.
+     */
+    public function testListIdentitiesRowShapingIsByteIdenticalToLegacyAcrossVectors(): void
+    {
+        /** @var list<array<string, mixed>> $vectors */
+        $vectors = [
+            [
+                'id' => 'i-1', 'provider' => 'github', 'provider_instance' => '',
+                'external_id' => 'e-1', 'created_at' => '2026-01-01 00:00:00', 'provider_data' => '{"secret":"x"}',
+            ],
+            ['id' => null, 'provider' => 7, 'provider_instance' => 1.5, 'external_id' => true, 'created_at' => null],
+            ['id' => '', 'provider' => '', 'external_id' => ''],
+            [],
+            ['provider' => 'oidc', 'created_at' => 'y'],
+            ['provider_instance' => null, 'external_id' => '  '],
+        ];
+
+        foreach ($vectors as $row) {
+            // Verbatim from the ca91c293 tree.
+            $legacy = [
+                'id' => is_string($row['id'] ?? null) ? $row['id'] : '',
+                'provider' => is_string($row['provider'] ?? null) ? $row['provider'] : '',
+                'provider_instance' => is_string($row['provider_instance'] ?? null)
+                    ? $row['provider_instance']
+                    : '',
+                'external_id' => is_string($row['external_id'] ?? null) ? $row['external_id'] : '',
+                'linked_at' => is_string($row['created_at'] ?? null) ? $row['created_at'] : null,
+            ];
+
+            $identities = $this->createMock(UserIdentityRepository::class);
+            $identities->method('findByUserId')->with('user-1')->willReturn([$row]);
+            $controller = new AccountLinkController($identities, new AuthProviderRegistry());
+            $request = new Request();
+            $request->userId = 'user-1';
+
+            $response = $controller->listIdentities($request, []);
+            $body = json_decode($response->body, true);
+
+            $this->assertSame([$legacy], $body['identities']);
+        }
+    }
 }

@@ -17,6 +17,7 @@ use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Util\RowMap;
 use Phlix\Hub\HubJwtValidatorInterface;
 use Phlix\Hub\RelayIdentityResolver;
 use Phlix\Plugins\Ldap\LdapProvider;
@@ -152,14 +153,16 @@ final class AccountLinkController
 
         $identities = [];
         foreach ($this->identities->findByUserId($userId) as $row) {
+            // E-09 cohort 5a: RowMap fold of the pre-fold ??-guarded strict
+            // ternaries (fallbacks transcribed); byte-identity pinned by the
+            // legacy-oracle vectors in
+            // tests/Unit/Server/Http/Controllers/AccountLinkControllerTest.php.
             $identities[] = [
-                'id' => is_string($row['id'] ?? null) ? $row['id'] : '',
-                'provider' => is_string($row['provider'] ?? null) ? $row['provider'] : '',
-                'provider_instance' => is_string($row['provider_instance'] ?? null)
-                    ? $row['provider_instance']
-                    : '',
-                'external_id' => is_string($row['external_id'] ?? null) ? $row['external_id'] : '',
-                'linked_at' => is_string($row['created_at'] ?? null) ? $row['created_at'] : null,
+                'id' => RowMap::str($row, 'id', ''),
+                'provider' => RowMap::str($row, 'provider', ''),
+                'provider_instance' => RowMap::str($row, 'provider_instance', ''),
+                'external_id' => RowMap::str($row, 'external_id', ''),
+                'linked_at' => RowMap::nullableStr($row, 'created_at'),
             ];
         }
 

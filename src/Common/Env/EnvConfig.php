@@ -17,8 +17,13 @@ namespace Phlix\Common\Env;
  * - unset, or set-but-empty (`""`), means "not configured" → the default;
  * - `"0"` is an EXPLICIT value and survives.
  *
- * The helpers never throw and never warn: a config read cannot take the
- * boot path down. Callers own any further validation (bounds, enums).
+ * The helpers never throw: a config read cannot take the boot path down.
+ * Callers own any further validation (bounds, enums). The numeric/text
+ * readers are also silent; the bool family adds ONE soft exception — a
+ * value that is neither a true word nor a false word is answered by the
+ * default AND logged as a one-line `error_log` warning (E-04): junk in a
+ * knob is operator-visible, but a warning is a recording, not a throw, so
+ * the boot-path contract holds unchanged.
  *
  * @package Phlix\Common\Env
  * @since 1.2.4
@@ -57,6 +62,91 @@ final class EnvConfig
         $raw = getenv($name);
 
         return $raw === false || $raw === '' ? null : $raw;
+    }
+
+    /**
+     * The words the bool grammar reads as TRUE (case-folded, trimmed).
+     *
+     * @var list<string>
+     */
+    private const TRUE_WORDS = ['1', 'true', 'yes', 'on'];
+
+    /**
+     * The words the bool grammar reads as FALSE (case-folded, trimmed).
+     *
+     * @var list<string>
+     */
+    private const FALSE_WORDS = ['0', 'false', 'no', 'off'];
+
+    /**
+     * Read a boolean knob — the single law E-04's nine hand-rolled truthy
+     * lists should have been calling.
+     *
+     * Grammar (identical for every bool reader here, see
+     * {@see boolValue()}): unset/empty → $default; true words → true; false
+     * words → false; anything else → $default plus a one-line `error_log`
+     * warning. The trim is load-bearing: the former copies disagreed on it,
+     * so `PHLIX_RELAY_DISABLED=" false"` answered differently per site —
+     * under one law it answers FALSE everywhere.
+     */
+    public static function bool(string $name, bool $default = false): bool
+    {
+        return self::boolValue(getenv($name), $default, $name);
+    }
+
+    /**
+     * Read an OPT-OUT-style knob: a bool whose default is ON and which the
+     * operator turns off by spelling a false word (the PHLIX_RELAY_ENABLED
+     * shape). Same grammar as {@see bool()}; its own verb so the knob's
+     * intent reads at the call site instead of a bare `, true)` argument.
+     */
+    public static function boolOptOut(string $name, bool $default = true): bool
+    {
+        return self::boolValue(getenv($name), $default, $name);
+    }
+
+    /**
+     * The bool grammar as a pure function over an ALREADY-READ raw value.
+     *
+     * Public because a caller that receives the raw env value from its own
+     * caller still owes the same law — `RelayTunnelBoot::envDisables()` is
+     * exactly that seam (start.php runs outside PHPUnit, so the relay boot
+     * gate is pinned by injecting raw values, not by putenv).
+     *
+     * @param string|false|null $raw     Raw env value; `getenv()`'s false and null both read as unset.
+     * @param bool              $default Answer for unset/empty/junk.
+     * @param string            $name    Knob name, used only to make the junk warning actionable.
+     */
+    public static function boolValue(string|false|null $raw, bool $default, string $name): bool
+    {
+        if (!is_string($raw)) {
+            return $default;
+        }
+
+        $normalized = strtolower(trim($raw));
+
+        if ($normalized === '') {
+            return $default;
+        }
+
+        if (in_array($normalized, self::TRUE_WORDS, true)) {
+            return true;
+        }
+
+        if (in_array($normalized, self::FALSE_WORDS, true)) {
+            return false;
+        }
+
+        error_log(sprintf(
+            'EnvConfig: %s="%s" is neither a true word (%s) nor a false word (%s); using default %s',
+            $name,
+            str_replace(["\r", "\n"], ' ', $normalized),
+            implode('/', self::TRUE_WORDS),
+            implode('/', self::FALSE_WORDS),
+            $default ? 'true' : 'false',
+        ));
+
+        return $default;
     }
 
     /**

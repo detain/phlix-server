@@ -10,6 +10,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Metadata;
 
 use Phlix\Common\Util\RowMap;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -88,9 +89,10 @@ class RatingService
         };
 
         $this->db->query(
-            'INSERT INTO metadata_ratings (media_item_id, source, rating_type, score, votes)
+            UpsertSyntax::adapt('INSERT INTO metadata_ratings (media_item_id, source, rating_type, score, votes)
              VALUES (?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE score = VALUES(score), votes = VALUES(votes)',
+              AS new_row
+             ON DUPLICATE KEY UPDATE score = new_row.score, votes = new_row.votes'),
             [
                 $mediaItemId,
                 $source->value,

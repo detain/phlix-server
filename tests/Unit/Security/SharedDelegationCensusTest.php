@@ -191,7 +191,11 @@ final class SharedDelegationCensusTest extends TestCase
      *    BookProgressStore, AudiobookProgressStore, ExtrasRepository and
      *    MarkerService adopt the row-alias form behind adapt(); capture pins
      *    rotated to the alias arm; MariaDB arm byte-identical per the corpus.
-     * Total 133 sites / 63 family-carrier rows (51 distinct files).
+     *  - srv-W2-UPSERT C5 (same lane, metadata cluster): UpsertSyntax 15 → 20 —
+     *    ImdbDatasetImporter's two multi-row staging upserts (grammar proven on
+     *    real MySQL), FuzzyMatcher, RatingService and SubtitleProviderQuota-
+     *    Repository adopt the row-alias form behind adapt().
+     * Total 138 sites / 67 family-carrier rows (55 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -214,7 +218,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_MYSQL_RETRY_POLICY => 1,
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
-        self::F_DB_UPSERT_SYNTAX => 15,
+        self::F_DB_UPSERT_SYNTAX => 20,
         self::F_SETTINGS_CODEC => 1,
         self::F_RELAY_LIVENESS_WINDOWS => 1,
         self::F_HUB_HOST_GRAMMAR => 1,
@@ -369,6 +373,10 @@ final class SharedDelegationCensusTest extends TestCase
             'Media/Library/AudiobookProgressStore.php' => ['adapt'],
             'Media/Library/BookProgressStore.php' => ['adapt'],
             'Media/MarkerService.php' => ['adapt'],
+            'Media/Metadata/FuzzyMatcher.php' => ['adapt'],
+            'Media/Metadata/Imdb/ImdbDatasetImporter.php' => ['adapt', 'adapt'],
+            'Media/Metadata/RatingService.php' => ['adapt'],
+            'Media/Subtitles/Quota/SubtitleProviderQuotaRepository.php' => ['adapt'],
             'Media/UserItemDataRepository.php' => ['adapt', 'adapt', 'adapt', 'adapt'],
         ],
         self::F_SETTINGS_CODEC => [

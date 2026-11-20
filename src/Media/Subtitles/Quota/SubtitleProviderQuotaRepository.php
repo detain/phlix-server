@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Subtitles\Quota;
 
 use Phlix\Common\Util\RowMap;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -165,13 +166,14 @@ final class SubtitleProviderQuotaRepository
     private function upsert(string $provider, ?int $downloadsRemaining, ?string $resetTimeUtc): void
     {
         $this->db->query(
-            'INSERT INTO subtitle_provider_quota
+            UpsertSyntax::adapt('INSERT INTO subtitle_provider_quota
                 (provider, downloads_remaining, reset_time_utc, updated_at)
              VALUES (?, ?, ?, NOW())
+              AS new_row
              ON DUPLICATE KEY UPDATE
-                downloads_remaining = VALUES(downloads_remaining),
-                reset_time_utc = VALUES(reset_time_utc),
-                updated_at = VALUES(updated_at)',
+                downloads_remaining = new_row.downloads_remaining,
+                reset_time_utc = new_row.reset_time_utc,
+                updated_at = new_row.updated_at'),
             [$provider, $downloadsRemaining, $resetTimeUtc],
         );
     }

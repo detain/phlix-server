@@ -13,6 +13,7 @@ namespace Phlix\Media\Metadata\Imdb;
 
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Shared\Database\UpsertSyntax;
 use RuntimeException;
 use Workerman\MySQL\Connection;
 
@@ -560,15 +561,15 @@ class ImdbDatasetImporter
             }
         }
 
-        $sql = 'INSERT INTO imdb_title_akas '
+        $sql = UpsertSyntax::adapt('INSERT INTO imdb_title_akas '
             . '(tconst, ordering, title, normalized_title, region, language, is_original_title) VALUES '
             . $placeholders
-            . ' ON DUPLICATE KEY UPDATE '
-            . 'title = VALUES(title), '
-            . 'normalized_title = VALUES(normalized_title), '
-            . 'region = VALUES(region), '
-            . 'language = VALUES(language), '
-            . 'is_original_title = VALUES(is_original_title)';
+            . '  AS new_row ON DUPLICATE KEY UPDATE '
+            . 'title = new_row.title, '
+            . 'normalized_title = new_row.normalized_title, '
+            . 'region = new_row.region, '
+            . 'language = new_row.language, '
+            . 'is_original_title = new_row.is_original_title');
 
         $this->db->query($sql, $params);
     }
@@ -598,20 +599,20 @@ class ImdbDatasetImporter
             }
         }
 
-        $sql = 'INSERT INTO imdb_titles '
+        $sql = UpsertSyntax::adapt('INSERT INTO imdb_titles '
             . '(tconst, primary_title, original_title, normalized_title, title_type, '
             . 'start_year, genres, runtime_minutes, average_rating, num_votes) VALUES '
             . $placeholders
-            . ' ON DUPLICATE KEY UPDATE '
-            . 'primary_title = VALUES(primary_title), '
-            . 'original_title = VALUES(original_title), '
-            . 'normalized_title = VALUES(normalized_title), '
-            . 'title_type = VALUES(title_type), '
-            . 'start_year = VALUES(start_year), '
-            . 'genres = VALUES(genres), '
-            . 'runtime_minutes = VALUES(runtime_minutes), '
-            . 'average_rating = VALUES(average_rating), '
-            . 'num_votes = VALUES(num_votes)';
+            . '  AS new_row ON DUPLICATE KEY UPDATE '
+            . 'primary_title = new_row.primary_title, '
+            . 'original_title = new_row.original_title, '
+            . 'normalized_title = new_row.normalized_title, '
+            . 'title_type = new_row.title_type, '
+            . 'start_year = new_row.start_year, '
+            . 'genres = new_row.genres, '
+            . 'runtime_minutes = new_row.runtime_minutes, '
+            . 'average_rating = new_row.average_rating, '
+            . 'num_votes = new_row.num_votes');
 
         $this->db->query($sql, $params);
     }

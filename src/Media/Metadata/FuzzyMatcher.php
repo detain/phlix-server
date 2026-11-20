@@ -17,6 +17,7 @@ use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Metadata\Dto\MetadataValue;
 use Phlix\Media\Metadata\Tmdb\ImageUrl;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -178,14 +179,15 @@ final class FuzzyMatcher
         $matchedBy = $matchedBy === 'system' ? 'system' : 'user';
 
         $this->db->query(
-            "INSERT INTO manual_match_overrides
+            UpsertSyntax::adapt("INSERT INTO manual_match_overrides
              (provider, provider_id, media_item_id, confidence, matched_by, created_at)
              VALUES (?, ?, ?, ?, ?, NOW())
+              AS new_row
              ON DUPLICATE KEY UPDATE
-                 media_item_id = VALUES(media_item_id),
-                 confidence = VALUES(confidence),
-                 matched_by = VALUES(matched_by),
-                 created_at = NOW()",
+                 media_item_id = new_row.media_item_id,
+                 confidence = new_row.confidence,
+                 matched_by = new_row.matched_by,
+                 created_at = NOW()"),
             [$provider, $providerId, $mediaItemId, $confidence, $matchedBy]
         );
 

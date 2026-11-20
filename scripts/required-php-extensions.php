@@ -189,7 +189,7 @@ return [
     ],
     'random' => [
         'symbol' => 'random_bytes(',
-        'source' => 'src/Auth/JwtHandler.php',
+        'source' => 'src/Common/Token.php',
         'why' => 'The CSPRNG behind JWT jti values, OAuth state tokens, WebAuthn challenges and '
             . 'every generated secret. 24 random_bytes() plus 2 random_int() call sites, none '
             . 'guarded.',

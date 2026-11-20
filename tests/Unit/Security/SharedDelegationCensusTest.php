@@ -86,6 +86,7 @@ final class SharedDelegationCensusTest extends TestCase
     private const F_DB_WRITE_RESULT = 'Phlix\Shared\Database\WriteResult';
     private const F_DB_UUID = 'Phlix\Shared\Database\Uuid';
     private const F_DB_UPSERT_SYNTAX = 'Phlix\Shared\Database\UpsertSyntax';
+    private const F_DB_ROW_MAP = 'Phlix\Shared\Database\RowMap';
     private const F_SETTINGS_CODEC = 'Phlix\Shared\Settings\SettingsCodec';
     private const F_RELAY_LIVENESS_WINDOWS = 'Phlix\Shared\Relay\LivenessWindows';
     private const F_HUB_HOST_GRAMMAR = 'Phlix\Shared\Hub\HostGrammar';
@@ -239,7 +240,16 @@ final class SharedDelegationCensusTest extends TestCase
      *    and TxEnd carrier rows are UNMOVED: the claimCommit/claimRollback
      *    ladders, the poisoned-commit constant read and the finally handOff
      *    stay consumer-side (the lease deliberately carries no end-ceremony).
-     * Total 158 sites / 84 family-carrier rows (69 distinct files) + 1
+     *  - V059-SRV row 5 (same wave): registered the 23rd family
+     *    Phlix\Shared\Database\RowMap (F_DB_ROW_MAP) — src/Common/Util/RowMap.php
+     *    became a thin delegate onto the shared copy (lifted VERBATIM from that
+     *    file; differential proven vectors=1023 deltas=0 at the lift). Sixteen
+     *    static-forward sites through the `as SharedRowMap` rename, one per
+     *    accessor. The srv public surface stays byte-compatible — 67 src/
+     *    importers unaffected, and tests/Unit/Common/Util/RowMapAccessorsTest.php
+     *    (behavior + signature-shape pins) is the acceptance baseline and ran
+     *    UNMODIFIED (18T/168A).
+     * Total 174 sites / 85 family-carrier rows (70 distinct files) + 1
      * collaborator-carrier row (V059 shape N: TxLease @ PhlixMySQLConnection).
      * Re-pin from measured red only.
      *
@@ -270,6 +280,9 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
         self::F_DB_UPSERT_SYNTAX => 36,
+        // V059 row 5: the srv RowMap is a thin delegate — one static forward
+        // per accessor (16), bound through the `as SharedRowMap` rename.
+        self::F_DB_ROW_MAP => 16,
         self::F_SETTINGS_CODEC => 1,
         self::F_RELAY_LIVENESS_WINDOWS => 1,
         self::F_HUB_HOST_GRAMMAR => 1,
@@ -451,6 +464,26 @@ final class SharedDelegationCensusTest extends TestCase
             'Server/Integrations/Lastfm/LastfmSessionRepository.php' => ['adapt'],
             'Theming/ThemeMediaRepository.php' => ['adapt'],
             'Auth/UserRepository.php' => ['adapt'],
+        ],
+        self::F_DB_ROW_MAP => [
+            'Common/Util/RowMap.php' => [
+                'fromMixed',
+                'listFromMixed',
+                'str',
+                'nullableStr',
+                'int',
+                'nullableInt',
+                'intFromNumeric',
+                'nullableIntFromNumeric',
+                'floatFromNumeric',
+                'stringFromScalar',
+                'nullableStringFromScalar',
+                'nullableScalarStr',
+                'boolFromCast',
+                'nullableNonEmptyStr',
+                'parseMysqlDateTime',
+                'nullableDateTime',
+            ],
         ],
         self::F_SETTINGS_CODEC => [
             'Admin/SettingsRepository.php' => ['decode'],

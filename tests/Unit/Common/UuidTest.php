@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Common;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Uuid;
+use Phlix\Shared\Database\Uuid as SharedUuid;
 
 final class UuidTest extends TestCase
 {
@@ -128,5 +129,66 @@ final class UuidTest extends TestCase
     public function testIsV4AcceptsTheCanonicalExampleId(): void
     {
         $this->assertTrue(Uuid::isV4('550e8400-e29b-41d4-a716-446655440000'));
+    }
+
+    /**
+     * Since srv-W3b the class above is a thin delegate onto the shared kernel
+     * (Phlix\Shared\Database\Uuid) kept as the host-provided external contract
+     * for phlix-plugin-trakt. These pins prove the shell and the kernel are
+     * one behavior: either side's rule drifting reddens here, and a RE-INLINED
+     * shell body additionally reddens UuidOrderSeedFuzzTest (the S443 entropy
+     * law) and the SharedDelegationCensus carrier row for Common/Uuid.php.
+     */
+    public function testShellAndKernelMintShapesTheOtherSideAccepts(): void
+    {
+        for ($i = 0; $i < 500; $i++) {
+            $fromShell = Uuid::v4();
+            $this->assertTrue(SharedUuid::isV4($fromShell), 'kernel rejected shell mint ' . $fromShell);
+            $fromKernel = SharedUuid::v4();
+            $this->assertTrue(Uuid::isV4($fromKernel), 'shell rejected kernel mint ' . $fromKernel);
+        }
+    }
+
+    /**
+     * The isV4() accept/reject SETS agree across the two doors over every
+     * vector — including the 2026-11-03 secaudit cure corpus the transcode
+     * segment routes lean on — and the shell's verdict equals the kernel's
+     * public V4_PATTERN, the single shape law (duplicated regexes are how
+     * shape laws drift).
+     */
+    public function testIsV4AcceptSetMatchesTheKernelPatternOverTheFullCorpus(): void
+    {
+        $vectors = [
+            '550e8400-e29b-41d4-a716-446655440000',
+            '00000000-0000-4000-8000-000000000000',
+            '550e8400-e29b-41d4-b716-446655440000',
+            '',
+            '..',
+            '../..',
+            '../../etc/passwd',
+            '%2e%2e%2f%2e%2e%2fetc%2fpasswd',
+            '550e8400-e29b-41d4-a716-446655440000/',
+            '550e8400-e29b-41d4-a716-446655440000/../x',
+            '550E8400-E29B-41D4-A716-446655440000',
+            '550e8400e29b41d4a716446655440000',
+            '550e8400-e29b-41d4-a716-44665544000',
+            '550e8400-e29b-41d4-a716-4466554400000',
+            '550e8400-e29b-51d4-a716-446655440000',
+            'zt0e8400-e29b-41d4-a716-446655440000',
+            "550e8400-e29b-41d4-a716-446655440000\n",
+            '{550e8400-e29b-41d4-a716-446655440000}',
+        ];
+        foreach ($vectors as $value) {
+            $this->assertSame(
+                SharedUuid::isV4($value),
+                Uuid::isV4($value),
+                'accept-set disagreement on ' . var_export($value, true)
+            );
+            $this->assertSame(
+                preg_match(SharedUuid::V4_PATTERN, $value) === 1,
+                Uuid::isV4($value),
+                'shell diverges from the kernel pattern on ' . var_export($value, true)
+            );
+        }
     }
 }

@@ -32,7 +32,7 @@ use RecursiveIteratorIterator;
  * Five legs, one classifier (census and canary share every detector, so
  * they can never drift apart — the SRV-MICRO r3 law, kept):
  *
- *  1. Exact per-family static-forward pins across src/ (107 sites, 13
+ *  1. Exact per-family static-forward pins across src/ (109 sites, 14
  *     families). S431 discipline: re-pin ONLY from a measured red after
  *     adjudicating every delta. An empty walk returns all-zeros and
  *     reddens — a dead scanner never reads as "law holds".
@@ -80,6 +80,7 @@ final class SharedDelegationCensusTest extends TestCase
     private const F_SUPPORT_JSON = 'Phlix\Shared\Support\Json';
     private const F_DB_MYSQL_ERROR = 'Phlix\Shared\Database\MysqlError';
     private const F_DB_WRITE_RESULT = 'Phlix\Shared\Database\WriteResult';
+    private const F_DB_UUID = 'Phlix\Shared\Database\Uuid';
 
     /**
      * Exact static-forward site counts over src/ at tip 3dd624e0 (the
@@ -126,7 +127,11 @@ final class SharedDelegationCensusTest extends TestCase
      *    imports now name the vendor kernel directly. The unregistered-shared-import net
      *    caught the imports (red at tip 853e68a5, 'imported that the census has never heard
      *    of'); this registration is the cure, counts re-pinned from the measured walk.
-     * Total 107 sites / 45 family-carrier rows (40 distinct files).
+     *  - srv-W3b (same lane): Shared\Database\Uuid 2 — src/Common/Uuid.php became a
+     *    thin external-contract shell (phlix-plugin-trakt's host-provided id mint)
+     *    forwarding v4()/isV4(); this is the delegation direction the census was built
+     *    for, registered at landing rather than caught later.
+     * Total 109 sites / 46 family-carrier rows (41 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -145,6 +150,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_SUPPORT_JSON => 8,
         self::F_DB_MYSQL_ERROR => 19,
         self::F_DB_WRITE_RESULT => 20,
+        self::F_DB_UUID => 2,
     ];
 
     /**
@@ -235,11 +241,21 @@ final class SharedDelegationCensusTest extends TestCase
             'Server/WebSocket/MessageHandler.php' => ['decodeInbound'],
         ],
         self::F_DB_MYSQL_ERROR => [
-            'Auth/AuthManager.php' => ['DUPLICATE_ENTRY_PHRASE', 'SQLSTATE_INTEGRITY', 'driverCode', 'isDuplicateKey'],
+            'Auth/AuthManager.php' => [
+                'DUPLICATE_ENTRY_PHRASE',
+                'SQLSTATE_INTEGRITY',
+                'driverCode',
+                'isDuplicateKey',
+            ],
             'Common/Database/MigrationRunner.php' => ['driverCode'],
             'Common/Database/PhlixMySQLConnection.php' => ['CR_SERVER_GONE_ERROR', 'CR_SERVER_LOST', 'driverCode'],
             'Common/Database/RetentionPrune.php' => ['driverCode', 'driverCode', 'isDeadlock'],
-            'Media/Library/ItemRepository.php' => ['DUPLICATE_ENTRY_PHRASE', 'SQLSTATE_INTEGRITY', 'driverCode', 'isDuplicateKey'],
+            'Media/Library/ItemRepository.php' => [
+                'DUPLICATE_ENTRY_PHRASE',
+                'SQLSTATE_INTEGRITY',
+                'driverCode',
+                'isDuplicateKey',
+            ],
             'Media/Library/ScanJobRepository.php' => ['ER_LOCK_WAIT_TIMEOUT', 'driverCode', 'driverCode', 'isDeadlock'],
         ],
         self::F_DB_WRITE_RESULT => [
@@ -256,6 +272,9 @@ final class SharedDelegationCensusTest extends TestCase
             'Server/Integrations/Lastfm/DbLastfmOAuthStateStore.php' => ['wroteNothing', 'wroteNothing'],
             'Server/Integrations/Trakt/DbTraktOAuthStateStore.php' => ['wroteNothing', 'wroteNothing'],
             'Stats/ClientHeartbeatStore.php' => ['wroteNothing'],
+        ],
+        self::F_DB_UUID => [
+            'Common/Uuid.php' => ['isV4', 'v4'],
         ],
     ];
 

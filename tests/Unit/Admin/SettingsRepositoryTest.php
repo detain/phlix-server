@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Admin;
 
 use Phlix\Admin\SettingsRepository;
+use Phlix\Shared\Settings\SettingsCodec;
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
@@ -424,6 +425,77 @@ final class SettingsRepositoryTest extends TestCase
                 [$row['setting_key'] => $decode->invoke(null, $raw, $type)],
                 $repository->getAllOverrides(),
                 'getAllOverrides legs for vector ' . json_encode($row)
+            );
+        }
+    }
+
+    /**
+     * srv-W4 differential table: the repository's decode door is a forward
+     * onto Phlix\Shared\Settings\SettingsCodec (v0.57 consumer wave), and
+     * BOTH doors must equal this hand-derived table of the ratified decode
+     * law. Before the forward the bodies were verbatim-equal; the table is
+     * the permanent teeth — a re-inlined server door with a flipped arm or
+     * a kernel arm edit both redden here. The encode door is deliberately
+     * NOT adopted (silent-store R1 posture, owner row in its docblock).
+     */
+    public function testDecodeDoorAndSharedKernelEqualTheRatifiedTable(): void
+    {
+        $door = new ReflectionMethod(SettingsRepository::class, 'decode');
+        $door->setAccessible(true);
+
+        /** @var list<array{0:string,1:string,2:mixed}> $vectors */
+        $vectors = [
+            ['1', 'bool', true],
+            ['0', 'bool', false],
+            ['true', 'bool', true],
+            ['True', 'bool', true],
+            ['TRUE', 'bool', true],
+            [' 1', 'bool', false],
+            ['01', 'bool', false],
+            ['', 'bool', false],
+            ['false', 'bool', false],
+            ['junk', 'bool', false],
+            ['1.0', 'bool', false],
+            ['42', 'int', 42],
+            ['-7', 'int', -7],
+            ['3.9', 'int', 3],
+            ['abc', 'int', 0],
+            ['', 'int', 0],
+            ['  10  ', 'int', 10],
+            ['1e3', 'int', 1000],
+            ['0x1F', 'int', 0],
+            ['42', 'float', 42.0],
+            ['3.9', 'float', 3.9],
+            ['-0.5', 'float', -0.5],
+            ['abc', 'float', 0.0],
+            ['', 'float', 0.0],
+            ['1e3', 'float', 1000.0],
+            ['{"a":1}', 'json', ['a' => 1]],
+            ['[1,2]', 'json', [1, 2]],
+            ['null', 'json', null],
+            ['"str"', 'json', 'str'],
+            ['junk', 'json', null],
+            ['', 'json', null],
+            ['anything', 'string', 'anything'],
+            ['', 'string', ''],
+            ["1\n", 'string', "1\n"],
+            ['550e8400-e29b-41d4-a716-446655440000', 'string', '550e8400-e29b-41d4-a716-446655440000'],
+            ['42', 'weird', '42'],
+            ['x', 'BOOL', 'x'],
+        ];
+        $this->assertGreaterThan(30, count($vectors), 'the differential table must not walk empty');
+
+        foreach ($vectors as [$raw, $type, $expected]) {
+            $label = 'vector ' . json_encode([$raw, $type]);
+            $this->assertSame(
+                $expected,
+                $door->invoke(null, $raw, $type),
+                'server decode door diverged from the ratified table, ' . $label
+            );
+            $this->assertSame(
+                $expected,
+                SettingsCodec::decode($raw, $type),
+                'shared kernel diverged from the ratified table, ' . $label
             );
         }
     }

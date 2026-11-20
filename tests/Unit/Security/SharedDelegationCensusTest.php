@@ -32,7 +32,7 @@ use RecursiveIteratorIterator;
  * Five legs, one classifier (census and canary share every detector, so
  * they can never drift apart — the SRV-MICRO r3 law, kept):
  *
- *  1. Exact per-family static-forward pins across src/ (109 sites, 14
+ *  1. Exact per-family static-forward pins across src/ (110 sites, 15
  *     families). S431 discipline: re-pin ONLY from a measured red after
  *     adjudicating every delta. An empty walk returns all-zeros and
  *     reddens — a dead scanner never reads as "law holds".
@@ -81,6 +81,7 @@ final class SharedDelegationCensusTest extends TestCase
     private const F_DB_MYSQL_ERROR = 'Phlix\Shared\Database\MysqlError';
     private const F_DB_WRITE_RESULT = 'Phlix\Shared\Database\WriteResult';
     private const F_DB_UUID = 'Phlix\Shared\Database\Uuid';
+    private const F_SETTINGS_CODEC = 'Phlix\Shared\Settings\SettingsCodec';
 
     /**
      * Exact static-forward site counts over src/ at tip 3dd624e0 (the
@@ -131,7 +132,11 @@ final class SharedDelegationCensusTest extends TestCase
      *    thin external-contract shell (phlix-plugin-trakt's host-provided id mint)
      *    forwarding v4()/isV4(); this is the delegation direction the census was built
      *    for, registered at landing rather than caught later.
-     * Total 109 sites / 46 family-carrier rows (41 distinct files).
+     *  - srv-W4 (same lane): Shared\Settings\SettingsCodec 1 — the SettingsRepository decode
+     *    door forwards to the kernel after a both-direction 37-vector differential
+     *    measured 0 deltas; the encode door KEEPS its silent-store body (the R1
+     *    server-silent-vs-hub-throw posture split is an owner row, not a wave).
+     * Total 110 sites / 47 family-carrier rows (42 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -151,6 +156,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_MYSQL_ERROR => 19,
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
+        self::F_SETTINGS_CODEC => 1,
     ];
 
     /**
@@ -275,6 +281,9 @@ final class SharedDelegationCensusTest extends TestCase
         ],
         self::F_DB_UUID => [
             'Common/Uuid.php' => ['isV4', 'v4'],
+        ],
+        self::F_SETTINGS_CODEC => [
+            'Admin/SettingsRepository.php' => ['decode'],
         ],
     ];
 

@@ -13,6 +13,7 @@ namespace Phlix\Admin;
 
 use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
+use Phlix\Shared\Settings\SettingsCodec;
 use Workerman\MySQL\Connection;
 
 /**
@@ -477,6 +478,13 @@ class SettingsRepository
     /**
      * Serialise a PHP value to its text representation for storage.
      *
+     * R1 keep-row (v0.57 consumer wave srv-W4): Phlix\Shared\Settings\
+     * SettingsCodec::encode() is the shared twin of this arm set, but it
+     * encodes json with JSON_THROW_ON_ERROR while this server door keeps the
+     * silent-store posture — an unencodable value yields '' here, which is
+     * the owner-ratified settings semantics (R1 split: server silent-store,
+     * hub throw). Harmonizing is an OWNER decision, never a wave action.
+     *
      * @param mixed  $value     Value to encode.
      * @param string $valueType One of string|int|bool|float|json.
      *
@@ -496,6 +504,11 @@ class SettingsRepository
     /**
      * Decode a stored text value back into a PHP value per its type.
      *
+     * The rule lives in Phlix\Shared\Settings\SettingsCodec::decode() (v0.57
+     * srv-W4 adoption; the bodies were verbatim before the forward). The
+     * repo keeps its own private door so every caller stays in-class; the
+     * differential table in SettingsRepositoryTest pins the whole accept-set.
+     *
      * @param string $raw       Stored text value.
      * @param string $valueType One of string|int|bool|float|json.
      *
@@ -503,13 +516,7 @@ class SettingsRepository
      */
     private static function decode(string $raw, string $valueType): mixed
     {
-        return match ($valueType) {
-            'bool'  => $raw === '1' || strtolower($raw) === 'true',
-            'int'   => (int) $raw,
-            'float' => (float) $raw,
-            'json'  => json_decode($raw, true),
-            default => $raw,
-        };
+        return SettingsCodec::decode($raw, $valueType);
     }
 
     /**

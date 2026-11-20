@@ -33,6 +33,20 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **A database connection that dies mid-transaction can no longer strand work or poison the pool.** A gone-away error inside an open transaction is now refused rather than silently replayed: the connection is closed, the transaction is poison-marked, and a stale commit is blocked (server port of the hub arm). A non-holder coroutine statement can no longer trample the shared handle while another coroutine's transaction is open. Two pool-liveness arms retire dead connections instead of leasing corpses or stranding lease slots. The `execute()` non-gone wrapper now carries the original `errorInfo` plus `previous`, so `MysqlError::driverCode` classification stays authoritative (the rendered message is unchanged). Proven through the live driver by a real-mysqld KILL-mid-transaction integration leg. [tx-mutex A1/A4/A5/A6/A7 · 8d6dc80f be05e7b1 88a34571 5a3288c2 3827afa7 · test 1faa2947]
+
+- **A failed background retention sweep no longer 500s the user path.** Nine janitor sites converge on one `RetentionPrune` engine: a throwing sweep is now logged loudly and the request survives (seven of the nine previously threw straight through to the caller), both engine swallow-arms error_log instead of vanishing, and the deadline value object refuses negative intervals. [D-14 · 50fcb513 69845a23 8ae8501c 9ac1740e]
+
+- **Password hashing runs on one canonical ARGON2ID policy.** All mints and verifies route through a single `PasswordHasher` SSOT; a stored hash whose options drifted from the canonical policy is silently re-minted on the next successful login, so old credential shapes heal instead of accumulating. [SRV-4.1 / bug #11 · 4719fddb 34642288]
+
+- **DLNA device serials and DIDL object-ids no longer ride `mt_rand`.** Both are minted from a CSPRNG; the previous form was predictable enough to collide and enumerable across restarts. [SRV-2.2 / bug #10 · 4e19e17a]
+
+- **Admin stats endpoints clamp caller-supplied pagination and scanning params.** Oversized windows no longer pass straight into the query channel, and the query-channel `since`/`from`/`to` windows are honored (some endpoints silently dropped them; one applied them with the wrong precedence). [SRV-3.1 / bug #7 + SRV-3 review legs · 379ea2bf a2aa8ad9 c04196a0]
+
+- **Similarity job enqueue self-heals a vanished queue directory.** The similarity, collection and metadata-write job stores converge on the shared `JsonJobStore` base, which re-creates its directory on demand instead of failing the enqueue. [D-10 · 74697c5c]
+
+- **Spawn grammar lives in one SSOT and its deadline is real.** The detached-spawn helper (timeout-wrap + nohup + sentinel grammar) replaces the hand-rolled variants, a detached child's stdin pipe is no longer handed over closed, and `Bounded::run()` enforces its deadline when both output pumps cap: bounded poll-to-deadline, then the kill ladder before `proc_close`. Disclosed honestly: no production `run()` caller exists today — this closes a latent hazard class, not a live incident. [E-12 · 144fbc13 a3330d5b]
+
 - **Signup collisions and scan-queue lock retries now trust the wire, not nearby text.** MySQL error detection was hand-rolled in six places with three levels of rigor; the weakest two mis-detected in ways users can feel. A signup INSERT that failed with a genuine deadlock (or any non-duplicate fault) whose rendered text merely carried the words `Duplicate entry` was friendlied into a `Username already taken` 400, swallowing the real error; now a driver code that is present and not 1062 always propagates verbatim (red-first pinned). Likewise the scan-job enqueue retry no longer buys a retry from the digits `1213`/`1205` appearing anywhere in the message (echoed SQL payload), while a localized (non-English) deadlock on the wire — which the old English belt silently lost — now retries. [D-16 / refactor SRV-MYSQLERR]
 - **DLNA search now logs when its scan cap truncates the result, and the metrics rollup retry buffer is bounded.** A `Search` over a container larger than 50 pages (100k rows) still stops there on purpose, but now emits a `DLNA search truncated at the scan cap` warning instead of silently undercounting `TotalMatches`; `MetricsRegistry::restoreRollups()` keeps at most 720 buckets (oldest dropped) so a long database outage cannot grow worker memory without bound. [SRV-S15, SRV-S2]
 - **The admin log list sorts newest-first by true modification time.** `LogController` now orders on the integer file mtime before formatting `modified_at`, so out-of-order mtimes (and sub-format-resolution ties) no longer reorder rows; a pin test covers it. [SRV-S32 / SRV-79]
@@ -50,6 +64,14 @@ House discipline this file maintains (established by review W-min90/91/92):
   hub deploy that enforces the shared grammar (SHR-S1 owner ruling 2026-11-13).
 
 ### Changed
+
+- **The v0.57 consumer wave moved the server's database and settings primitives onto the shared kernel with measured zero-delta differentials.** The server-local `MysqlError` and `WriteResult` twins are retired onto `Phlix\Shared\Database\{MysqlError,WriteResult}` (no shim left behind); `src/Common/Uuid.php` became a thin delegate shell onto `Phlix\Shared\Database\Uuid` — the name stays because the trakt plugin host contract imports `Phlix\Common\Uuid`, and every import seat keeps working; `SettingsRepository::decode` forwards onto `Phlix\Shared\Settings\SettingsCodec` (the encode door stays in-repo per the ratified silent-store posture split, and the shape-incompatible clamp sites stay). No behavior moved on any differential-measured path. [shared v0.57 consumer wave srv W1-W4 · 312eafeb 2fd292a0 853e68a5 5da48381 b0261e77 · census cure d11b76b3]
+
+- **Ed25519 enrollment key ids are deterministic.** Re-enrolling the same key now yields the same fingerprint instead of minting a fresh `kid` each time (hub stable-kid law ported); the kid format flips in-product. [SRV-2.1 / bug #4 · eba35fae]
+
+- **Estate env booleans read one grammar.** All env-boolean seats go through `EnvConfig::bool`/`boolOptOut`; junk on a default-true knob now announces itself instead of silently switching the feature off. [E-04 · 4c00efc8 77d67450]
+
+- **phlix-testkit is enabled as a require-dev path repo.** Shared scratch-DB and integration-guard harness seats resolve through it (dev-tooling posture; release pinning rides a future tag). [TESTKIT · 28806e7d]
 
 - **Advertised host candidates are now judged by the estate's one host grammar.**
   `HostnameCandidateSanitizer::isAcceptable` — the gate every `hostnameCandidates`
@@ -381,6 +403,14 @@ House discipline this file maintains (established by review W-min90/91/92):
   [CP-029 / D-1a parity cure, server w38-fold, 2026-11-11]
 
 ### Security
+
+- **JWT decode pins the header `alg`/`typ` before any signature work.** The `alg:none` forgery class is closed at the seam rather than by rendered-text luck. [bug #2 · cce9f3ea]
+
+- **Hub-claimed JWKS keys are bound to the header `kid` they were resolved under.** A key fetched for one kid can no longer stand in for a token naming another (server twin of the hub law). [bug #3 · f566a2e6]
+
+- **The operator `PHLIX_SSRF_ALLOW_CIDRS` list is honored by the two hand-rolled private-range checkers.** Allow-listed operational CIDRs were meeting a hardcoded denial at those seats. [SRV-3.2 / bug #13 · be1d607e]
+
+- **Relay TLS env knobs converged on the EnvConfig SSOT.** `PHLIX_HUB_TLS_VERIFY=0` is now respected as a real opt-out (the `?:` coalesce swallowed it to ON), and a junk value resolves to verified=ON while announcing itself — the same input previously failed OPEN silently. [SRV-ENVBOOL · 933b9e9c a6d2789a]
 
 - **BREAKING DEFAULT: the hub relay now requires TLS by default
   (`PHLIX_RELAY_REQUIRE_TLS` defaults to ON).** A relay dial whose resolved

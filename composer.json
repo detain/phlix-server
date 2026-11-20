@@ -54,7 +54,6 @@
     "require-dev": {
         "codeception/codeception": "^5.3",
         "codeception/module-asserts": "^3.2",
-        "detain/phlix-testkit": "dev-master@dev",
         "detain/phlix-tokens": "v0.2.3",
         "facile-it/paraunit": "^2.0",
         "mockery/mockery": "^1.6",
@@ -127,7 +126,7 @@
             "maxHubVersion": "1.9.9",
             "minPhpVersion": "8.3",
             "staticsPinNote": "conflict illuminate/collections >=13.32.0: v13.32.0+ carries '@phpstan-this-out ($key is null ? static<TKey|int, TValue> : $this)' on Collection::pull(); vimeo/psalm 6.5.0 (highest resolvable under config.platform.php=8.3.0) crashes with TypeParseTreeException on deep-scan via the autoload file graph, and v13.39.0 still offends (no upward cure). Remove only together with a psalm >=6.20 bump, which requires an owner decision to raise platform php to >=8.3.16. Evidence: .reviews/fixlog/M-SERVER-CSFIX__fix.md",
-            "testkitPinNote": "detain/phlix-testkit sits in require-dev as a path repo (dev-master@dev, symlink:false) mirroring the local kit tree; the lock entry dist.reference records the kit sha at install. Honest form today: the kit is unpublished (no tag exists, origin carries only a stale pre-split scaffold, anonymous archive URLs 404). Release pinning rides a future tag — at cut-over this entry migrates to the estate zipball-sha form used by detain/phlix-shared, and the repositories path entry drops (precedent: 3260bf75 path-era -> 9fe18fa9 drop-dev-path)."
+            "testkitPinNote": "detain/phlix-testkit enablement (28806e7d: require-dev path repo, dev-master@dev, symlink:false, mirroring the local kit tree) was UNPINNED 2026-11-20: a /home/sites path repository is unresolvable on hosted runners — composer install died at the testkit node (PathDownloader exit 1, every CI job) once the retrofit-era master cluster was pushed. Zero src/tests/scripts references existed at removal, so the pin was pure groundwork. Honest form today: the kit is unpublished (no tag exists, origin carries only a stale pre-split scaffold, anonymous archive URLs 404). Release pinning rides a future tag — at cut-over the dependency returns in the estate zipball-sha form used by detain/phlix-shared and NO repositories path entry is added (precedent: 3260bf75 path-era -> 9fe18fa9 drop-dev-path)."
         }
     },
     "repositories": [
@@ -141,13 +140,6 @@
                     "type": "tar",
                     "url": "https://github.com/detain/phlix-tokens/archive/refs/tags/v0.2.3.tar.gz"
                 }
-            }
-        },
-        {
-            "type": "path",
-            "url": "/home/sites/phlix/phlix-testkit",
-            "options": {
-                "symlink": false
             }
         }
     ]

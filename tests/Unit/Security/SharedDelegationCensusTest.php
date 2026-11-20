@@ -219,7 +219,14 @@ final class SharedDelegationCensusTest extends TestCase
      *    real-MySQL effect-parity legs (integration Dyn methods); the capture pins
      *    in UserRepositorySettingsTest now pin both flavors' full strings against
      *    the REAL builder.
-     * Total 154 sites / 83 family-carrier rows (68 distinct files).
+     *  - srv-FXSRV (final-verification lane, FR-SSOT item 2): MysqlError 17 → 21 —
+     *    StreamProbeBackfill's TRANSIENT_WRITE_ERRNOS now sources the kernel four
+     *    (ER_LOCK_WAIT_TIMEOUT/ER_LOCK_DEADLOCK/CR_SERVER_GONE_ERROR/CR_SERVER_LOST)
+     *    through MysqlError constants instead of restating the raw integers; the file
+     *    joins the MysqlError carrier set (4 sites). Zero behavior: the constants carry
+     *    the identical values. Set-equality drift pin: the SPB-local four vs kernel four
+     *    closed set is asserted in tests/Unit/Media/Library/StreamProbeBackfillTest.php.
+     * Total 158 sites / 84 family-carrier rows (69 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -236,7 +243,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_FRAME_CODEC => 3,
         self::F_SYNCPLAY_DIALECT => 19,
         self::F_SUPPORT_JSON => 8,
-        self::F_DB_MYSQL_ERROR => 17,
+        self::F_DB_MYSQL_ERROR => 21,
         self::F_DB_MYSQL_TX_LOCK_STATE => 1,
         self::F_DB_TX_END => 6,
         self::F_DB_MYSQL_RETRY_POLICY => 1,
@@ -352,6 +359,12 @@ final class SharedDelegationCensusTest extends TestCase
                 'isDuplicateKey',
             ],
             'Media/Library/ScanJobRepository.php' => ['ER_LOCK_WAIT_TIMEOUT', 'driverCode', 'driverCode', 'isDeadlock'],
+            'Media/Library/StreamProbeBackfill.php' => [
+                'CR_SERVER_GONE_ERROR',
+                'CR_SERVER_LOST',
+                'ER_LOCK_DEADLOCK',
+                'ER_LOCK_WAIT_TIMEOUT',
+            ],
         ],
         self::F_DB_MYSQL_TX_LOCK_STATE => [
             'Common/Database/PhlixMySQLConnection.php' => ['POISONED_COMMIT_MESSAGE'],

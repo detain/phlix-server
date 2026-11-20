@@ -179,7 +179,14 @@ final class SharedDelegationCensusTest extends TestCase
      *    server_settings and plugin_settings write doors render through the kernel
      *    (both-arms byte-differential corpus rows + real-DB effect parity already
      *    prove the swap; carrier multiset grows adapt rows for both files).
-     * Total 121 sites / 55 family-carrier rows (44 distinct files).
+     *  - srv-W2-UPSERT C3 (same lane, collections cluster): UpsertSyntax 3 → 7 —
+     *    the collection write doors adopt the row-alias form behind adapt():
+     *    CollectionItemRepository insert/batchInsert (the no-op re-add survivor
+     *    leg, multi-row batch grammar proven on real MySQL) and CollectionService
+     *    media_collections + media_collection_members upserts. Capture pins
+     *    rotated to the alias arm in the same commit; MariaDB arm is the exact
+     *    retired wire text per the corpus differential.
+     * Total 125 sites / 57 family-carrier rows (46 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -202,7 +209,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_MYSQL_RETRY_POLICY => 1,
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
-        self::F_DB_UPSERT_SYNTAX => 3,
+        self::F_DB_UPSERT_SYNTAX => 7,
         self::F_SETTINGS_CODEC => 1,
         self::F_RELAY_LIVENESS_WINDOWS => 1,
         self::F_HUB_HOST_GRAMMAR => 1,
@@ -351,6 +358,8 @@ final class SharedDelegationCensusTest extends TestCase
             'Common/Database/PhlixMySQLConnection.php' => ['detect'],
             'Admin/SettingsRepository.php' => ['adapt'],
             'Plugins/Repository/PluginSettingsRepository.php' => ['adapt'],
+            'Collections/CollectionItemRepository.php' => ['adapt', 'adapt'],
+            'Media/CollectionService.php' => ['adapt', 'adapt'],
         ],
         self::F_SETTINGS_CODEC => [
             'Admin/SettingsRepository.php' => ['decode'],

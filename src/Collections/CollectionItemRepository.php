@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Collections;
 
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -76,9 +77,10 @@ class CollectionItemRepository
     public function insert(string $collectionId, string $mediaItemId, int $sortOrder = 0): void
     {
         $this->db->query(
-            "INSERT INTO collection_items (collection_id, media_item_id, sort_order, added_at)
+            UpsertSyntax::adapt("INSERT INTO collection_items (collection_id, media_item_id, sort_order, added_at)
              VALUES (?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE media_item_id = VALUES(media_item_id)",
+              AS new_row
+             ON DUPLICATE KEY UPDATE media_item_id = new_row.media_item_id"),
             [
                 $collectionId,
                 $mediaItemId,
@@ -273,9 +275,10 @@ class CollectionItemRepository
         }
 
         $this->db->query(
-            "INSERT INTO collection_items (collection_id, media_item_id, sort_order, added_at)
+            UpsertSyntax::adapt("INSERT INTO collection_items (collection_id, media_item_id, sort_order, added_at)
              VALUES " . implode(', ', $placeholders) . "
-             ON DUPLICATE KEY UPDATE media_item_id = VALUES(media_item_id)",
+              AS new_row
+             ON DUPLICATE KEY UPDATE media_item_id = new_row.media_item_id"),
             $bindings
         );
     }

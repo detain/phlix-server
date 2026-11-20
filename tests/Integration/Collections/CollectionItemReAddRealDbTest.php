@@ -43,7 +43,11 @@ use Workerman\MySQL\Connection;
  * `INSERT ... ON DUPLICATE KEY UPDATE media_item_id = VALUES(media_item_id)`
  * — the self-assignment no-op form of the estate's house idiom (the one
  * `WatchHistory::record()` narrates and `PlaybackController::reportProgress()`
- * ships): the duplicate becomes structurally impossible on the write itself,
+ * ships). W2-UPSERT: this site renders through `UpsertSyntax::adapt()`, whose
+ * MariaDB arm emits exactly the legacy text above byte-identically and whose
+ * modern-MySQL arm emits the row-alias twin `media_item_id = new_row.media_item_id`
+ * (same no-op; both arms proved in UpsertSyntaxAdoption{,RealDb}Test):
+ * the duplicate becomes structurally impossible on the write itself,
  * so there is no read-probe TOCTOU window and nothing is swallowed — any
  * non-duplicate SQL failure still propagates (proved below).
  *

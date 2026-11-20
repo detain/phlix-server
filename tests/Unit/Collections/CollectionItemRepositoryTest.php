@@ -271,9 +271,9 @@ class CollectionItemRepositoryTest extends TestCase
         $this->assertStringContainsString('INSERT INTO collection_items', $statements[0]);
         $this->assertStringContainsString('ON DUPLICATE KEY UPDATE', $statements[0]);
         $this->assertStringContainsString(
-            'media_item_id = VALUES(media_item_id)',
+            'media_item_id = new_row.media_item_id',
             $statements[0],
-            'the survivor clause must be the self-assignment no-op — re-adding must not re-order or re-stamp the row'
+            'the survivor clause must be the self-assignment no-op — re-adding must not re-order or re-stamp the row (W2-UPSERT: the unit thread renders the row-alias arm; UpsertSyntax::adapt() restores this exact legacy leg text on MariaDB)'
         );
     }
 
@@ -303,9 +303,9 @@ class CollectionItemRepositoryTest extends TestCase
         $this->assertStringContainsString('INSERT INTO collection_items', $statements[0]);
         $this->assertStringContainsString('ON DUPLICATE KEY UPDATE', $statements[0]);
         $this->assertStringContainsString(
-            'media_item_id = VALUES(media_item_id)',
+            'media_item_id = new_row.media_item_id',
             $statements[0],
-            'the survivor clause must be the self-assignment no-op — duplicates must not re-order or re-stamp rows'
+            'the survivor clause must be the self-assignment no-op — duplicates must not re-order or re-stamp rows (row-alias arm; the MariaDB arm via adapt() is byte-identical to the retired VALUES() leg)'
         );
     }
 

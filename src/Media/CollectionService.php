@@ -16,6 +16,7 @@ use Phlix\Common\Util\RowMap;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Metadata\BackdropSrcset;
 use Phlix\Media\Metadata\TmdbProvider;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -143,22 +144,23 @@ final class CollectionService
             : null;
 
         // Upsert the collection record
-        $this->db->query(
+        $sql = UpsertSyntax::adapt(
             'INSERT INTO media_collections (tmdb_collection_id, name, overview, poster_url, backdrop_url)
              VALUES (?, ?, ?, ?, ?)
+              AS new_row
              ON DUPLICATE KEY UPDATE
-                 name = VALUES(name),
-                 overview = VALUES(overview),
-                 poster_url = VALUES(poster_url),
-                 backdrop_url = VALUES(backdrop_url)',
-            [
-                $collectionId,
-                $tmdbCollection['name'],
-                $tmdbCollection['overview'],
-                $posterUrl,
-                $backdropUrl,
-            ]
+                 name = new_row.name,
+                 overview = new_row.overview,
+                 poster_url = new_row.poster_url,
+                 backdrop_url = new_row.backdrop_url'
         );
+        $this->db->query($sql, [
+            $collectionId,
+            $tmdbCollection['name'],
+            $tmdbCollection['overview'],
+            $posterUrl,
+            $backdropUrl,
+        ]);
 
         // Fetch the persisted record
         $rows = $this->db->query(
@@ -269,9 +271,10 @@ final class CollectionService
 
         // Upsert the membership record
         $this->db->query(
-            'INSERT INTO media_collection_members (collection_id, media_item_id, tmdb_part_order)
+            UpsertSyntax::adapt('INSERT INTO media_collection_members (collection_id, media_item_id, tmdb_part_order)
              VALUES (?, ?, ?)
-             ON DUPLICATE KEY UPDATE tmdb_part_order = VALUES(tmdb_part_order)',
+              AS new_row
+             ON DUPLICATE KEY UPDATE tmdb_part_order = new_row.tmdb_part_order'),
             [
                 $collection['id'],
                 $movieItemId,

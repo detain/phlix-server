@@ -1470,7 +1470,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   Reads/writes legs untouched: zero own-delta (no $request-> line moved);
     //   this bump is file-count only (2207 → 2209, measured red-first in
     //   UPSERT-C1-censusexec-red.log, sole failure).
-    private const EXPECTED_PHP_FILES = 2209;
+    // Staircase continued -- W3-FORKINVENTORY (2026-11-20). +1: new test file
+    //   tests/Unit/Network/UpnpIgdClientCoroutineForkTest.php (executes the
+    //   UpnpIgdClient asyncHttpGet coroutine arm inside real swoole; restores
+    //   the three lost SH-007-era guard rows, two of which cite pre-existing
+    //   tests). File-count only (2209 → 2210, measured red-first in
+    //   FORKINV-census-red.log, sole failure; zero $request-> line moved).
+    private const EXPECTED_PHP_FILES = 2210;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

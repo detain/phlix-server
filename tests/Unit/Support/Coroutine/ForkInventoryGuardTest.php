@@ -69,6 +69,16 @@ use PHPUnit\Framework\TestCase;
  * the helper itself, covered by `CoroutineSocketFailureContainmentTest` driving
  * the delegates. The historical per-file figures above are kept verbatim as
  * recorded on 2026-08-25.
+ *
+ * W3-FORKINVENTORY (2026-11-20) — that "single remaining Network fork site"
+ * counted folded probe BODIES and missed that PortForwardService, StunClient
+ * and UpnpIgdClient each kept their own `inCoroutine()` wrapper: this scan
+ * never stopped finding all three (NatPmpClient alone lost its fork), so the
+ * guard stayed red-by-design for them — W6-BATTERY booked exactly that
+ * failure among the six srv reds — until their coverage rows were restored on
+ * 2026-11-20 with tests that execute the named site's coroutine arm (see the
+ * in-map comment). The paragraph above is kept verbatim as recorded on
+ * 2026-11-10, stale clause and all.
  */
 final class ForkInventoryGuardTest extends TestCase
 {
@@ -111,6 +121,18 @@ final class ForkInventoryGuardTest extends TestCase
         // probe arms to LocalAddressProbe; the fork site consolidated here and
         // CoroutineSocketFailureContainmentTest drives it through the delegates.
         'src/Network/LocalAddressProbe.php' => ['tests/Unit/Network/CoroutineSocketFailureContainmentTest.php'],
+        // W3-FORKINVENTORY (2026-11-20): the three wrappers SH-007's prose
+        // forgot (see the class docblock). Each row cites a test that EXECUTES
+        // this file's coroutine arm, not a registry string: StunClientTest
+        // asserts the arm-identifying `transport` field from inside real
+        // coroutines; CoroutineSocketFailureContainmentTest drives
+        // findGatewayForIp through the createCoroutineSocket seam and counts
+        // branch entries; UpnpIgdClientCoroutineForkTest runs asyncHttpGet
+        // inside a coroutine against a fake chunked IGD (chunked decoding is
+        // the arm discriminator) and pins the "dropping"-only warning text.
+        'src/Network/PortForwardService.php' => ['tests/Unit/Network/CoroutineSocketFailureContainmentTest.php'],
+        'src/Network/StunClient.php' => ['tests/Unit/Network/StunClientTest.php'],
+        'src/Network/UpnpIgdClient.php' => ['tests/Unit/Network/UpnpIgdClientCoroutineForkTest.php'],
         'src/Plugins/Catalog/PluginCatalogService.php' => ['tests/Unit/Plugins/Catalog/PluginCatalogServiceTest.php'],
         'src/Plugins/OAuth2/OAuth2HttpClient.php' => [
             'tests/Unit/Plugins/OAuth2/OAuth2HttpClientCoroutineForkTest.php',

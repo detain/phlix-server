@@ -14,7 +14,7 @@ namespace Phlix\Casting;
 use JsonException;
 use Phlix\Common\Database\PruneDeadline;
 use Phlix\Common\Database\RetentionPrune;
-use Phlix\Common\Database\WriteResult;
+use Phlix\Shared\Database\WriteResult;
 use RuntimeException;
 use Workerman\MySQL\Connection;
 

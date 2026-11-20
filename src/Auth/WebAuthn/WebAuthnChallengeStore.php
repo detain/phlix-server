@@ -13,7 +13,7 @@ namespace Phlix\Auth\WebAuthn;
 
 use Phlix\Common\Database\PruneDeadline;
 use Phlix\Common\Database\RetentionPrune;
-use Phlix\Common\Database\WriteResult;
+use Phlix\Shared\Database\WriteResult;
 use Phlix\Common\Uuid;
 use RuntimeException;
 use Workerman\MySQL\Connection;

@@ -12,7 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Library;
 
 use InvalidArgumentException;
-use Phlix\Common\Database\WriteResult;
+use Phlix\Shared\Database\WriteResult;
 use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
 use Phlix\Shared\Database\MysqlError;
@@ -270,10 +270,10 @@ class ScanJobRepository
      * affected rows, and `null` when it affected none.** `library_scan_jobs.id` is
      * a CHAR(36) UUID with no AUTO_INCREMENT, so a SUCCESSFUL insert returns the
      * string `'0'` — which is FALSY. The refusal test is therefore
-     * {@see \Phlix\Common\Database\WriteResult::wroteNothing()}, never truthiness:
+     * {@see \Phlix\Shared\Database\WriteResult::wroteNothing()}, never truthiness:
      * `if (!$result)` would read every successful insert as a refusal, and `false`
      * — which this client never produces — is a refusal too (defensive breadth,
-     * same as the helper). Beware {@see \Phlix\Common\Database\WriteResult} trap 3:
+     * same as the helper). Beware {@see \Phlix\Shared\Database\WriteResult} trap 3:
      * the statement is built in `$sql` above, so reformatting it so `INSERT` stops
      * being the first space-delimited token makes the client answer `null` for a
      * write that SUCCEEDED — and this method then reports a refusal.
@@ -455,10 +455,10 @@ class ScanJobRepository
      * rows, and `null` when it affected none.** `library_scan_jobs.id` is a CHAR(36)
      * UUID with no AUTO_INCREMENT, so a SUCCESSFUL insert here returns the string
      * `'0'` — which is FALSY. The refusal test is therefore
-     * {@see \Phlix\Common\Database\WriteResult::wroteNothing()}, never truthiness:
+     * {@see \Phlix\Shared\Database\WriteResult::wroteNothing()}, never truthiness:
      * `if (!$result)` reads a successful insert as a refusal, and `false` — which
      * this client never produces — is a refusal too (defensive breadth, same as the
-     * helper). Beware {@see \Phlix\Common\Database\WriteResult} trap 3: the statement
+     * helper). Beware {@see \Phlix\Shared\Database\WriteResult} trap 3: the statement
      * is built in `$sql` above, so reformatting it so `INSERT` stops being the first
      * space-delimited token makes the client answer `null` for a write that
      * SUCCEEDED — and this method then reports a refusal.

@@ -12,7 +12,7 @@ use RecursiveIteratorIterator;
  * S342 — the adoption guard S131 never built: every `->query()` call in `src/`
  * whose statement literal begins `INSERT`/`REPLACE` **and whose result is
  * consumed** must be consumed through
- * {@see \Phlix\Common\Database\WriteResult::wroteNothing()} (or its one
+ * {@see \Phlix\Shared\Database\WriteResult::wroteNothing()} (or its one
  * delegating alias, `MusicLibraryScanner::statementWroteNothing()`) — or be on
  * the named exception list below.
  *
@@ -1009,7 +1009,7 @@ final class WriteResultAdoptionGuardTest extends TestCase
 
     /**
      * Last segment of a possibly-qualified name token — after either a
-     * namespace backslash (`\Phlix\Common\Database\WriteResult`) or a
+     * namespace backslash (`\Phlix\Shared\Database\WriteResult`) or a
      * `::` method qualifier (`WriteResult::wroteNothing`).
      */
     private static function lastNameSegment(string $name): string

@@ -112,7 +112,7 @@ final class MusicLibraryScannerTest extends TestCase
                         // so a SUCCESSFUL insert returns the falsy string `'0'`. This
                         // double returned `int 1` — a value the client cannot produce
                         // — which made the `'0'` hazard unfalsifiable here. See
-                        // {@see \Phlix\Common\Database\WriteResult}.
+                        // {@see \Phlix\Shared\Database\WriteResult}.
                         return '0';
                     }
                     $lastId++;
@@ -797,7 +797,7 @@ final class MusicLibraryScannerTest extends TestCase
                     // SUCCESSFUL insert returns the FALSY string `'0'`. This double used
                     // to answer `int 1`, a value the client cannot produce, which left
                     // the `'0'` hazard unfalsifiable at this site. See
-                    // {@see \Phlix\Common\Database\WriteResult}.
+                    // {@see \Phlix\Shared\Database\WriteResult}.
                     return '0';
                 }
                 if (str_starts_with($t, 'INSERT INTO music_artists')) {

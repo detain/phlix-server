@@ -13,7 +13,7 @@ namespace Phlix\Auth;
 
 use Phlix\Common\Database\PruneDeadline;
 use Phlix\Common\Database\RetentionPrune;
-use Phlix\Common\Database\WriteResult;
+use Phlix\Shared\Database\WriteResult;
 use Workerman\MySQL\Connection;
 
 /**

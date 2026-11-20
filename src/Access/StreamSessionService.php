@@ -550,12 +550,12 @@ final class StreamSessionService
      * insert.** This read `return $result !== false ? 1 : 0;`, which reported
      * `1` for every sweep including one that removed nothing, and could never
      * report `0` at all — the client has no `return false`. It is also not an
-     * insert result, so the {@see \Phlix\Common\Database\WriteResult} helper
+     * insert result, so the {@see \Phlix\Shared\Database\WriteResult} helper
      * does not apply: for a `delete` the client returns `rowCount()`, an
      * **int**, and `0` there means "ran, matched nothing", which is a
      * different question from "wrote nothing because the write did not happen".
      * The `is_int()` narrowing keeps the `null` shape
-     * ({@see \Phlix\Common\Database\WriteResult} trap 3 — a reformat that hides
+     * ({@see \Phlix\Shared\Database\WriteResult} trap 3 — a reformat that hides
      * the leading `DELETE` keyword) reported as `0` rather than crashing.
      *
      * @return int The number of stale streams removed.
@@ -615,7 +615,7 @@ final class StreamSessionService
      * ⚠ **Do NOT "finish the job" by writing
      * `return !WriteResult::wroteNothing($result);`.** It looks like the
      * obvious completion of S131 and it is a REGRESSION. Both falsy shapes
-     * {@see \Phlix\Common\Database\WriteResult::wroteNothing()} tests for are
+     * {@see \Phlix\Shared\Database\WriteResult::wroteNothing()} tests for are
      * SUCCESS here:
      *
      *  - **`null`** — an `INSERT … ON DUPLICATE KEY UPDATE` whose values are

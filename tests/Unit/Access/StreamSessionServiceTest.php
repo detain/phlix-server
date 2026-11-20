@@ -234,7 +234,7 @@ class StreamSessionServiceTest extends TestCase
 
     /**
      * S131 — a non-int result (the `null` shape from
-     * {@see \Phlix\Common\Database\WriteResult} trap 3, where a reformat hides
+     * {@see \Phlix\Shared\Database\WriteResult} trap 3, where a reformat hides
      * the leading `DELETE` keyword from the client's keyword match) degrades to
      * `0` rather than crashing on a bad cast.
      *

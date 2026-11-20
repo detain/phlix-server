@@ -430,7 +430,7 @@ final class DbLastfmOAuthStateStoreTest extends TestCase
      * real error). `null` is the falsy value it DOES return for a zero-row
      * INSERT, and for any statement whose leading keyword it fails to
      * recognise — a heredoc reformat is enough
-     * ({@see \Phlix\Common\Database\WriteResult} trap 3).
+     * ({@see \Phlix\Shared\Database\WriteResult} trap 3).
      *
      * Deleting `|| $result === null` from `WriteResult::wroteNothing()` turns
      * this RED.

@@ -327,7 +327,7 @@ final class DbLoginRateLimitStoreTest extends TestCase
      * the falsy value it DOES return for a zero-row INSERT.
      *
      * Deleting `|| $result === null` from
-     * {@see \Phlix\Common\Database\WriteResult::wroteNothing()} turns this
+     * {@see \Phlix\Shared\Database\WriteResult::wroteNothing()} turns this
      * RED: the fallback UPDATE stops being issued and the attempt goes
      * uncharged, i.e. a free retry.
      *
@@ -370,7 +370,7 @@ final class DbLoginRateLimitStoreTest extends TestCase
      * exists for defensive breadth (a driver swap, or a `lastInsertId()` that
      * honours its declared `string|false`). This test reaches it through a
      * double, which is the only way it CAN be reached — see
-     * {@see \Phlix\Common\Database\WriteResult}. It is here so that deleting
+     * {@see \Phlix\Shared\Database\WriteResult}. It is here so that deleting
      * the arm is a decision someone has to make deliberately, not a silent
      * simplification.
      *

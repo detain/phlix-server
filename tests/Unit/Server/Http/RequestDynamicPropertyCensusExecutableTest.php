@@ -1437,7 +1437,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   zero own-delta (no $request-> line added or removed); this bump is
     //   file-count only (2208 → 2207, measured red-first in
     //   SRVWAVE2-w2-census-redfirst.log).
-    private const EXPECTED_PHP_FILES = 2207;
+    // Staircase continued -- SRV-WAVE-AB2 W3a (shared v0.57 consumer wave). -1
+    //   mine: src/Common/Database/WriteResult.php DELETED — the server-local twin
+    //   retired onto Phlix\Shared\Database\WriteResult (wroteNothing byte-identical;
+    //   shared's affectedRows() is additive with ZERO server call sites today —
+    //   keep-row). 13 import seats + 20 docblock FQCN seats re-pointed (33 lines
+    //   across 23 files); WriteResultTest re-aimed at the shared kernel, widened
+    //   with four strict-identity accept-set arms, and carries the W2 retirement
+    //   tripwires (red-first SRVWAVE2-w3a-redfirst.log, green 18T/45A
+    //   SRVWAVE2-w3a-green.log). Reads/writes legs untouched: zero own-delta;
+    //   this bump is file-count only (2207 → 2206, measured red-first in
+    //   SRVWAVE2-w3a-census-redfirst.log).
+    private const EXPECTED_PHP_FILES = 2206;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

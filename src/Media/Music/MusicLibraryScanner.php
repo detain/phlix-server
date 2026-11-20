@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Music;
 
-use Phlix\Common\Database\WriteResult;
+use Phlix\Shared\Database\WriteResult;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Uuid;
@@ -364,7 +364,7 @@ class MusicLibraryScanner
      * whitespace layout — you have not measured.
      *
      * ✅ **S131 CLOSED THE SIX OTHER SITES, AND THE PREDICATE NOW LIVES IN ONE PLACE.**
-     * This method is a delegate to {@see \Phlix\Common\Database\WriteResult::wroteNothing()},
+     * This method is a delegate to {@see \Phlix\Shared\Database\WriteResult::wroteNothing()},
      * which carries the full contract table and both traps for the whole repo. The six
      * `=== false` sites this docblock used to list as unfixed — `StreamSessionService`,
      * `DbLoginRateLimitStore`, `DbOidcStateStore`, `DbOAuth2StateStore`,

@@ -13,7 +13,7 @@ namespace Phlix\Admin;
 
 use Phlix\Common\Util\RowMap;
 use DateTimeInterface;
-use Phlix\Common\Database\WriteResult;
+use Phlix\Shared\Database\WriteResult;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Token;
 use Phlix\Common\Uuid;

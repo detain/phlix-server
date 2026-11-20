@@ -11,10 +11,12 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Common\Database;
 
-use Phlix\Common\Database\WriteResult;
+use Phlix\Shared\Database\WriteResult;
 use Phlix\Media\Music\MusicLibraryScanner;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 use ReflectionMethod;
 
 /**
@@ -30,7 +32,20 @@ use ReflectionMethod;
 final class WriteResultTest extends TestCase
 {
     /**
+     * The retired server-local twin, assembled from fragments so this guard
+     * file is the only place the literal needle can never be found whole
+     * (extinction scans exclude exactly this file — see SELF_PATH).
+     */
+    private const RETIRED_FQCN = 'Phlix' . '\\' . 'Common' . '\\' . 'Database' . '\\' . 'WriteResult';
+
+    private const SELF_PATH = __DIR__ . '/WriteResultTest.php';
+
+    /**
      * The two arms, and the values that must NOT be mistaken for them.
+     *
+     * The rows marked [v0.57-W3a] were added when this suite was re-aimed from
+     * the retired server-local twin onto the shared kernel: they widen the
+     * accept-set differential beyond the values any old pin happened to feed.
      *
      * @return array<string, array{0: mixed, 1: bool}>
      */
@@ -51,6 +66,12 @@ final class WriteResultTest extends TestCase
             "'' — an empty string is falsy but is not a no-write signal" => ['', false],
             '[] — fetchAll() on a SELECT that matched nothing' => [[], false],
             'true — what several older test doubles answer for a write' => [true, false],
+
+            // ── [v0.57-W3a] strict-identity arms at the re-aim boundary ────
+            '0.0 (float) — falsy, strict-typed, still NOT one of the two arms' => [0.0, false],
+            "'0.0' — a float render is falsy in (bool) but not === false" => ['0.0', false],
+            '-1 — rowCount() for an uncountable statement is a real answer' => [-1, false],
+            'stdClass — any object is a truthy write token' => [new \stdClass(), false],
         ];
     }
 
@@ -130,5 +151,64 @@ final class WriteResultTest extends TestCase
                 "the two predicates have forked on: {$label}",
             );
         }
+    }
+
+    public function testTheRetiredLocalTwinStaysExtinctAsAClass(): void
+    {
+        // Autoload-aware: if any file resurrects the name where the composer
+        // psr-4 map can find it, class_exists() reloads it and this reddens.
+        self::assertFalse(
+            class_exists(self::RETIRED_FQCN, true),
+            'The server-local twin Phlix\\Common\\Database\\WriteResult was retired to the '
+            . 'shared kernel in the v0.57 consumer wave (W3a) — nothing may re-create it.'
+        );
+    }
+
+    public function testTheRetiredFqcnIsExtinctFromEverySourceFile(): void
+    {
+        $root = dirname(__DIR__, 4);
+        $needle = 'Phlix' . '\\' . 'Common' . '\\' . 'Database' . '\\' . 'WriteResult';
+        $offenders = [];
+        $examined = 0;
+
+        foreach (['src', 'tests'] as $dir) {
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($root . '/' . $dir, RecursiveDirectoryIterator::SKIP_DOTS),
+            );
+
+            /** @var \SplFileInfo $file */
+            foreach ($iterator as $file) {
+                if (!$file->isFile() || $file->getExtension() !== 'php') {
+                    continue;
+                }
+                if ($file->getPathname() === self::SELF_PATH) {
+                    // This guard file names the retired FQCN in its docblock and
+                    // its runtime-string fragments — the only sanctioned seats.
+                    continue;
+                }
+
+                $examined++;
+
+                if (str_contains((string) file_get_contents($file->getPathname()), $needle)) {
+                    $offenders[] = substr($file->getPathname(), strlen($root) + 1);
+                }
+            }
+        }
+
+        // Assert own coverage: a scan that examined nothing must not pass
+        // silently (root-path bug = free green — S342 denominator law).
+        self::assertGreaterThan(
+            2000,
+            $examined,
+            'The extinction scan examined only ' . $examined . ' PHP files — the tree walk '
+            . 'is broken, which would let the retired FQCN return unnoticed.'
+        );
+
+        self::assertSame(
+            [],
+            $offenders,
+            "The retired FQCN appears in source text (" . implode(', ', $offenders) . '). '
+            . 'Repoint those consumers to Phlix\\Shared\\Database\\WriteResult instead.'
+        );
     }
 }

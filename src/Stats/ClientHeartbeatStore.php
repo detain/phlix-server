@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Stats;
 
-use Phlix\Common\Database\WriteResult;
+use Phlix\Shared\Database\WriteResult;
 use Workerman\MySQL\Connection;
 
 /**

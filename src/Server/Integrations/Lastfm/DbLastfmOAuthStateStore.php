@@ -13,7 +13,7 @@ namespace Phlix\Server\Integrations\Lastfm;
 
 use Phlix\Common\Database\PruneDeadline;
 use Phlix\Common\Database\RetentionPrune;
-use Phlix\Common\Database\WriteResult;
+use Phlix\Shared\Database\WriteResult;
 use Phlix\Common\Util\RowMap;
 use Phlix\Common\Uuid;
 use Workerman\MySQL\Connection;

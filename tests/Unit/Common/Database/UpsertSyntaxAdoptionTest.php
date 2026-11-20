@@ -824,11 +824,12 @@ final class UpsertSyntaxAdoptionTest extends TestCase
             );
         }
 
-        $aliasForms = ['AS new_row', 'as new_row', 'AS  new_row', "AS\tnew_row", 'AS NEW_ROW', 'AS `new_row`'];
+        $aliasForms = ['AS new_row', 'as new_row', 'AS  new_row', "AS\tnew_row", 'AS NEW_ROW', 'AS `new_row`', 'AS xnew_row'];
         $refSets = [
             'a = new_row.a',
             'a = NEW_ROW.a',
             'a = new_rowx.a',
+            'a = xnew_row.a',
             'a = `new_row`.`a`',
             'a = new_row_nothere.a',
             'b = t.b + new_row.b, c = GREATEST(t.c, new_row.c)',

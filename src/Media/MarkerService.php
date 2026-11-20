@@ -9,6 +9,8 @@ declare(strict_types=1);
 
 namespace Phlix\Media;
 
+use Phlix\Shared\Database\UpsertSyntax;
+
 final class MarkerService
 {
     /**
@@ -60,16 +62,19 @@ final class MarkerService
         ?string $thumbnailPath = null
     ): Marker {
         $this->db->query(
-            'INSERT INTO media_markers
+            UpsertSyntax::adapt(
+                'INSERT INTO media_markers
              (media_item_id, marker_type, start_time_ms, end_time_ms, label, user_id, thumbnail_path)
              VALUES (?, ?, ?, ?, ?, ?, ?)
+              AS new_row
              ON DUPLICATE KEY UPDATE
-               marker_type = VALUES(marker_type),
-               start_time_ms = VALUES(start_time_ms),
-               end_time_ms = VALUES(end_time_ms),
-               label = VALUES(label),
-               user_id = VALUES(user_id),
-               thumbnail_path = VALUES(thumbnail_path)',
+               marker_type = new_row.marker_type,
+               start_time_ms = new_row.start_time_ms,
+               end_time_ms = new_row.end_time_ms,
+               label = new_row.label,
+               user_id = new_row.user_id,
+               thumbnail_path = new_row.thumbnail_path'
+            ),
             [$mediaItemId, $type->value, $startMs, $endMs, $label, $userId, $thumbnailPath]
         );
         $id = (int) $this->db->lastInsertId();

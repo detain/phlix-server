@@ -186,7 +186,12 @@ final class SharedDelegationCensusTest extends TestCase
      *    media_collections + media_collection_members upserts. Capture pins
      *    rotated to the alias arm in the same commit; MariaDB arm is the exact
      *    retired wire text per the corpus differential.
-     * Total 125 sites / 57 family-carrier rows (46 distinct files).
+     *  - srv-W2-UPSERT C4 (same lane, item-data cluster): UpsertSyntax 7 → 15 —
+     *    UserItemDataRepository (favorite/watched/rating/like_level doors),
+     *    BookProgressStore, AudiobookProgressStore, ExtrasRepository and
+     *    MarkerService adopt the row-alias form behind adapt(); capture pins
+     *    rotated to the alias arm; MariaDB arm byte-identical per the corpus.
+     * Total 133 sites / 63 family-carrier rows (51 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -209,7 +214,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_MYSQL_RETRY_POLICY => 1,
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
-        self::F_DB_UPSERT_SYNTAX => 7,
+        self::F_DB_UPSERT_SYNTAX => 15,
         self::F_SETTINGS_CODEC => 1,
         self::F_RELAY_LIVENESS_WINDOWS => 1,
         self::F_HUB_HOST_GRAMMAR => 1,
@@ -360,6 +365,11 @@ final class SharedDelegationCensusTest extends TestCase
             'Plugins/Repository/PluginSettingsRepository.php' => ['adapt'],
             'Collections/CollectionItemRepository.php' => ['adapt', 'adapt'],
             'Media/CollectionService.php' => ['adapt', 'adapt'],
+            'Media/Extras/ExtrasRepository.php' => ['adapt'],
+            'Media/Library/AudiobookProgressStore.php' => ['adapt'],
+            'Media/Library/BookProgressStore.php' => ['adapt'],
+            'Media/MarkerService.php' => ['adapt'],
+            'Media/UserItemDataRepository.php' => ['adapt', 'adapt', 'adapt', 'adapt'],
         ],
         self::F_SETTINGS_CODEC => [
             'Admin/SettingsRepository.php' => ['decode'],

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Library;
 
 use Phlix\Common\Util\RowMap;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -111,16 +112,17 @@ class AudiobookProgressStore
         $completedJson = json_encode($progress->completed_chapters);
 
         $this->db->query(
-            "INSERT INTO audiobook_progress
+            UpsertSyntax::adapt("INSERT INTO audiobook_progress
                 (user_id, audiobook_id, position_ms, current_chapter_index,
                  completed_chapters, percent_complete, last_played_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)
+              AS new_row
              ON DUPLICATE KEY UPDATE
-                position_ms = VALUES(position_ms),
-                current_chapter_index = VALUES(current_chapter_index),
-                completed_chapters = VALUES(completed_chapters),
-                percent_complete = VALUES(percent_complete),
-                last_played_at = VALUES(last_played_at)",
+                position_ms = new_row.position_ms,
+                current_chapter_index = new_row.current_chapter_index,
+                completed_chapters = new_row.completed_chapters,
+                percent_complete = new_row.percent_complete,
+                last_played_at = new_row.last_played_at"),
             [
                 $progress->user_id,
                 $progress->audiobook_id,

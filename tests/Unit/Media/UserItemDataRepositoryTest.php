@@ -176,7 +176,7 @@ class UserItemDataRepositoryTest extends TestCase
             ->with(
                 $this->logicalAnd(
                     $this->stringContains('INSERT INTO user_item_data (user_id, profile_id, item_id, favorite)'),
-                    $this->stringContains('ON DUPLICATE KEY UPDATE favorite = VALUES(favorite)')
+                    $this->stringContains('ON DUPLICATE KEY UPDATE favorite = new_row.favorite')
                 ),
                 $this->equalTo([self::USER, self::PROFILE, self::ITEM, 1])
             )
@@ -205,7 +205,7 @@ class UserItemDataRepositoryTest extends TestCase
                 $this->logicalAnd(
                     $this->stringContains('INSERT INTO user_item_data'),
                     $this->stringContains('watched'),
-                    $this->stringContains('ON DUPLICATE KEY UPDATE watched = VALUES(watched)')
+                    $this->stringContains('ON DUPLICATE KEY UPDATE watched = new_row.watched')
                 ),
                 $this->equalTo([self::USER, self::PROFILE, self::ITEM, 1])
             )
@@ -233,7 +233,7 @@ class UserItemDataRepositoryTest extends TestCase
             ->with(
                 $this->logicalAnd(
                     $this->stringContains('INSERT INTO user_item_data (user_id, profile_id, item_id, rating)'),
-                    $this->stringContains('ON DUPLICATE KEY UPDATE rating = VALUES(rating)')
+                    $this->stringContains('ON DUPLICATE KEY UPDATE rating = new_row.rating')
                 ),
                 $this->equalTo([self::USER, self::PROFILE, self::ITEM, 5])
             )
@@ -301,7 +301,7 @@ class UserItemDataRepositoryTest extends TestCase
                 $this->logicalAnd(
                     $this->stringContains('INSERT INTO user_item_data'),
                     $this->stringContains('like_level'),
-                    $this->stringContains('ON DUPLICATE KEY UPDATE like_level = VALUES(like_level)')
+                    $this->stringContains('ON DUPLICATE KEY UPDATE like_level = new_row.like_level')
                 ),
                 $this->equalTo([self::USER, self::PROFILE, self::ITEM, $level])
             )

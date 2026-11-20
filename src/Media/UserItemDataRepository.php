@@ -15,6 +15,7 @@ use Phlix\Auth\Dto\UserRow;
 use Phlix\Auth\ProfileNotOwnedException;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Common\Util\RowMap;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -165,9 +166,10 @@ class UserItemDataRepository
     public function setFavorite(string $userId, string $itemId, bool $favorite, ?string $profileId = null): void
     {
         $this->db->query(
-            "INSERT INTO user_item_data (user_id, profile_id, item_id, favorite)
+            UpsertSyntax::adapt("INSERT INTO user_item_data (user_id, profile_id, item_id, favorite)
              VALUES (?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE favorite = VALUES(favorite)",
+              AS new_row
+             ON DUPLICATE KEY UPDATE favorite = new_row.favorite"),
             [$userId, $this->scope($userId, $profileId), $itemId, $favorite ? 1 : 0]
         );
     }
@@ -202,9 +204,10 @@ class UserItemDataRepository
         }
 
         $this->db->query(
-            "INSERT INTO user_item_data (user_id, profile_id, item_id, rating)
+            UpsertSyntax::adapt("INSERT INTO user_item_data (user_id, profile_id, item_id, rating)
              VALUES (?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE rating = VALUES(rating)",
+              AS new_row
+             ON DUPLICATE KEY UPDATE rating = new_row.rating"),
             [$userId, $this->scope($userId, $profileId), $itemId, $rating]
         );
     }
@@ -246,9 +249,10 @@ class UserItemDataRepository
         }
 
         $this->db->query(
-            "INSERT INTO user_item_data (user_id, profile_id, item_id, like_level)
+            UpsertSyntax::adapt("INSERT INTO user_item_data (user_id, profile_id, item_id, like_level)
              VALUES (?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE like_level = VALUES(like_level)",
+              AS new_row
+             ON DUPLICATE KEY UPDATE like_level = new_row.like_level"),
             [$userId, $this->scope($userId, $profileId), $itemId, $level]
         );
     }
@@ -331,9 +335,10 @@ class UserItemDataRepository
     public function setWatched(string $userId, string $itemId, bool $watched, ?string $profileId = null): void
     {
         $this->db->query(
-            "INSERT INTO user_item_data (user_id, profile_id, item_id, watched)
+            UpsertSyntax::adapt("INSERT INTO user_item_data (user_id, profile_id, item_id, watched)
              VALUES (?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE watched = VALUES(watched)",
+              AS new_row
+             ON DUPLICATE KEY UPDATE watched = new_row.watched"),
             [$userId, $this->scope($userId, $profileId), $itemId, $watched ? 1 : 0]
         );
     }

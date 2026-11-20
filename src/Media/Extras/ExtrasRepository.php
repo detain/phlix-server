@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Extras;
 
 use Phlix\Common\Uuid;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -157,17 +158,18 @@ class ExtrasRepository
         $now = date('Y-m-d H:i:s');
 
         $this->db->query(
-            "INSERT INTO media_extras (id, media_item_id, title, extra_type, source,
+            UpsertSyntax::adapt("INSERT INTO media_extras (id, media_item_id, title, extra_type, source,
               url, file_path, duration, quality, cached_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              AS new_row
              ON DUPLICATE KEY UPDATE
-                title = VALUES(title),
-                source = VALUES(source),
-                url = VALUES(url),
-                file_path = VALUES(file_path),
-                duration = VALUES(duration),
-                quality = VALUES(quality),
-                cached_at = VALUES(cached_at)",
+                title = new_row.title,
+                source = new_row.source,
+                url = new_row.url,
+                file_path = new_row.file_path,
+                duration = new_row.duration,
+                quality = new_row.quality,
+                cached_at = new_row.cached_at"),
             [
                 $id,
                 $data['media_item_id'],

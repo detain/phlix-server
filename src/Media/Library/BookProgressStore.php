@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Library;
 
 use Phlix\Common\Util\RowMap;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -93,16 +94,17 @@ class BookProgressStore
     public function saveProgress(BookProgress $progress): void
     {
         $this->db->query(
-            "INSERT INTO book_progress
+            UpsertSyntax::adapt("INSERT INTO book_progress
                 (user_id, book_id, position_ms, current_page, total_pages,
                  percent_complete, last_read_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)
+              AS new_row
              ON DUPLICATE KEY UPDATE
-                position_ms = VALUES(position_ms),
-                current_page = VALUES(current_page),
-                total_pages = VALUES(total_pages),
-                percent_complete = VALUES(percent_complete),
-                last_read_at = VALUES(last_read_at)",
+                position_ms = new_row.position_ms,
+                current_page = new_row.current_page,
+                total_pages = new_row.total_pages,
+                percent_complete = new_row.percent_complete,
+                last_read_at = new_row.last_read_at"),
             [
                 $progress->user_id,
                 $progress->book_id,

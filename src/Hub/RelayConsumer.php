@@ -16,6 +16,7 @@ use Phlix\Common\Runtime\WorkerContext;
 use Phlix\Server\Http\Request as ServerRequest;
 use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Response as ServerResponse;
+use Phlix\Shared\Relay\LivenessWindows;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayHttpRequest;
@@ -707,6 +708,33 @@ final class RelayConsumer
     {
         $this->relayStateDirty = false;
 
+        $pingInterval = $this->config->pingInterval;
+        $staleAfterSeconds = max(
+            RelayStateStore::MIN_STALE_AFTER_SECONDS,
+            $pingInterval * 3,
+        );
+        // v0.57 adoption (LivenessWindows, M-22/C-09): the pair this fork
+        // governs — heartbeat cadence vs the silence window declared to the
+        // staleness gate readers — now runs through the shared VO, so the
+        // estate's 3x liveness margin is executable law instead of prose.
+        // assertMargin() cannot fire for the expression above as written; its
+        // teeth are prospective: any future edit that decouples the declared
+        // window from the cadence (a re-tuned multiplier, a pinned constant)
+        // halts here instead of silently ghost-reaping live tunnels. The
+        // literal *3 stays literal on purpose — the VO independently
+        // re-derives the factor from LivenessWindows::MIN_MARGIN_FACTOR, so
+        // the two sources must agree or the write path reddens.
+        // Degenerate cadences (below one second) keep the byte-exact legacy
+        // floor value: RelayConfig casts junk env to 0, the VO refuses
+        // sub-second axes fail-fast, and a live worker must not newly crash
+        // on a config that historically wrote 30 (zero-behavior adoption law;
+        // mirrors checkTunnelLiveness()'s own <1 grace guard).
+        if ($pingInterval >= 1) {
+            $windows = LivenessWindows::new($pingInterval, $staleAfterSeconds);
+            $windows->assertMargin();
+            $staleAfterSeconds = $windows->reapAfterSilenceSeconds();
+        }
+
         $this->stateStore?->writeRelayState([
             'connected' => $this->isConnected(),
             'active' => $this->isActive(),
@@ -720,10 +748,7 @@ final class RelayConsumer
             // instead of reporting `connected: true` forever
             // ({@see RelayStateStore::isStateStale()}). While the tunnel is up
             // the ping timer rewrites the state every pingInterval seconds.
-            'staleAfterSeconds' => max(
-                RelayStateStore::MIN_STALE_AFTER_SECONDS,
-                $this->config->pingInterval * 3,
-            ),
+            'staleAfterSeconds' => $staleAfterSeconds,
         ]);
     }
 

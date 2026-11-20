@@ -13,9 +13,11 @@ use Phlix\Hub\RelayIdentityResolver;
 use Phlix\Hub\RelayMessageFramer;
 use Phlix\Hub\RelayStateStore;
 use Phlix\Hub\StoredEnrollment;
+use Phlix\Shared\Relay\LivenessWindows;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayHttpResponseChunk;
+use InvalidArgumentException;
 use RuntimeException;
 use Workerman\Connection\AsyncTcpConnection;
 
@@ -3010,6 +3012,115 @@ class RelayConsumerTest extends TestCase
                 'a state file just written by a live fork is not stale'
             );
         });
+    }
+
+    /**
+     * Ratified cadence-vector table for the v0.57 LivenessWindows adoption:
+     * every reachable ping cadence must declare exactly max(30, ping*3) —
+     * the values the pre-adoption expression produced (zero-behavior law),
+     * now also proven to satisfy the shared 3x margin law at every pair.
+     */
+    public function test_relay_state_declares_the_ratified_staleness_vectors(): void
+    {
+        $this->withStateDir(function (RelayStateStore $store): void {
+            $vectors = [1 => 30, 10 => 30, 11 => 33, 30 => 90, 1200 => 3600];
+            foreach ($vectors as $pingInterval => $expected) {
+                $consumer = $this->createConsumer(
+                    new RelayConfig(
+                        requireTls: false,
+                        enabled: true,
+                        hubRelayWsUrl: 'ws://hub.example.com:8802',
+                        localHttpAddress: '127.0.0.1:8096',
+                        pingInterval: $pingInterval,
+                    ),
+                    null,
+                    $store,
+                );
+                $this->activate($consumer);
+
+                $state = $store->readRelayState();
+                $this->assertSame(
+                    $expected,
+                    $state['staleAfterSeconds'],
+                    'cadence ' . $pingInterval . 's declares the ratified staleness window'
+                );
+                // The same pair, judged by the shared law it now runs through.
+                LivenessWindows::new($pingInterval, $expected)->assertMargin();
+            }
+        });
+    }
+
+    /**
+     * The VO refuses sub-second axes fail-fast; RelayConfig does NOT floor
+     * pingInterval (envInt casts junk to 0), so the fold keeps the byte-exact
+     * legacy floor value for that degenerate shape instead of newly crashing
+     * a live worker. This test errors if the >=1 belt guard is removed.
+     */
+    public function test_relay_state_falls_back_to_the_floor_for_degenerate_ping_cadences(): void
+    {
+        $this->withStateDir(function (RelayStateStore $store): void {
+            foreach ([0, -5] as $pingInterval) {
+                $consumer = $this->createConsumer(
+                    new RelayConfig(
+                        requireTls: false,
+                        enabled: true,
+                        hubRelayWsUrl: 'ws://hub.example.com:8802',
+                        localHttpAddress: '127.0.0.1:8096',
+                        pingInterval: $pingInterval,
+                    ),
+                    null,
+                    $store,
+                );
+                $this->activate($consumer);
+
+                $this->assertSame(
+                    30,
+                    $store->readRelayState()['staleAfterSeconds'],
+                    'degenerate cadence ' . $pingInterval . ' keeps the legacy floor value'
+                );
+            }
+        });
+    }
+
+    /**
+     * Extinction tripwire (scan-based, own-coverage floor): the staleness
+     * declaration must run through the shared LivenessWindows law, not a
+     * silently re-inlined max(). Red at the pre-adoption parent; reddens
+     * again if the adoption is ever re-inlined away.
+     */
+    public function test_the_staleness_writer_carries_the_liveness_windows_voice_print(): void
+    {
+        $source = file_get_contents(\dirname(__DIR__, 3) . '/src/Hub/RelayConsumer.php');
+        $this->assertIsString($source);
+        $this->assertStringContainsString(
+            'LivenessWindows::new(',
+            $source,
+            'the cadence/reap pair must be judged by the shared VO (v0.57 adoption)'
+        );
+        $this->assertStringContainsString(
+            '->assertMargin()',
+            $source,
+            'the 3x margin law must stay executable at the write path'
+        );
+        $this->assertStringContainsString(
+            'use Phlix\Shared\Relay\LivenessWindows;',
+            $source,
+            'the family import must be named in the header'
+        );
+    }
+
+    /**
+     * Law non-vacuity: assertMargin is not decoration — a pair below the 3x
+     * margin halts loudly. This is the arm the M1 mutation (site multiplier
+     * weakened *3 -> *2) trips at the 30s default cadence.
+     */
+    public function test_the_3x_margin_law_convicts_a_decoupled_reap_window(): void
+    {
+        LivenessWindows::new(30, 90)->assertMargin();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('breaks the 3x margin');
+        LivenessWindows::new(30, 60)->assertMargin();
     }
 
     // -----------------------------------------------------------------------

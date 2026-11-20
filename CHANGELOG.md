@@ -51,6 +51,20 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The 3x liveness-margin law is now executable at the relay state writer.**
+  `RelayConsumer`'s heartbeat-cadence pair — the `staleAfterSeconds` window it
+  declares to the S40 staleness-gate readers — now runs through
+  `Phlix\Shared\Relay\LivenessWindows` (v0.57 M-22/C-09): the computed pair is
+  fed to the VO and `assertMargin()`, so a future edit that decouples the
+  declared window from the 3x ping law halts the write path instead of
+  silently ghost-reaping live tunnels. Output is byte-identical for every
+  config value that ever worked (214-interval differential including the
+  degenerate `PHLIX_RELAY_PING_INTERVAL` env casts); sub-second cadences keep
+  the legacy floor value byte-exact, because the VO refuses sub-second axes
+  fail-fast and a running worker must not newly crash on a config that
+  historically wrote 30. The additive-grace watchdog (`pingInterval +
+  pingTimeout`) and the reader-side clamp stay local per the VO's own charter.
+  [refactor V057-C1-SRV srv-C5a]
 - **Two corrections to this wave's own delegation disclosures (review r1;
   nothing here changed behavior any deployment has ever run — the whole
   adoption wave is local unreleased master).** First, the WebAuthn attestation

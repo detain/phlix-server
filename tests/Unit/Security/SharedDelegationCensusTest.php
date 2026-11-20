@@ -82,6 +82,7 @@ final class SharedDelegationCensusTest extends TestCase
     private const F_DB_WRITE_RESULT = 'Phlix\Shared\Database\WriteResult';
     private const F_DB_UUID = 'Phlix\Shared\Database\Uuid';
     private const F_SETTINGS_CODEC = 'Phlix\Shared\Settings\SettingsCodec';
+    private const F_RELAY_LIVENESS_WINDOWS = 'Phlix\Shared\Relay\LivenessWindows';
 
     /**
      * Exact static-forward site counts over src/ at tip 3dd624e0 (the
@@ -136,7 +137,16 @@ final class SharedDelegationCensusTest extends TestCase
      *    door forwards to the kernel after a both-direction 37-vector differential
      *    measured 0 deltas; the encode door KEEPS its silent-store body (the R1
      *    server-silent-vs-hub-throw posture split is an owner row, not a wave).
-     * Total 110 sites / 47 family-carrier rows (42 distinct files).
+     *  - srv-C5a (V057-C1-SRV lane, this commit): Shared\Relay\LivenessWindows — the
+     *    RelayConsumer staleness-writer pair runs through the VO so the 3x margin is
+     *    executable law; counts pinned from the measured walk (red-first at this tip):
+     *    1 static-forward site, the `LivenessWindows::new(` factory call — a shape the
+     *    walker previously mislexed (reserved-word members after `::` lex as T_MATCH/
+     *    T_NEW, not T_STRING), so the recognizer grew T_NEW acceptance exactly as the
+     *    T_MATCH precedent grew it for CredentialDigest::match. The import-orphan net
+     *    is what forced this adjudication into the open.
+     * Total 111 sites / 48 family-carrier rows (42 distinct files — the new
+     * carrier file was already counted through its F_SUPPORT_JSON row).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -157,6 +167,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
         self::F_SETTINGS_CODEC => 1,
+        self::F_RELAY_LIVENESS_WINDOWS => 1,
     ];
 
     /**
@@ -284,6 +295,9 @@ final class SharedDelegationCensusTest extends TestCase
         ],
         self::F_SETTINGS_CODEC => [
             'Admin/SettingsRepository.php' => ['decode'],
+        ],
+        self::F_RELAY_LIVENESS_WINDOWS => [
+            'Hub/RelayConsumer.php' => ['new'],
         ],
     ];
 
@@ -504,12 +518,15 @@ final class SharedDelegationCensusTest extends TestCase
             // method is named `match` (reserved word — e.g. CredentialDigest::
             // match() at GroupState.php:355), while the same name after `->`
             // stays T_STRING. Accept both so keyword-named shared members are
-            // counted; T_CLASS is deliberately NOT accepted — `Family::class`
+            // counted; accept T_NEW likewise for the reserved-word factory
+            // idiom `Family::new()` (LivenessWindows VO construction, srv-C5a
+            // — without it the import-orphan net convicts a live delegation);
+            // T_CLASS is deliberately NOT accepted — `Family::class`
             // is a meta-reference, not a delegation.
             if (
                 $k !== null
                 && \is_array($tokens[$k])
-                && \in_array($tokens[$k][0], [T_STRING, T_MATCH], true)
+                && \in_array($tokens[$k][0], [T_STRING, T_MATCH, T_NEW], true)
             ) {
                 $found[] = [$family, $tokens[$k][1]];
             }

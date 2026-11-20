@@ -14,6 +14,7 @@ namespace Phlix\Media\Library;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Shared\Database\MysqlError;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -79,16 +80,27 @@ class StreamProbeBackfill
      * Deliberately a CLOSED allow-list. Everything not named here is treated as
      * deterministic and stamped, which is master's behaviour — see the trade-off
      * note on {@see degradeAfterWriteFailure()}.
+     *
+     * The four kernel-named members are sourced from the shared vocabulary
+     * (MysqlError::*) so a re-number there cannot drift silently past this
+     * policy; {@see \Phlix\Tests\Unit\Media\Library\StreamProbeBackfillTest}'s
+     * set-equality pin reddens on any change. The four bare numbers are a
+     * documented SPB-local policy extension: caller-level retryability that is
+     * deliberately BROADER than the kernel's transient/lethal vocabulary — the
+     * connection-limit and interrupted-statement arms (1040/1317) and the
+     * connect-phase failures (2002/2003) are transient FOR THIS WRITE path but
+     * not classified as transient by the kernel, so they stay named here with
+     * that reason.
      */
     private const TRANSIENT_WRITE_ERRNOS = [
-        1040, // ER_CON_COUNT_ERROR    — too many connections
-        1205, // ER_LOCK_WAIT_TIMEOUT  — another transaction held the rows
-        1213, // ER_LOCK_DEADLOCK      — this transaction was the deadlock victim
-        1317, // ER_QUERY_INTERRUPTED  — KILL QUERY / statement timeout
-        2002, // CR_CONNECTION_ERROR   — socket refused
-        2003, // CR_CONN_HOST_ERROR    — host unreachable
-        2006, // CR_SERVER_GONE_ERROR  — server closed the socket
-        2013, // CR_SERVER_LOST        — connection lost mid-statement
+        1040, // ER_CON_COUNT_ERROR    — too many connections (SPB-local policy)
+        MysqlError::ER_LOCK_WAIT_TIMEOUT, // 1205 — another transaction held the rows
+        MysqlError::ER_LOCK_DEADLOCK, // 1213 — this transaction was the deadlock victim
+        1317, // ER_QUERY_INTERRUPTED  — KILL QUERY / statement timeout (SPB-local policy)
+        2002, // CR_CONNECTION_ERROR   — socket refused (SPB-local policy)
+        2003, // CR_CONN_HOST_ERROR    — host unreachable (SPB-local policy)
+        MysqlError::CR_SERVER_GONE_ERROR, // 2006 — server closed the socket
+        MysqlError::CR_SERVER_LOST, // 2013 — connection lost mid-statement
     ];
 
     /** Item repository used to read/replace stream rows and stamp the marker. */

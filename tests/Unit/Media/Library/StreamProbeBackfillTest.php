@@ -15,6 +15,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\StreamProbeBackfill;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Shared\Database\MysqlError;
 use Psr\Log\NullLogger;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -634,5 +635,42 @@ class StreamProbeBackfillTest extends TestCase
         $stored = $this->codecLessStreams();
 
         $this->assertSame($stored, $backfill->ensureVideoCodecFor($item, $stored));
+    }
+
+    /**
+     * FR-SSOT set-equality pin: the TRANSIENT_WRITE_ERRNOS allow-list must keep
+     * the four kernel-named members at exactly the MysqlError::* values (they
+     * are sourced from those constants, so the pin guards against a raw
+     * re-number creeping back in, a member being swapped out, or the list
+     * growing silently) and the four SPB-local policy members — caller-level
+     * retryability deliberately broader than the kernel vocabulary — at the
+     * documented closed set. Any future edit that moves either half without
+     * re-adjudication reddens here.
+     */
+    public function testTransientWriteErrnosStaySetEqualTheirDeclaredSources(): void
+    {
+        $constant = (new \ReflectionClass(StreamProbeBackfill::class))->getConstant('TRANSIENT_WRITE_ERRNOS');
+        if (!is_array($constant)) {
+            throw new \LogicException('TRANSIENT_WRITE_ERRNOS must stay an array constant');
+        }
+
+        $kernelFour = [
+            MysqlError::ER_LOCK_WAIT_TIMEOUT,
+            MysqlError::ER_LOCK_DEADLOCK,
+            MysqlError::CR_SERVER_GONE_ERROR,
+            MysqlError::CR_SERVER_LOST,
+        ];
+
+        $this->assertCount(8, $constant, 'closed allow-list: four kernel-named + four SPB-local members');
+        $this->assertEqualsCanonicalizing(
+            $kernelFour,
+            array_values(array_intersect($constant, $kernelFour)),
+            'exactly the four kernel-named transient errnos are present, sourced from MysqlError::*'
+        );
+        $this->assertEqualsCanonicalizing(
+            [1040, 1317, 2002, 2003],
+            array_values(array_diff($constant, $kernelFour)),
+            'the SPB-local policy extension stays the documented closed set'
+        );
     }
 }

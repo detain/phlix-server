@@ -1459,7 +1459,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   Reads/writes legs untouched: zero own-delta (no $request-> line moved);
     //   this bump is file-count only (2206 → 2207, measured red-first in
     //   TXBRET-srv-censusexec.log, sole failure).
-    private const EXPECTED_PHP_FILES = 2207;
+    // Staircase continued -- SRV-W2-UPSERT C1 (shared UpsertSyntax kernel adoption).
+    // +2 mine: tests/Unit/Common/Database/UpsertSyntaxAdoptionTest.php (both-arms
+    //   byte-differential corpus over the 36 site pairs, hub grammar-table port,
+    //   dialect-oracle replay, sole-impl tripwire) and
+    //   tests/Integration/Common/Database/UpsertSyntaxAdoptionRealDbTest.php
+    //   (real-MySQL legacy-vs-row-alias effect parity, 13 legs). Delegation census
+    //   rotates in the same commit: new family UpsertSyntax 1 (the connect() flavor
+    //   probe; measured red UPSERT-C1-census-red.log → green UPSERT-C1-census-green.log).
+    //   Reads/writes legs untouched: zero own-delta (no $request-> line moved);
+    //   this bump is file-count only (2207 → 2209, measured red-first in
+    //   UPSERT-C1-censusexec-red.log, sole failure).
+    private const EXPECTED_PHP_FILES = 2209;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -11,10 +11,13 @@ declare(strict_types=1);
 
 namespace Phlix\Common\Database;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Shared\Database\MysqlError;
 use Phlix\Shared\Database\MysqlRetryPolicy;
 use Phlix\Shared\Database\MysqlTxLockState;
 use Phlix\Shared\Database\TxEnd;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -206,6 +209,35 @@ class PhlixMySQLConnection extends Connection
         if ($this->pdo instanceof \PDO) {
             $this->pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, true);
             $this->pdo->setAttribute(\Pdo\Mysql::ATTR_USE_BUFFERED_QUERY, true);
+            // W2-UPSERT: detect MySQL vs MariaDB so UpsertSyntax::adapt() picks the
+            // row-alias or VALUES() upsert form. Failure keeps the prior flavor
+            // (default: row alias), which is WRONG on MariaDB — so it is logged.
+            try {
+                $stmt = $this->pdo->query('SELECT VERSION()');
+                /** @var mixed $version */
+                $version = $stmt !== false ? $stmt->fetchColumn() : false;
+                if (is_string($version)) {
+                    UpsertSyntax::detect($version);
+                }
+            } catch (\Throwable $e) {
+                $this->warnFlavorDetectionFailed($e);
+            }
+        }
+    }
+
+    /**
+     * Log (never throw) a failed `SELECT VERSION()` flavor probe: the connection
+     * is still usable, but upserts keep the previously detected flavor.
+     */
+    private function warnFlavorDetectionFailed(\Throwable $e): void
+    {
+        try {
+            LoggerFactory::get(LogChannels::DATABASE)->warning(
+                'Database flavor detection (SELECT VERSION()) failed; keeping the prior upsert syntax flavor',
+                ['error' => $e->getMessage()],
+            );
+        } catch (\Throwable) {
+            // Logging must never turn a usable connection into a failed one.
         }
     }
 

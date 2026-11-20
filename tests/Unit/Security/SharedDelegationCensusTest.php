@@ -84,6 +84,7 @@ final class SharedDelegationCensusTest extends TestCase
     private const F_DB_MYSQL_RETRY_POLICY = 'Phlix\Shared\Database\MysqlRetryPolicy';
     private const F_DB_WRITE_RESULT = 'Phlix\Shared\Database\WriteResult';
     private const F_DB_UUID = 'Phlix\Shared\Database\Uuid';
+    private const F_DB_UPSERT_SYNTAX = 'Phlix\Shared\Database\UpsertSyntax';
     private const F_SETTINGS_CODEC = 'Phlix\Shared\Settings\SettingsCodec';
     private const F_RELAY_LIVENESS_WINDOWS = 'Phlix\Shared\Relay\LivenessWindows';
     private const F_HUB_HOST_GRAMMAR = 'Phlix\Shared\Hub\HostGrammar';
@@ -166,7 +167,15 @@ final class SharedDelegationCensusTest extends TestCase
      *    19 → 17 follows: the two CR_SERVER_* comparisons inside execute() moved into
      *    the classify call, the carrier keeps its driverCode forward. Extinction
      *    sole-impl tripwires: tests/Unit/Common/Database/TxMutexExtinctionSoleImplTest.php.
-     * Total 118 sites / 52 family-carrier rows (43 distinct files).
+     *  - srv-W2-UPSERT C1 (this lane): Shared\Database\UpsertSyntax 1 — connect() grew
+     *    the estate's SELECT VERSION() flavor probe so the shared kernel decides which
+     *    upsert grammar goes on the wire (row alias on modern MySQL, VALUES() on
+     *    MariaDB; warn-not-throw on probe failure, mirroring the hub precedent at
+     *    62efb787). The call-site adoptions land cluster-by-cluster behind this
+     *    registration; both-arm byte-differential corpus and real-DB effect parity are
+     *    pinned by tests/Unit/Common/Database/UpsertSyntaxAdoptionTest.php and
+     *    tests/Integration/Common/Database/UpsertSyntaxAdoptionRealDbTest.php.
+     * Total 119 sites / 53 family-carrier rows (43 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -189,6 +198,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_MYSQL_RETRY_POLICY => 1,
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
+        self::F_DB_UPSERT_SYNTAX => 1,
         self::F_SETTINGS_CODEC => 1,
         self::F_RELAY_LIVENESS_WINDOWS => 1,
         self::F_HUB_HOST_GRAMMAR => 1,
@@ -332,6 +342,9 @@ final class SharedDelegationCensusTest extends TestCase
         ],
         self::F_DB_UUID => [
             'Common/Uuid.php' => ['isV4', 'v4'],
+        ],
+        self::F_DB_UPSERT_SYNTAX => [
+            'Common/Database/PhlixMySQLConnection.php' => ['detect'],
         ],
         self::F_SETTINGS_CODEC => [
             'Admin/SettingsRepository.php' => ['decode'],

@@ -556,7 +556,12 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // rotated the S431 files pin without bumping this counter, so the guard's
     // own same-commit law caught it retroactively.
     // Measured from the phpunit red (84), not predicted.
-    private const EXPECTED_ADOPTERS = 84;
+    // 84→85 by the W2-UPSERT effect-parity venue (SRV-W2-UPSERT C1, 2026-11-20,
+    // this commit): +tests/Integration/Common/Database/UpsertSyntaxAdoptionRealDbTest.php
+    // — the real-MySQL both-arms (legacy vs row-alias) parity leg that gates the
+    // shared UpsertSyntax kernel adoption; it declares `use UsesScratchDatabase;`.
+    // Measured from the phpunit red (85), not predicted.
+    private const EXPECTED_ADOPTERS = 85;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

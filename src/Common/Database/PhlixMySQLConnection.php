@@ -12,6 +12,9 @@ declare(strict_types=1);
 namespace Phlix\Common\Database;
 
 use Phlix\Shared\Database\MysqlError;
+use Phlix\Shared\Database\MysqlRetryPolicy;
+use Phlix\Shared\Database\MysqlTxLockState;
+use Phlix\Shared\Database\TxEnd;
 use Workerman\MySQL\Connection;
 
 /**
@@ -91,7 +94,7 @@ class PhlixMySQLConnection extends Connection
     /**
      * Binary semaphore that wraps each whole transaction, so that no two
      * coroutines can have a transaction OPEN at the same time on the shared
-     * socket, and (with {@see $transLockHolder}) so that only the coroutine
+     * socket, and (with the holder ledger in {@see $txState}) so that only the coroutine
      * that opened one may end it.
      *
      * NOT reentrant. A second `beginTrans()` in the same coroutine throws
@@ -108,7 +111,8 @@ class PhlixMySQLConnection extends Connection
      * and shares its outcome (a permanent test pins this). What this mutex
      * guarantees is mutual exclusion between whole TRANSACTIONS plus
      * single-owner commit/rollback; `query()`'s short-circuit carries the
-     * `$transLockHolder === $cid` term (TXMUTEX-A A4, 2026-11-21), so while a
+     * holder-identity term (TXMUTEX-A A4, 2026-11-21, now the shared
+     * {@see MysqlTxLockState::holdingTransactionFor()} predicate), so while a
      * transaction is open only the holder skips the per-query lock and every
      * other caller serializes behind it. The destructive half — a non-holder's
      * failed statement ending the holder's transaction — is blocked by the
@@ -120,38 +124,24 @@ class PhlixMySQLConnection extends Connection
      */
     private ?\Swoole\Coroutine\Channel $transLock = null;
 
-    /** @var int Coroutine id currently holding {@see $transLock}, or -1 when free. */
-    private int $transLockHolder = -1;
-
     /**
-     * Whether the coroutine holding {@see $transLock} currently has a
-     * transaction open: 0 = none, 1 = open.
+     * The transaction-mutex state machine (shared SSOT, phlix-shared v0.57
+     * charter Option-B). It carries what were this class's private
+     * `$transLockHolder`, `$transNesting` and `$txPoisoned` fields — the
+     * holder identity (FREE_HOLDER = -1 sentinel preserved), the 0/1
+     * nesting flag (kept as a counter so the depth guards stay reachable
+     * if savepoint reentrancy is ever implemented), and the one-shot
+     * poison mark with its refusal wording. The Channel above stays here:
+     * the machine models the LEDGER and takes the park/push callables,
+     * so no Swoole type leaks into shared code and the hand-off order
+     * (clear-holder-before-push, design §1.5) stays one implementation
+     * for both consumer repos.
      *
-     * Despite the name it is a FLAG, not a depth counter — it can never exceed
-     * 1, because transactions do not nest on this stack: a second
-     * `beginTrans()` throws instead of opening an inner scope
-     * (see {@see beginTrans()}). It is kept as an `int` so the
-     * `commitTrans()`/`rollBackTrans()` guards can be written as depth checks
-     * and stay correct if savepoint reentrancy is ever actually implemented.
-     *
-     * @var int
+     * Lazily minted: property defaults cannot carry `new` on the estate's
+     * PHP 8.3 floor, and overriding the parent's 6-argument constructor
+     * would churn the pinned `testConstructorSignature` contract.
      */
-    private int $transNesting = 0;
-
-    /**
-     * Set by {@see execute()} when the connection died while a transaction was
-     * OPEN (TXMUTEX-A A1, port of the hub's arm): the server may have received
-     * and applied part of the work before the socket dropped, and it certainly
-     * discarded whatever it had not yet touched, so the transaction is
-     * unrecoverable — a later {@see commitTrans()} must REFUSE instead of
-     * committing onto a socket that never saw the statements. The flag is
-     * cleared by the refusal itself and by every non-throwing
-     * {@see beginTrans()}/{@see rollBackTrans()} path, so exactly one commit
-     * is denied and the connection's next transaction starts clean.
-     *
-     * @var bool
-     */
-    private bool $txPoisoned = false;
+    private ?MysqlTxLockState $txState = null;
 
     /**
      * Force emulated + fully-buffered prepared statements.
@@ -265,7 +255,7 @@ class PhlixMySQLConnection extends Connection
      * socket, but INSIDE an open transaction it does NOT retry — it drops the
      * socket, rolls back, poisons the connection, and throws with a message
      * that says so; {@see commitTrans()} then refuses exactly once
-     * (see the `$txPoisoned` field docblock). The design rationale is in
+     * (see the `$txState` field docblock — the machine owns the mark). The design rationale is in
      * /tmp/opencode/refactor-exec-1119/DESIGN-TX-MUTEX.md §P2.3-1.1.
      *
      * @param string $query
@@ -278,29 +268,45 @@ class PhlixMySQLConnection extends Connection
             $this->prepareAndBind($query, $parameters);
             $this->success = $this->sQuery instanceof \PDOStatement && $this->sQuery->execute();
         } catch (\PDOException $e) {
-            $errno = MysqlError::driverCode($e->errorInfo) ?? 0;
-            if ($errno === MysqlError::CR_SERVER_GONE_ERROR || $errno === MysqlError::CR_SERVER_LOST) {
-                if ($this->pdo instanceof \PDO && $this->pdo->inTransaction()) {
-                    // TXMUTEX-A A1 (design §P2.3-1.1, port of the hub's arm):
-                    // a gone-away INSIDE an open transaction is NOT retried.
-                    // The first attempt may have been received and applied by
-                    // the server before the socket died, so replaying it risks
-                    // a double-apply, and the transaction it belonged to is
-                    // unrecoverable either way. Drop the dead socket, unwind
-                    // the transaction bookkeeping (which also hands the mutex
-                    // on if we hold it), poison the connection so the next
-                    // commitTrans() REFUSES, and say so in the message —
-                    // wording shared verbatim with the hub.
-                    $this->closeConnection();
-                    $this->rollBackTrans();
-                    $this->txPoisoned = true;
-                    throw new \PDOException(
-                        'SQL:' . $this->lastSQL() . ' ' . $e->getMessage()
-                            . ' (connection lost inside a transaction; not retried)',
-                        (int) $e->getCode()
-                    );
-                }
-                // "MySQL server has gone away" — drop the dead socket and retry once.
+            // TXMUTEX-B retrofit: the driver-code read AND the gone/tx split
+            // now come from the shared tables (MysqlError::driverCode lifted
+            // at S1; the retry classification is MysqlRetryPolicy::classify).
+            // Verdict-to-action mapping stays byte-faithful to the landed
+            // arms: LOST_INSIDE_TRANSACTION -> the A1 refuse+poison arm;
+            // LOST_AUTOCOMMIT -> the vendor's one-shot retry; everything
+            // else -> the blanket arm, which ALWAYS rolls the transaction
+            // back. It deliberately does NOT consult
+            // rollsBackWholeTransaction(): the surgical 1205 semantics that
+            // predicate models are the owner-pending Q-A decision (design
+            // §Q-A), not a behavior this refactor may smuggle in.
+            $verdict = MysqlRetryPolicy::classify(
+                MysqlError::driverCode($e->errorInfo) ?? 0,
+                $this->pdo instanceof \PDO && $this->pdo->inTransaction(),
+            );
+            if ($verdict->marksPoisoned()) {
+                // TXMUTEX-A A1 (design §P2.3-1.1, port of the hub's arm):
+                // a gone-away INSIDE an open transaction is NOT retried.
+                // The first attempt may have been received and applied by
+                // the server before the socket died, so replaying it risks
+                // a double-apply, and the transaction it belonged to is
+                // unrecoverable either way. Drop the dead socket, unwind
+                // the transaction bookkeeping (which also hands the mutex
+                // on if we hold it), poison the connection so the next
+                // commitTrans() REFUSES, and say so in the message —
+                // wording shared verbatim with the hub (the machine
+                // suffix const is that wording, in one place now).
+                $this->closeConnection();
+                $this->rollBackTrans();
+                $this->txState()->markPoisoned();
+                $suffix = $verdict->lostInTransactionSuffix();
+                throw new \PDOException(
+                    'SQL:' . $this->lastSQL() . ' ' . $e->getMessage() . ($suffix ?? ''),
+                    (int) $e->getCode()
+                );
+            }
+            if ($verdict->replaysStatement()) {
+                // "MySQL server has gone away" in autocommit — drop the dead
+                // socket and retry once.
                 $this->closeConnection();
                 try {
                     $this->prepareAndBind($query, $parameters);
@@ -396,19 +402,19 @@ class PhlixMySQLConnection extends Connection
      *
      * While a transaction is open on this connection (a `beginTrans()` without
      * its matching `commitTrans()`/`rollBackTrans()`) this method SKIPS the
-     * per-query lock entirely — `$transNesting > 0` short-circuits straight to
+     * per-query lock entirely — the machine's open-transaction flag short-circuits straight to
      * the parent. What that is worth depends on the mode, and the two modes are
      * OPPOSITE:
      *
      * - DEFAULT pooled mode (`DB_POOL_ENABLED=1`, what production runs): every
      *   coroutine leases a {@see PhlixMySQLConnection} of its own behind
-     *   {@see PooledMySQLConnection}, so `$transNesting` and `$transLock` are
+     *   {@see PooledMySQLConnection}, so the transaction ledger and `$transLock` are
      *   per-lease and nothing is shared. No other coroutine's query CAN
      *   interleave inside our transaction, and skipping the lock is simply free.
      * - Shared socket (`DB_POOL_ENABLED=0`, the opt-out fallback in
      *   `config/database.php`): one instance serves every coroutine, so
-     *   `$transNesting` is a SHARED field. The short-circuit therefore carries
-     *   the `&& $this->transLockHolder === $cid` term (TXMUTEX-A A4, 2026-11-21):
+     *   the machine's ledger is SHARED state. The short-circuit therefore carries
+     *   the holder-identity term as well (`holdingTransactionFor()` — both A4 terms, 2026-11-21):
      *   only the coroutine that OWNS the whole-transaction mutex skips the
      *   per-query lock, and every other caller takes it, so foreign statements
      *   can no longer trample each other's prepare/execute sequence on the
@@ -433,7 +439,7 @@ class PhlixMySQLConnection extends Connection
      * PR #594 exists to delete from this file.)
      *
      * NB a raw `query('START TRANSACTION')` is not an equivalent way to open a
-     * transaction either, for a DIFFERENT reason: it leaves `$transNesting` at
+     * transaction either, for a DIFFERENT reason: it leaves the machine's nesting flag at
      * 0, so the transaction is invisible to this class. Every following
      * statement then takes and RELEASES the per-query lock — serialised, but
      * still landing inside the open transaction — and neither the
@@ -456,8 +462,10 @@ class PhlixMySQLConnection extends Connection
         // transaction holds the whole-transaction mutex — re-taking the per-query
         // lock there would deadlock the holder against itself (its transaction
         // statements never acquired it, so there is nothing to release).
-        // The `$transLockHolder === $cid` term is what makes the short-circuit
-        // honest: `$transNesting` alone is shared state, so on the single shared
+        // The holder-identity term (machine holdingTransactionFor(), carrying
+        // BOTH the nesting flag and the holder comparison — TXMUTEX-A A4's
+        // two terms) is what makes the short-circuit
+        // honest: nesting alone is shared state, so on the single shared
         // socket (`DB_POOL_ENABLED=0`) a bare nesting test fired for EVERY
         // coroutine while ANY of them held the transaction, and unrelated
         // statements then ran on the shared handle with NO lock at all —
@@ -472,7 +480,7 @@ class PhlixMySQLConnection extends Connection
         // in the paragraph above; a permanent test at the tip pins it.) In the
         // DEFAULT pooled mode this instance is one coroutine's exclusive lease,
         // so the caller IS always the holder and the skip is simply free.
-        if ($this->transNesting > 0 && $this->transLockHolder === $cid) {
+        if ($this->txState()->holdingTransactionFor($cid)) {
             return parent::query($query, $params, $fetchmode);
         }
 
@@ -511,7 +519,7 @@ class PhlixMySQLConnection extends Connection
      * coroutine has already emptied and hang the worker forever. The throw is
      * strictly better — it is catchable, it lands BEFORE any statement of the
      * nested unit of work, and it leaves the outer transaction, its mutex and
-     * `$transNesting` exactly as they were (so the outer scope still commits
+     * the nesting ledger exactly as they were (so the outer scope still commits
      * durably and the connection is reusable afterwards — both measured).
      *
      * Outside a coroutine the mutex is not applicable; delegation to the parent
@@ -520,7 +528,7 @@ class PhlixMySQLConnection extends Connection
      *
      * A throw from the parent NEVER strands the mutex: the acquisition below is
      * checked and the parent call is wrapped, so this method either returns
-     * holding the mutex with `$transNesting = 1`, or leaves the mutex exactly
+     * holding the mutex with nesting 1 (markOpen), or leaves the mutex exactly
      * as it found it. See the comments on those two hunks for the measurements.
      *
      * @return bool
@@ -538,18 +546,23 @@ class PhlixMySQLConnection extends Connection
             // TXMUTEX-A A1: opening a transaction clears the poison — the
             // statement that found the socket dead is not part of this scope.
             $opened = parent::beginTrans();
-            $this->txPoisoned = false;
+            $this->txState()->clearPoison();
             return $opened;
         }
 
         // Same coroutine, transaction already open: NOT reentrant. The parent
         // throws "There is already an active transaction" here — deliberately,
         // so a nesting caller fails fast instead of deadlocking on the mutex it
-        // is itself holding. $transNesting therefore never gets past 1.
-        if ($this->transLockHolder === $cid) {
+        // is itself holding. The ledger therefore never gets past nesting 1.
+        // The gate reads the machine's holder (TXMUTEX-B retrofit): the
+        // vendor call is kept verbatim so the refusal stays the vendor's own
+        // PDOException (message, code and errorInfo) — the machine's
+        // nested-begin pre-throw carries the same wording but is message-only,
+        // and this class's permanent tests catch the vendor instance.
+        if ($this->txState()->holder() === $cid) {
             $result = parent::beginTrans();
             if ($result) {
-                $this->transNesting++;
+                $this->txState()->markOpen();
             }
             return $result;
         }
@@ -566,7 +579,7 @@ class PhlixMySQLConnection extends Connection
         // at all needs the CONTENDED shared socket, i.e. `DB_POOL_ENABLED=0`; in
         // the default pooled mode each coroutine leases its own connection, so
         // `$transLock` is never contended. Walking on would install a NON-owner in
-        // `$transLockHolder` and steal ownership from the live holder, whose
+        // the holder ledger and steal ownership from the live holder, whose
         // `commitTrans()` would then take the guard below and return true
         // WITHOUT committing — a silent lost commit, with the transaction left
         // open and the token never returned. Measured on this class before the
@@ -577,12 +590,13 @@ class PhlixMySQLConnection extends Connection
         // (measured) — or worse, if the holder's own BEGIN had not landed yet,
         // to open a SECOND transaction on the shared socket. Either way this
         // replaces a late, destructive failure with an early, inert one.
-        if ($this->transLock()->pop() === false) {
-            throw new \PDOException(
-                'Could not acquire the transaction mutex: the coroutine was cancelled while waiting'
-            );
-        }
-        $this->transLockHolder = $cid;
+        // TXMUTEX-B retrofit: the checked pop, the refusal wording (machine
+        // CANCELLED_ACQUIRE_MESSAGE, byte-identical to the inline literal this
+        // replaces) and the bookkeeping-before-park law are the shared
+        // MysqlTxLockState::acquire(); the Channel itself stays consumer
+        // plumbing handed in as the park closure.
+        $lock = $this->transLock();
+        $this->txState()->acquire($cid, static fn(): bool => $lock->pop() !== false);
 
         // A parent that THROWS must still hand the mutex back. This is the same
         // rule {@see commitTrans()} states for a COMMIT that throws, and it is
@@ -598,27 +612,29 @@ class PhlixMySQLConnection extends Connection
         // (measured: the next coroutine stayed parked indefinitely). Releasing
         // is safe on both throw shapes: after a failed reconnect no transaction
         // exists, and on "There is already an active transaction" the open
-        // transaction is not ours ($transNesting is still 0). The holder check
+        // transaction is not ours (nesting is still 0). The holder check
         // keeps the release single and self-owned — the acquisition above
         // guarantees it is us, and parent::beginTrans() can yield.
+        // The throw arm passes clearPoison: false: a BEGIN that never opened
+        // must not spend the one-shot refusal budget (landed shape in both
+        // consumer repos — see the machine's abandonIfHeld provenance note).
         try {
             $result = parent::beginTrans();
         } catch (\Throwable $e) {
-            if ($this->transLockHolder === $cid) {
-                $this->releaseTransLock();
-            }
+            $this->txState()->abandonIfHeld($cid, $this->pushTransToken(...), clearPoison: false);
             throw $e;
         }
 
         if ($result) {
-            $this->transNesting = 1;
+            $this->txState()->markOpen();
         } else {
-            $this->releaseTransLock();
+            $this->txState()->abandonIfHeld($cid, $this->pushTransToken(...));
         }
         // TXMUTEX-A A1: the non-throwing exit of the holder path — poison is
         // history once this coroutine stands up its own transaction (mirrors
-        // the hub's `txPoisoned = false` after parent begin).
-        $this->txPoisoned = false;
+        // the hub's clear after parent begin; the falsy fold above already
+        // cleared it via abandonIfHeld, this line is that fall-through shape).
+        $this->txState()->clearPoison();
 
         return $result;
     }
@@ -660,23 +676,37 @@ class PhlixMySQLConnection extends Connection
     }
 
     /**
-     * Hand the whole-transaction mutex on: give up ownership, then release the
-     * token. MUST be the last thing a releasing coroutine does to this object's
-     * shared state.
-     *
-     * `push()` resumes a coroutine parked in {@see beginTrans()}'s `pop()`
-     * SYNCHRONOUSLY, inside the push — so the next owner has already written
-     * itself into `$transLockHolder` by the time `push()` returns. Any write
-     * after that point lands on somebody else's transaction.
+     * The shared transaction-mutex state machine (TXMUTEX-B retrofit). One
+     * ledger object per connection, lazily minted outside any coroutine —
+     * the machine performs no I/O and holds no Swoole type, so unlike the
+     * Channel above it needs no coroutine runtime to come into existence.
+     */
+    private function txState(): MysqlTxLockState
+    {
+        if ($this->txState === null) {
+            $this->txState = new MysqlTxLockState();
+        }
+
+        return $this->txState;
+    }
+
+    /**
+     * Hand the whole-transaction mutex token on. MUST be the last thing a
+     * releasing coroutine does to the shared ledger — and it is: the machine
+     * performs its own holder-free and poison-clear BEFORE invoking this
+     * push, and Swoole resumes a coroutine parked in {@see beginTrans()}'s
+     * `pop()` SYNCHRONOUSLY inside `push()`, so the next owner has already
+     * written itself into the ledger by the time the push returns. (This is
+     * the token half of the retired releaseTransLock(); the holder write
+     * moved into MysqlTxLockState — TXMUTEX-B retrofit.)
      *
      * Callers only reach this once {@see commitTrans()}/{@see rollBackTrans()}
-     * have established that this coroutine is the recorded holder, so the token
-     * is pushed exactly once per acquisition and the channel's capacity of 1 is
-     * never exceeded.
+     * have established that this coroutine is the recorded holder, so the
+     * token is pushed exactly once per acquisition and the channel's
+     * capacity of 1 is never exceeded.
      */
-    private function releaseTransLock(): void
+    private function pushTransToken(): void
     {
-        $this->transLockHolder = -1;
         $this->transLock()->push(true);
     }
 
@@ -684,12 +714,12 @@ class PhlixMySQLConnection extends Connection
      * Commit the current transaction and release the whole-transaction mutex.
      *
      * There is only ever ONE scope to exit: transactions do not nest here (see
-     * {@see beginTrans()}), so `$transNesting` is 0 or 1 and the `> 1` branch
+     * {@see beginTrans()}), so the machine's nesting flag is 0 or 1 and the `> 1` branch
      * below is UNREACHABLE today. It is kept as a guard rather than deleted so
      * that an inner commit could never release another scope's mutex if
      * savepoint reentrancy were ever implemented in `beginTrans()`.
      *
-     * Only the coroutine recorded in `$transLockHolder` may commit — see
+     * Only the coroutine the machine records as holder may commit — see
      * {@see rollBackTrans()}, which carries the reasoning for both.
      *
      * NOT a reversal of PR #594, which is easy to misread it as. The guard #594
@@ -699,7 +729,7 @@ class PhlixMySQLConnection extends Connection
      * where a silent "rollback succeeded" is the truth. That decision still
      * stands and is still visible below: `parent::commitTrans()` is called
      * UNCONDITIONALLY, so a commit with no handle still fails loudly. The
-     * `$transLockHolder !== $cid` guard in the body is orthogonal to all of
+     * holder-identity (claimCommit INERT) guard in the body is orthogonal to all of
      * that — it is about WHICH coroutine's transaction this is, not about
      * whether the socket is alive.
      *
@@ -719,50 +749,59 @@ class PhlixMySQLConnection extends Connection
     {
         $cid = $this->currentCoroutineId();
 
-        // Not the holder: this coroutine has no transaction of its own here.
-        // (TXMUTEX-A A1: this guard now sits ABOVE the CLI pass-through and is
-        // written `$cid >= 0 && ...` so a non-holder coroutine returns without
-        // touching — or clearing — the holder's poison; behaviour for the
-        // non-poisoned paths is byte-identical to before the move.)
-        if ($cid >= 0 && $this->transLockHolder !== $cid) {
+        // TXMUTEX-B retrofit: the whole ladder — stranger-inert ABOVE the
+        // poison check (the A1 order: a non-holder returns without
+        // touching — or clearing — the holder's poison), the one-shot
+        // refusal consuming the mark, the CLI pass-through, the depth
+        // guard, and the outermost zeroing that happens BEFORE the vendor
+        // call — is the shared machine's claimCommit(). The landed arm
+        // prose, carried here so the law stays readable at the seam:
+        // a connection execute() poisoned by losing the socket
+        // mid-transaction must not COMMIT onto the replacement socket —
+        // the server never saw most of the work. Refuse once (the
+        // machine's POISONED_COMMIT_MESSAGE, the hub wording verbatim)
+        // and clear, so the next transaction is evaluated on its own
+        // merits. The refusal does NOT release the mutex: holder and
+        // nesting stand for the caller's catch-rollback (the server law;
+        // the hub's refusal finally DOES release it — the real repo
+        // divergence, kept per-repo at register row F-1, never
+        // harmonized).
+        $claim = $this->txState()->claimCommit($cid);
+
+        if ($claim === TxEnd::INERT) {
             return true;
         }
 
-        // TXMUTEX-A A1 (design §P2.3-1.1): a connection execute() poisoned by
-        // losing the socket mid-transaction must not COMMIT onto the
-        // replacement socket — the server never saw most of the work. Refuse
-        // once (hub wording, verbatim) and clear, so the next transaction on
-        // this object is evaluated on its own merits. Mode-independent: it
-        // covers CLI and holder paths alike.
-        if ($this->txPoisoned) {
-            $this->txPoisoned = false;
-            throw new \PDOException('Transaction was lost when the connection dropped; refusing to commit.');
+        if ($claim === TxEnd::POISON_REFUSED) {
+            throw new \PDOException(MysqlTxLockState::POISONED_COMMIT_MESSAGE);
         }
 
-        if ($cid < 0) {
+        if ($claim === TxEnd::PASS_THROUGH) {
             return parent::commitTrans();
         }
 
-        // Unreachable while beginTrans() refuses to nest (see its docblock):
-        // an inner commit must never release the outer scope's mutex.
-        if ($this->transNesting > 1) {
+        if ($claim === TxEnd::NESTED) {
+            // Unreachable while beginTrans() refuses to nest (see its
+            // docblock): an inner commit must never release the outer
+            // scope's mutex.
             $result = parent::commitTrans();
             if ($result) {
-                $this->transNesting--;
+                $this->txState()->decrement();
             }
             return $result;
         }
 
-        // Outermost: end the transaction, then hand the mutex on. The release
-        // is in a `finally` because a COMMIT that throws (a lost connection,
-        // say) must still free the mutex — otherwise every later transaction on
-        // this connection blocks forever.
-        $this->transNesting = 0;
+        // Outermost (CLOSE): claimCommit already moved the nesting flag to
+        // 0 — the landed position of that write, ahead of the vendor call.
+        // The hand-off is in a `finally` because a COMMIT that throws (a
+        // lost connection, say) must still free the mutex — otherwise every
+        // later transaction on this connection blocks forever. handOff()
+        // clears the poison, frees the holder, and pushes LAST (§1.5) —
+        // exactly the landed finally order.
         try {
             $result = parent::commitTrans();
         } finally {
-            $this->txPoisoned = false;
-            $this->releaseTransLock();
+            $this->txState()->handOff($this->pushTransToken(...));
         }
 
         return $result;
@@ -780,7 +819,7 @@ class PhlixMySQLConnection extends Connection
      * (see {@see rollBackParent()}).
      *
      * ONLY THE RECORDED HOLDER MAY END THE TRANSACTION. That is what the
-     * `$transLockHolder !== $cid` guard below is for, and on the shared-socket
+     * claimRollback INERT guard below is for, and on the shared-socket
      * fallback (`DB_POOL_ENABLED=0`) it is load-bearing rather than defensive:
      * the defensive `rollBackTrans()` a caller runs in its `catch` reaches this
      * method AFTER {@see execute()} has already rolled back on the caller's
@@ -815,34 +854,46 @@ class PhlixMySQLConnection extends Connection
             $result = $this->rollBackParent();
             // TXMUTEX-A A1: rollback is an explicit fresh start — the poison
             // (if any) is consumed without a refusal, mirroring beginTrans.
-            $this->txPoisoned = false;
+            // The clear runs AFTER the vendor rollback, exactly landed: the
+            // machine's claimRollback CLI arm clears before the vendor call,
+            // so this arm bypasses the claim to keep the landed order
+            // (register row D-3) — no observable difference in reachable
+            // states, but zero-behavior law keeps the site, not the prose.
+            $this->txState()->clearPoison();
             return $result;
         }
 
-        // Not the holder: a STALE releaser. Return without touching anything —
-        // see the docblock for why both halves of that matter.
-        if ($this->transLockHolder !== $cid) {
+        // TXMUTEX-B retrofit: stranger-INERT (the stale releaser: a
+        // rollBackTrans() that reaches here AFTER execute() already rolled
+        // back and handed the mutex on must issue no statement and write
+        // nothing — see the docblock for why both halves of that matter),
+        // the depth guard, and the outermost zeroing are the shared
+        // claimRollback(); the finally hand-off is the machine's handOff(),
+        // which clears poison, frees the holder and pushes LAST (§1.5) in
+        // the landed order.
+        $claim = $this->txState()->claimRollback($cid);
+
+        if ($claim === TxEnd::INERT) {
             return true;
         }
 
-        // Unreachable while beginTrans() refuses to nest (see its docblock):
-        // an inner rollback must never release the outer scope's mutex.
-        if ($this->transNesting > 1) {
+        if ($claim === TxEnd::NESTED) {
+            // Unreachable while beginTrans() refuses to nest (see its docblock):
+            // an inner rollback must never release the outer scope's mutex.
             $result = $this->rollBackParent();
             if ($result) {
-                $this->transNesting--;
+                $this->txState()->decrement();
             }
             return $result;
         }
 
-        // Outermost: end the transaction, then hand the mutex on. The release
-        // is in a `finally` so a throwing ROLLBACK cannot strand the mutex.
-        $this->transNesting = 0;
+        // Outermost (CLOSE): end the transaction, then hand the mutex on. The
+        // release is in a `finally` so a throwing ROLLBACK cannot strand the
+        // mutex.
         try {
             $result = $this->rollBackParent();
         } finally {
-            $this->txPoisoned = false;
-            $this->releaseTransLock();
+            $this->txState()->handOff($this->pushTransToken(...));
         }
 
         return $result;
@@ -919,7 +970,7 @@ class PhlixMySQLConnection extends Connection
         // symmetric with `beginTrans()`'s: throwing out of `query()` changes the
         // failure surface of every DB read on this connection, and the
         // release-side half lives inside `query()`'s own `finally`. The half
-        // that used to defer on it — the missing `$transLockHolder === $cid`
+        // that used to defer on it — the missing holder-identity
         // term in `query()`'s short-circuit, without which a non-holder
         // querying DURING somebody's transaction never reached this method at
         // all — shipped at TXMUTEX-A A4 (2026-11-21), so the pair is no longer

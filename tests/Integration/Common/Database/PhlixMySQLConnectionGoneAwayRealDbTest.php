@@ -122,8 +122,10 @@ final class PhlixMySQLConnectionGoneAwayRealDbTest extends TestCase
 
     private function poisoned(): bool
     {
-        $prop = new ReflectionProperty(PhlixMySQLConnection::class, 'txPoisoned');
+        // TXMUTEX-B retrofit: the mark lives in the shared machine's ledger
+        // now (the retired `txPoisoned` bool is gone from the class).
+        $state = (new ReflectionProperty(PhlixMySQLConnection::class, 'txState'))->getValue($this->db);
 
-        return (bool)$prop->getValue($this->db);
+        return $state instanceof \Phlix\Shared\Database\MysqlTxLockState && $state->isPoisoned();
     }
 }

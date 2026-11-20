@@ -35,6 +35,13 @@ final class PhlixMySQLConnectionTest extends TestCase
      * This uses reflection to check property DECLARATIONS only (names and types),
      * not values — so it never instantiates the class and thus never opens a
      * connection socket.
+     *
+     * TXMUTEX-B retrofit: the holder/nesting/poison fields moved into the
+     * shared machine's ledger object; the pin rotates from three int/bool
+     * declarations to the nullable MysqlTxLockState property (and the
+     * sibling tripwires in TxMutexExtinctionSoleImplTest assert the retired
+     * names are GONE — this test keeps the "the class declares its lock
+     * state" intent with the new shape).
      */
     public function testTransactionLockPropertiesAreDeclared(): void
     {
@@ -43,8 +50,7 @@ final class PhlixMySQLConnectionTest extends TestCase
             'queryLock' => \Swoole\Coroutine\Channel::class,
             'queryLockHolder' => 'int',
             'transLock' => \Swoole\Coroutine\Channel::class,
-            'transLockHolder' => 'int',
-            'transNesting' => 'int',
+            'txState' => \Phlix\Shared\Database\MysqlTxLockState::class,
         ];
 
         $class = PhlixMySQLConnection::class;
@@ -161,7 +167,7 @@ final class PhlixMySQLConnectionTest extends TestCase
 
     /**
      * Same contract inside a coroutine, where the class takes its own
-     * `transLockHolder === $cid` branch instead of delegating straight to the
+     * machine ledger's `holder() === $cid` branch instead of delegating straight to the
      * parent — and where getting it wrong is worse than a throw.
      *
      * That branch exists to FAIL FAST: a nested call that fell through to the
@@ -1594,7 +1600,7 @@ final class PhlixMySQLConnectionTest extends TestCase
             'the arm must say so in the message it throws (A1)'
         );
         self::assertTrue(
-            (new ReflectionProperty(PhlixMySQLConnection::class, 'txPoisoned'))->getValue($conn),
+            self::txPoisoned($conn),
             'the arm must mark the connection poisoned (A1)'
         );
 
@@ -1611,7 +1617,7 @@ final class PhlixMySQLConnectionTest extends TestCase
             'the refusal wording is shared verbatim with the hub (A1)'
         );
         self::assertFalse(
-            (new ReflectionProperty(PhlixMySQLConnection::class, 'txPoisoned'))->getValue($conn),
+            self::txPoisoned($conn),
             'the refusal consumes the poison — the connection is usable again (A1)'
         );
 
@@ -1628,7 +1634,7 @@ final class PhlixMySQLConnectionTest extends TestCase
         $handle->rollBack();
         self::assertTrue($conn->beginTrans());
         self::assertFalse(
-            (new ReflectionProperty(PhlixMySQLConnection::class, 'txPoisoned'))->getValue($conn),
+            self::txPoisoned($conn),
             'a new transaction clears the poison (A1)'
         );
         self::assertTrue($conn->commitTrans());
@@ -1648,7 +1654,7 @@ final class PhlixMySQLConnectionTest extends TestCase
 
         self::assertSame(2, $handle->prepareAttempts, 'autocommit gone-away keeps the one-shot retry');
         self::assertFalse(
-            (new ReflectionProperty(PhlixMySQLConnection::class, 'txPoisoned'))->getValue($conn),
+            self::txPoisoned($conn),
             'the retry path must not poison anything (A1 must not eat it)'
         );
     }
@@ -2005,10 +2011,21 @@ final class PhlixMySQLConnectionTest extends TestCase
     /** Coroutine id the connection currently records as the transaction holder. */
     private static function transLockHolder(PhlixMySQLConnection $conn): int
     {
-        $prop = new ReflectionProperty(PhlixMySQLConnection::class, 'transLockHolder');
-        $holder = $prop->getValue($conn);
+        // TXMUTEX-B retrofit: the holder lives in the shared machine's
+        // ledger; same -2 sentinel for "no ledger minted yet".
+        $state = (new ReflectionProperty(PhlixMySQLConnection::class, 'txState'))->getValue($conn);
 
-        return is_int($holder) ? $holder : -2;
+        return $state instanceof \Phlix\Shared\Database\MysqlTxLockState ? $state->holder() : -2;
+    }
+
+    /** Whether the connection's ledger currently carries the one-shot poison mark. */
+    private static function txPoisoned(PhlixMySQLConnection $conn): bool
+    {
+        // TXMUTEX-B retrofit: replaced four direct ReflectionProperty reads
+        // of the retired `txPoisoned` bool (the machine owns the mark now).
+        $state = (new ReflectionProperty(PhlixMySQLConnection::class, 'txState'))->getValue($conn);
+
+        return $state instanceof \Phlix\Shared\Database\MysqlTxLockState && $state->isPoisoned();
     }
 
     /** Tokens currently sitting in the mutex channel (1 = free), or -1 when null. */

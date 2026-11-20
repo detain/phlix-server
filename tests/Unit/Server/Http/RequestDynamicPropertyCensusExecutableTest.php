@@ -1448,7 +1448,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     //   SRVWAVE2-w3a-green.log). Reads/writes legs untouched: zero own-delta;
     //   this bump is file-count only (2207 → 2206, measured red-first in
     //   SRVWAVE2-w3a-census-redfirst.log).
-    private const EXPECTED_PHP_FILES = 2206;
+    // Staircase continued -- TXMUTEX-B-RETROFIT (tx-mutex mechanics onto the shared
+    // machine). +1 mine: tests/Unit/Common/Database/TxMutexExtinctionSoleImplTest.php
+    //   (D-02 sole-impl tripwires: retired-member extinction over comment-stripped
+    //   code, machine-wording throw-scan across the whole src/ corpus, positive
+    //   wiring pins; teeth proven M1-M4 + the M2 comment-laundering catch, logs
+    //   TXBRET-srv-mutations{,-r2}.log). Delegation census rotates in the same
+    //   commit: MysqlError 19→17 + new families MysqlTxLockState 1 / TxEnd 6 /
+    //   MysqlRetryPolicy 1 (measured red TXBRET-srv-deleg-r1.log → green r2).
+    //   Reads/writes legs untouched: zero own-delta (no $request-> line moved);
+    //   this bump is file-count only (2206 → 2207, measured red-first in
+    //   TXBRET-srv-censusexec.log, sole failure).
+    private const EXPECTED_PHP_FILES = 2207;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

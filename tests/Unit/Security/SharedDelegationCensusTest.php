@@ -79,6 +79,9 @@ final class SharedDelegationCensusTest extends TestCase
     private const F_SYNCPLAY_DIALECT = 'Phlix\Shared\Relay\SyncPlayDialect';
     private const F_SUPPORT_JSON = 'Phlix\Shared\Support\Json';
     private const F_DB_MYSQL_ERROR = 'Phlix\Shared\Database\MysqlError';
+    private const F_DB_MYSQL_TX_LOCK_STATE = 'Phlix\Shared\Database\MysqlTxLockState';
+    private const F_DB_TX_END = 'Phlix\Shared\Database\TxEnd';
+    private const F_DB_MYSQL_RETRY_POLICY = 'Phlix\Shared\Database\MysqlRetryPolicy';
     private const F_DB_WRITE_RESULT = 'Phlix\Shared\Database\WriteResult';
     private const F_DB_UUID = 'Phlix\Shared\Database\Uuid';
     private const F_SETTINGS_CODEC = 'Phlix\Shared\Settings\SettingsCodec';
@@ -151,7 +154,19 @@ final class SharedDelegationCensusTest extends TestCase
      *    enforce at intake, after a both-direction 55,938-vector differential measured
      *    0 verdict deltas; the retired local LABEL/isHost twin is pinned extinct by a
      *    voice-print tripwire (the sanitizer file joins the carrier set: 43 distinct).
-     * Total 112 sites / 49 family-carrier rows (43 distinct files).
+     *  - srv-TXMUTEX-B (this lane): Shared\Database\MysqlTxLockState 1,
+     *    Shared\Database\TxEnd 6, Shared\Database\MysqlRetryPolicy 1 — the connection's
+     *    tx-mutex mechanics retired onto the shared machine: the holder/nesting/poison
+     *    ledger became MysqlTxLockState (claimCommit/claimRollback/acquire/markOpen/
+     *    abandonIfHeld/handOff wiring; the refusal wording forwards the machine const),
+     *    the end-claim outcomes forward the TxEnd enum, and execute()'s gone/txOpen
+     *    decision table forwards MysqlRetryPolicy::classify (verdict verbs drive the
+     *    arms; the blanket else-arm deliberately does NOT consult
+     *    rollsBackWholeTransaction — owner-pending Q-A stays unapplied). MysqlError
+     *    19 → 17 follows: the two CR_SERVER_* comparisons inside execute() moved into
+     *    the classify call, the carrier keeps its driverCode forward. Extinction
+     *    sole-impl tripwires: tests/Unit/Common/Database/TxMutexExtinctionSoleImplTest.php.
+     * Total 118 sites / 52 family-carrier rows (43 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -168,7 +183,10 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_FRAME_CODEC => 3,
         self::F_SYNCPLAY_DIALECT => 19,
         self::F_SUPPORT_JSON => 8,
-        self::F_DB_MYSQL_ERROR => 19,
+        self::F_DB_MYSQL_ERROR => 17,
+        self::F_DB_MYSQL_TX_LOCK_STATE => 1,
+        self::F_DB_TX_END => 6,
+        self::F_DB_MYSQL_RETRY_POLICY => 1,
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
         self::F_SETTINGS_CODEC => 1,
@@ -271,7 +289,7 @@ final class SharedDelegationCensusTest extends TestCase
                 'isDuplicateKey',
             ],
             'Common/Database/MigrationRunner.php' => ['driverCode'],
-            'Common/Database/PhlixMySQLConnection.php' => ['CR_SERVER_GONE_ERROR', 'CR_SERVER_LOST', 'driverCode'],
+            'Common/Database/PhlixMySQLConnection.php' => ['driverCode'],
             'Common/Database/RetentionPrune.php' => ['driverCode', 'driverCode', 'isDeadlock'],
             'Media/Library/ItemRepository.php' => [
                 'DUPLICATE_ENTRY_PHRASE',
@@ -280,6 +298,22 @@ final class SharedDelegationCensusTest extends TestCase
                 'isDuplicateKey',
             ],
             'Media/Library/ScanJobRepository.php' => ['ER_LOCK_WAIT_TIMEOUT', 'driverCode', 'driverCode', 'isDeadlock'],
+        ],
+        self::F_DB_MYSQL_TX_LOCK_STATE => [
+            'Common/Database/PhlixMySQLConnection.php' => ['POISONED_COMMIT_MESSAGE'],
+        ],
+        self::F_DB_TX_END => [
+            'Common/Database/PhlixMySQLConnection.php' => [
+                'INERT',
+                'INERT',
+                'NESTED',
+                'NESTED',
+                'PASS_THROUGH',
+                'POISON_REFUSED',
+            ],
+        ],
+        self::F_DB_MYSQL_RETRY_POLICY => [
+            'Common/Database/PhlixMySQLConnection.php' => ['classify'],
         ],
         self::F_DB_WRITE_RESULT => [
             'Admin/NewsletterSender.php' => ['wroteNothing'],

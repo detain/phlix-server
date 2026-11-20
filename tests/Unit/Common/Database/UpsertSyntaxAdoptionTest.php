@@ -984,4 +984,323 @@ final class UpsertSyntaxAdoptionTest extends TestCase
 
         return (string) preg_replace('/\bnew_row\.(\w+)/', 'VALUES($1)', $stripped);
     }
+
+    /**
+     * Construction fidelity: the exact slice bytes the corpus generator
+     * emitted from the PRE-wave source (legacy chain + mechanical row-alias
+     * insertion) must sit verbatim in the live source. The corpus provider
+     * proves what adapt() does to these strings; this table proves the
+     * converted source actually carries the strings it was built against —
+     * a hand-edited fragment anywhere in the adopted set reddens here.
+     * The three UserRepository rows are the dynamic builder's marker
+     * fragments (no static slice existed to splice).
+     *
+     * @var array<string, array{0: string, 1: string}>
+     */
+    private const FIDELITY_SLICES = [
+        'src/Access/ProfileTagService.php:164#1' => ['src/Access/ProfileTagService.php', '\'INSERT INTO profile_tags (profile_id, tag, tag_type) VALUES (?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE tag = new_row.tag, tag_type = new_row.tag_type\''],
+        'src/Access/StreamSessionService.php:646#1' => ['src/Access/StreamSessionService.php', '\'INSERT INTO profile_stream_limits (profile_id, max_concurrent_streams, max_total_bandwidth_kbps)\'
+            . \' VALUES (?, ?, ?)\'
+            . \'  AS new_row ON DUPLICATE KEY UPDATE max_concurrent_streams = new_row.max_concurrent_streams,\'
+            . \' max_total_bandwidth_kbps = new_row.max_total_bandwidth_kbps\''],
+        'src/Admin/SettingsRepository.php:205#1' => ['src/Admin/SettingsRepository.php', '\'INSERT INTO server_settings (id, setting_key, setting_value, value_type)\'
+            . \' VALUES (?, ?, ?, ?)\'
+            . \'  AS new_row ON DUPLICATE KEY UPDATE\'
+            . \' setting_value = new_row.setting_value,\'
+            . \' value_type = new_row.value_type\''],
+        'src/Collections/CollectionItemRepository.php:278#1' => ['src/Collections/CollectionItemRepository.php', '"INSERT INTO collection_items (collection_id, media_item_id, sort_order, added_at)
+             VALUES " . implode(\', \', $placeholders) . "
+              AS new_row
+             ON DUPLICATE KEY UPDATE media_item_id = new_row.media_item_id"'],
+        'src/Collections/CollectionItemRepository.php:81#1' => ['src/Collections/CollectionItemRepository.php', '"INSERT INTO collection_items (collection_id, media_item_id, sort_order, added_at)
+             VALUES (?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE media_item_id = new_row.media_item_id"'],
+        'src/Common/Database/MigrationRunner.php:630#1' => ['src/Common/Database/MigrationRunner.php', '\'INSERT INTO \' . self::LEDGER_TABLE . \' (name, applied_at, checksum) \'
+                . \'VALUES (?, ?, ?) AS new_row \'
+                . \'ON DUPLICATE KEY UPDATE applied_at = new_row.applied_at, checksum = new_row.checksum\''],
+        'src/LiveTv/ChannelManager.php:571#1' => ['src/LiveTv/ChannelManager.php', '"INSERT INTO livetv_lineup_channels (lineup_id, channel_id, position)
+             VALUES (?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE position = new_row.position"'],
+        'src/LiveTv/GuideManager.php:462#1' => ['src/LiveTv/GuideManager.php', '"INSERT INTO livetv_programs
+             (program_id, channel_id, title, description, start_time, end_time,
+              category, series_id, episode_number, episode_title, rating_system,
+              rating, year, series_episode, is_repeat, is_film, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+              AS new_row
+             ON DUPLICATE KEY UPDATE
+                title = new_row.title,
+                description = new_row.description,
+                start_time = new_row.start_time,
+                end_time = new_row.end_time,
+                category = new_row.category,
+                series_id = new_row.series_id,
+                episode_number = new_row.episode_number,
+                episode_title = new_row.episode_title,
+                rating_system = new_row.rating_system,
+                rating = new_row.rating,
+                year = new_row.year,
+                series_episode = new_row.series_episode,
+                is_repeat = new_row.is_repeat,
+                is_film = new_row.is_film,
+                updated_at = NOW()"'],
+        'src/LiveTv/LiveTvManager.php:338#1' => ['src/LiveTv/LiveTvManager.php', '"INSERT INTO livetv_tuners (tuner_id, name, type, status, capabilities, discovered_at)
+             VALUES (?, ?, ?, ?, ?, NOW())
+              AS new_row
+             ON DUPLICATE KEY UPDATE name = new_row.name, type = new_row.type, status = new_row.status"'],
+        'src/LiveTv/TimeShift/DbTimeShiftSessionStore.php:70#1' => ['src/LiveTv/TimeShift/DbTimeShiftSessionStore.php', '"INSERT INTO livetv_timeshift_sessions
+                (id, session_id, channel_id, buffer_dir, pid,
+                 buffer_start_at, buffer_end_at, window_seconds,
+                 cursor_position, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE
+                channel_id = new_row.channel_id,
+                buffer_dir = new_row.buffer_dir,
+                pid = new_row.pid,
+                buffer_start_at = new_row.buffer_start_at,
+                buffer_end_at = new_row.buffer_end_at,
+                window_seconds = new_row.window_seconds,
+                cursor_position = new_row.cursor_position,
+                status = new_row.status,
+                updated_at = CURRENT_TIMESTAMP"'],
+        'src/Media/CollectionService.php:149#1' => ['src/Media/CollectionService.php', '\'INSERT INTO media_collections (tmdb_collection_id, name, overview, poster_url, backdrop_url)
+             VALUES (?, ?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE
+                 name = new_row.name,
+                 overview = new_row.overview,
+                 poster_url = new_row.poster_url,
+                 backdrop_url = new_row.backdrop_url\''],
+        'src/Media/CollectionService.php:274#1' => ['src/Media/CollectionService.php', '\'INSERT INTO media_collection_members (collection_id, media_item_id, tmdb_part_order)
+             VALUES (?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE tmdb_part_order = new_row.tmdb_part_order\''],
+        'src/Media/Extras/ExtrasRepository.php:163#1' => ['src/Media/Extras/ExtrasRepository.php', '"INSERT INTO media_extras (id, media_item_id, title, extra_type, source,
+              url, file_path, duration, quality, cached_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE
+                title = new_row.title,
+                source = new_row.source,
+                url = new_row.url,
+                file_path = new_row.file_path,
+                duration = new_row.duration,
+                quality = new_row.quality,
+                cached_at = new_row.cached_at"'],
+        'src/Media/Library/AudiobookProgressStore.php:118#1' => ['src/Media/Library/AudiobookProgressStore.php', '"INSERT INTO audiobook_progress
+                (user_id, audiobook_id, position_ms, current_chapter_index,
+                 completed_chapters, percent_complete, last_played_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE
+                position_ms = new_row.position_ms,
+                current_chapter_index = new_row.current_chapter_index,
+                completed_chapters = new_row.completed_chapters,
+                percent_complete = new_row.percent_complete,
+                last_played_at = new_row.last_played_at"'],
+        'src/Media/Library/BookProgressStore.php:100#1' => ['src/Media/Library/BookProgressStore.php', '"INSERT INTO book_progress
+                (user_id, book_id, position_ms, current_page, total_pages,
+                 percent_complete, last_read_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE
+                position_ms = new_row.position_ms,
+                current_page = new_row.current_page,
+                total_pages = new_row.total_pages,
+                percent_complete = new_row.percent_complete,
+                last_read_at = new_row.last_read_at"'],
+        'src/Media/MarkerService.php:66#1' => ['src/Media/MarkerService.php', '\'INSERT INTO media_markers
+             (media_item_id, marker_type, start_time_ms, end_time_ms, label, user_id, thumbnail_path)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE
+               marker_type = new_row.marker_type,
+               start_time_ms = new_row.start_time_ms,
+               end_time_ms = new_row.end_time_ms,
+               label = new_row.label,
+               user_id = new_row.user_id,
+               thumbnail_path = new_row.thumbnail_path\''],
+        'src/Media/Metadata/FuzzyMatcher.php:184#1' => ['src/Media/Metadata/FuzzyMatcher.php', '"INSERT INTO manual_match_overrides
+             (provider, provider_id, media_item_id, confidence, matched_by, created_at)
+             VALUES (?, ?, ?, ?, ?, NOW())
+              AS new_row
+             ON DUPLICATE KEY UPDATE
+                 media_item_id = new_row.media_item_id,
+                 confidence = new_row.confidence,
+                 matched_by = new_row.matched_by,
+                 created_at = NOW()"'],
+        'src/Media/Metadata/Imdb/ImdbDatasetImporter.php:566#1' => ['src/Media/Metadata/Imdb/ImdbDatasetImporter.php', '\'INSERT INTO imdb_title_akas \'
+            . \'(tconst, ordering, title, normalized_title, region, language, is_original_title) VALUES \'
+            . $placeholders
+            . \'  AS new_row ON DUPLICATE KEY UPDATE \'
+            . \'title = new_row.title, \'
+            . \'normalized_title = new_row.normalized_title, \'
+            . \'region = new_row.region, \'
+            . \'language = new_row.language, \'
+            . \'is_original_title = new_row.is_original_title\''],
+        'src/Media/Metadata/Imdb/ImdbDatasetImporter.php:605#1' => ['src/Media/Metadata/Imdb/ImdbDatasetImporter.php', '\'INSERT INTO imdb_titles \'
+            . \'(tconst, primary_title, original_title, normalized_title, title_type, \'
+            . \'start_year, genres, runtime_minutes, average_rating, num_votes) VALUES \'
+            . $placeholders
+            . \'  AS new_row ON DUPLICATE KEY UPDATE \'
+            . \'primary_title = new_row.primary_title, \'
+            . \'original_title = new_row.original_title, \'
+            . \'normalized_title = new_row.normalized_title, \'
+            . \'title_type = new_row.title_type, \'
+            . \'start_year = new_row.start_year, \'
+            . \'genres = new_row.genres, \'
+            . \'runtime_minutes = new_row.runtime_minutes, \'
+            . \'average_rating = new_row.average_rating, \'
+            . \'num_votes = new_row.num_votes\''],
+        'src/Media/Metadata/RatingService.php:93#1' => ['src/Media/Metadata/RatingService.php', '\'INSERT INTO metadata_ratings (media_item_id, source, rating_type, score, votes)
+             VALUES (?, ?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE score = new_row.score, votes = new_row.votes\''],
+        'src/Media/Streaming/StreamManager.php:426#1' => ['src/Media/Streaming/StreamManager.php', '"INSERT INTO playback_state
+             (id, session_id, media_item_id, position_ticks, duration_ticks, playback_status)
+             VALUES (?, ?, ?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE
+             position_ticks = new_row.position_ticks,
+             playback_status = new_row.playback_status"'],
+        'src/Media/Subtitles/Quota/SubtitleProviderQuotaRepository.php:171#1' => ['src/Media/Subtitles/Quota/SubtitleProviderQuotaRepository.php', '\'INSERT INTO subtitle_provider_quota
+                (provider, downloads_remaining, reset_time_utc, updated_at)
+             VALUES (?, ?, ?, NOW())
+              AS new_row
+             ON DUPLICATE KEY UPDATE
+                downloads_remaining = new_row.downloads_remaining,
+                reset_time_utc = new_row.reset_time_utc,
+                updated_at = new_row.updated_at\''],
+        'src/Media/UserItemDataRepository.php:170#1' => ['src/Media/UserItemDataRepository.php', '"INSERT INTO user_item_data (user_id, profile_id, item_id, favorite)
+             VALUES (?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE favorite = new_row.favorite"'],
+        'src/Media/UserItemDataRepository.php:207#1' => ['src/Media/UserItemDataRepository.php', '"INSERT INTO user_item_data (user_id, profile_id, item_id, rating)
+             VALUES (?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE rating = new_row.rating"'],
+        'src/Media/UserItemDataRepository.php:251#1' => ['src/Media/UserItemDataRepository.php', '"INSERT INTO user_item_data (user_id, profile_id, item_id, like_level)
+             VALUES (?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE like_level = new_row.like_level"'],
+        'src/Media/UserItemDataRepository.php:336#1' => ['src/Media/UserItemDataRepository.php', '"INSERT INTO user_item_data (user_id, profile_id, item_id, watched)
+             VALUES (?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE watched = new_row.watched"'],
+        'src/Plugins/Repository/PluginSettingsRepository.php:146#1' => ['src/Plugins/Repository/PluginSettingsRepository.php', '\'INSERT INTO plugin_settings (plugin_name, settings_json, updated_at) \'
+            . \'VALUES (?, ?, ?) AS new_row \'
+            . \'ON DUPLICATE KEY UPDATE settings_json = new_row.settings_json, updated_at = new_row.updated_at\''],
+        'src/Server/Arr/CustomFormatSyncer.php:363#1' => ['src/Server/Arr/CustomFormatSyncer.php', '\'INSERT INTO custom_format_sync \'
+                . \'(id, sync_type, remote_id, remote_name, trash_version, synced_at) \'
+                . \'VALUES (?, ?, ?, ?, ?, NOW()) AS new_row \'
+                . \'ON DUPLICATE KEY UPDATE remote_name = new_row.remote_name, \'
+                . \'trash_version = new_row.trash_version, synced_at = NOW()\''],
+        'src/Server/Integrations/Lastfm/LastfmSessionRepository.php:84#1' => ['src/Server/Integrations/Lastfm/LastfmSessionRepository.php', '\'INSERT INTO lastfm_sessions (user_id, session_key, connected_at)
+             VALUES (?, ?, NOW())
+              AS new_row
+             ON DUPLICATE KEY UPDATE session_key = new_row.session_key,
+                                     connected_at = new_row.connected_at\''],
+        'src/Session/PlaybackController.php:164#1' => ['src/Session/PlaybackController.php', '"INSERT INTO playback_state (id, session_id, media_item_id, position_ticks, duration_ticks, playback_status)
+             VALUES (?, ?, ?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE
+                position_ticks = new_row.position_ticks,
+                duration_ticks = new_row.duration_ticks,
+                playback_status = new_row.playback_status,
+                updated_at = NOW()"'],
+        'src/Session/SyncPlay/SyncPlaySnapshotService.php:89#1' => ['src/Session/SyncPlay/SyncPlaySnapshotService.php', '"INSERT INTO syncplay_snapshots
+                (group_id, group_name, member_count, has_password, current_media_id,
+                 is_playing, playback_position, playback_state, serialized_state, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE
+                group_name = new_row.group_name,
+                member_count = new_row.member_count,
+                has_password = new_row.has_password,
+                current_media_id = new_row.current_media_id,
+                is_playing = new_row.is_playing,
+                playback_position = new_row.playback_position,
+                playback_state = new_row.playback_state,
+                serialized_state = new_row.serialized_state,
+                updated_at = new_row.updated_at"'],
+        'src/Stats/ClientHeartbeatStore.php:102#1' => ['src/Stats/ClientHeartbeatStore.php', '\'INSERT INTO client_heartbeats\'
+                . \' (instance_id, version, client_type, build_token, first_seen_at, last_seen_at)\'
+                . " VALUES (?, ?, ?, ?, NOW(), NOW())"
+                . \'  AS new_row ON DUPLICATE KEY UPDATE\'
+                . \' version = new_row.version,\'
+                . \' client_type = new_row.client_type,\'
+                . \' build_token = new_row.build_token,\'
+                . \' last_seen_at = NOW()\''],
+        'src/Stats/Metrics/MetricsFlushService.php:302#1' => ['src/Stats/Metrics/MetricsFlushService.php', '"INSERT INTO metrics_connections
+                 (connection_id, worker_id, kind, user_id, remote_ip, session_id,
+                  media_item_id, bytes_in, bytes_out, bytes_in_rate, bytes_out_rate,
+                  opened_at, last_seen_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  AS new_row
+                 ON DUPLICATE KEY UPDATE
+                     kind           = new_row.kind,
+                     user_id        = new_row.user_id,
+                     remote_ip      = new_row.remote_ip,
+                     session_id     = new_row.session_id,
+                     media_item_id  = new_row.media_item_id,
+                     bytes_in       = new_row.bytes_in,
+                     bytes_out      = new_row.bytes_out,
+                     bytes_in_rate  = new_row.bytes_in_rate,
+                     bytes_out_rate = new_row.bytes_out_rate,
+                     last_seen_at   = new_row.last_seen_at"'],
+        'src/Theming/ThemeMediaRepository.php:74#1' => ['src/Theming/ThemeMediaRepository.php', '"INSERT INTO theme_media (
+                library_id,
+                audio_path,
+                audio_url,
+                audio_duration,
+                audio_format,
+                video_path,
+                video_url,
+                video_duration,
+                video_width,
+                video_height,
+                video_format,
+                scanned_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             AS new_row
+            ON DUPLICATE KEY UPDATE
+                audio_path = new_row.audio_path,
+                audio_url = new_row.audio_url,
+                audio_duration = new_row.audio_duration,
+                audio_format = new_row.audio_format,
+                video_path = new_row.video_path,
+                video_url = new_row.video_url,
+                video_duration = new_row.video_duration,
+                video_width = new_row.video_width,
+                video_height = new_row.video_height,
+                video_format = new_row.video_format,
+                scanned_at = new_row.scanned_at"'],
+        'src/Auth/UserRepository.php:912#legs' => ['src/Auth/UserRepository.php', 'static fn (string $col): string => "{$col} = new_row.{$col}", $columns'],
+        'src/Auth/UserRepository.php:912#alias-frag' => ['src/Auth/UserRepository.php', '. \' AS new_row\''],
+        'src/Auth/UserRepository.php:912#odku-frag' => ['src/Auth/UserRepository.php', '. \' ON DUPLICATE KEY UPDATE \' . $updateClause'],
+    ];
+
+    /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function fidelitySliceProvider(): array
+    {
+        return self::FIDELITY_SLICES;
+    }
+
+    #[DataProvider('fidelitySliceProvider')]
+    public function testTheLiveSourceCarriesTheCorpusSliceVerbatim(string $file, string $slice): void
+    {
+        $path = dirname(__DIR__, 4) . '/' . $file;
+        $this->assertFileExists($path);
+        $this->assertStringContainsString(
+            $slice,
+            (string) file_get_contents($path),
+            "corpus slice {$file} drifted from the verified bytes"
+        );
+    }
 }

@@ -1303,4 +1303,123 @@ final class UpsertSyntaxAdoptionTest extends TestCase
             "corpus slice {$file} drifted from the verified bytes"
         );
     }
+
+    /**
+     * Verbatim legacy pins for the seven adjudicated KEEP sites (r1 belt):
+     * each raw statement bytes must survive untouched. Flipping a KEEP to
+     * the row-alias form (adapted or raw) without a designed accept-set
+     * change and both-arm re-proof reddens here.
+     */
+    private const KEEP_STATEMENT_SLICES = [
+        'src/Common/RateLimit/DbRateLimiter.php:137#1' => ['src/Common/RateLimit/DbRateLimiter.php', 'ON DUPLICATE KEY UPDATE \'
+            . \'attempts = IF(reset_at <= ?, 1, attempts + 1), \'
+            . \'reset_at = IF(reset_at <= ?, ?, reset_at)\''],
+        'src/Auth/DbLoginRateLimitStore.php:189#1' => ['src/Auth/DbLoginRateLimitStore.php', 'ON DUPLICATE KEY UPDATE attempts = attempts + 1, reset_at = IF(reset_at <= ?, ?, reset_at)\''],
+        'src/LiveTv/ChannelManager.php:414#1' => ['src/LiveTv/ChannelManager.php', 'ON DUPLICATE KEY UPDATE added_at = NOW()"'],
+        'src/Stats/Metrics/MetricsFlushService.php:185#1' => ['src/Stats/Metrics/MetricsFlushService.php', 'ON DUPLICATE KEY UPDATE
+                     request_count   = request_count + VALUES(request_count),
+                     error_count     = error_count + VALUES(error_count),
+                     duration_ms_sum = duration_ms_sum + VALUES(duration_ms_sum),
+                     duration_ms_max = GREATEST(duration_ms_max, VALUES(duration_ms_max)),
+                     bytes_in        = bytes_in + VALUES(bytes_in),
+                     bytes_out       = bytes_out + VALUES(bytes_out),
+                     h_le_10         = h_le_10 + VALUES(h_le_10),
+                     h_le_50         = h_le_50 + VALUES(h_le_50),
+                     h_le_100        = h_le_100 + VALUES(h_le_100),
+                     h_le_250        = h_le_250 + VALUES(h_le_250),
+                     h_le_500        = h_le_500 + VALUES(h_le_500),
+                     h_le_1000       = h_le_1000 + VALUES(h_le_1000),
+                     h_le_2500       = h_le_2500 + VALUES(h_le_2500),
+                     h_le_5000       = h_le_5000 + VALUES(h_le_5000),
+                     h_gt_5000       = h_gt_5000 + VALUES(h_gt_5000)"'],
+        'src/Stats/Metrics/MetricsFlushService.php:250#1' => ['src/Stats/Metrics/MetricsFlushService.php', 'ON DUPLICATE KEY UPDATE
+                     request_count   = request_count + VALUES(request_count),
+                     error_count     = error_count + VALUES(error_count),
+                     duration_ms_sum = duration_ms_sum + VALUES(duration_ms_sum),
+                     duration_ms_max = GREATEST(duration_ms_max, VALUES(duration_ms_max))"'],
+        'src/Stats/StatsCollector.php:804#1' => ['src/Stats/StatsCollector.php', 'ON DUPLICATE KEY UPDATE
+                     item_count = COALESCE(item_count, 0) + VALUES(item_count),
+                     total_bytes = COALESCE(total_bytes, 0) + VALUES(total_bytes),
+                     transcode_cache_bytes = COALESCE(transcode_cache_bytes, 0) + VALUES(transcode_cache_bytes)"'],
+        'src/Auth/WatchHistory.php:728#1' => ['src/Auth/WatchHistory.php', 'ON DUPLICATE KEY UPDATE
+                 position_ticks = VALUES(position_ticks),
+                 duration_ticks = COALESCE(VALUES(duration_ticks), duration_ticks),
+                 playback_status = VALUES(playback_status),
+                 progress_percent = VALUES(progress_percent),
+                 last_watched_at = NOW(),
+                 completed_at = COALESCE({$completedAtExpr}, completed_at)"'],
+    ];
+
+    /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function keepStatementSliceProvider(): array
+    {
+        return self::KEEP_STATEMENT_SLICES;
+    }
+
+    #[DataProvider('keepStatementSliceProvider')]
+    public function testTheKeepSitesStillCarryTheirLegacyStatementVerbatim(string $file, string $slice): void
+    {
+        $path = dirname(__DIR__, 4) . '/' . $file;
+        $this->assertFileExists($path);
+        $this->assertStringContainsString(
+            $slice,
+            (string) file_get_contents($path),
+            "KEEP site {$file} moved off its pinned legacy statement — the wave adjudication (UPSERT-SRV.md KEEP table) demands a designed accept-set change with both-arm re-proof, never a silent edit."
+        );
+    }
+
+    /**
+     * Source-intrinsic statement count (r1 belt): the walk counts every
+     * 'ON DUPLICATE' occurrence inside string tokens ONLY (comments and
+     * prose excluded) across src/. It catches the blind spot the
+     * delegation census has for UNADAPTED additions: a smuggled raw
+     * upsert statement raises this number and reddens here.
+     */
+    public function testTheCountedUpsertStatementsArePinned(): void
+    {
+        $count = 0;
+        $walker = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator(self::srcDir(), \FilesystemIterator::SKIP_DOTS));
+        foreach ($walker as $file) {
+            if (!$file->isFile() || $file->getExtension() !== 'php') {
+                continue;
+            }
+            foreach (token_get_all((string) file_get_contents($file->getPathname())) as $token) {
+                if (!is_array($token)) {
+                    continue;
+                }
+                if ($token[0] !== T_CONSTANT_ENCAPSED_STRING && $token[0] !== T_ENCAPSED_AND_WHITESPACE) {
+                    continue;
+                }
+                $count += substr_count($token[1], 'ON DUPLICATE');
+            }
+        }
+
+        self::assertSame(
+            42,
+            $count,
+            'The src/ ON DUPLICATE statement census moved. 42 sites are verified in this wave: 35 kernel-adopted behind adapt(), seven adjudicated KEEPs (UPSERT-SRV.md). '
+            . 'A new upsert statement must join the corpus with differential evidence or land as a designed KEEP with a verbatim pin — never a silent addition.'
+        );
+    }
+
+    /**
+     * Table-size pins (r1 belt): the fidelity table and the KEEP table
+     * must not thin or grow silently; each rotation rides its measured
+     * wave evidence.
+     */
+    public function testTheVerificationTablesAreCounted(): void
+    {
+        self::assertCount(
+            37,
+            self::FIDELITY_SLICES,
+            'the corpus fidelity table moved — rotate only with the wave that changes a converted site'
+        );
+        self::assertCount(
+            7,
+            self::KEEP_STATEMENT_SLICES,
+            'the KEEP pin table moved — a KEEP may change only through a designed accept-set change with both-arm re-proof'
+        );
+    }
 }

@@ -88,32 +88,42 @@ final class TxMutexExtinctionSoleImplTest extends TestCase
 
         // Positive pins (assert own coverage): if these ever read as false the
         // consumer has quietly re-grown its own mechanics or lost the wiring.
+        // V059 row 3 re-aim: the begin ceremony's acquire/markOpen/fold arms
+        // moved INSIDE the shared lease (differentially proven zero-delta,
+        // SRV59-item3-diff-pre-swap.log), so the needles track the new wiring
+        // — the lease construction is the delegation shape now. The nested
+        // arm's markOpen() stays a code fact at the connection (vendor-throw
+        // identity posture, landed D-2); handOff is pinned in its cid-bound
+        // two-argument form.
         foreach (
             [
                 'use Phlix\Shared\Database\MysqlTxLockState;',
                 'use Phlix\Shared\Database\TxEnd;',
+                'use Phlix\Shared\Database\TxLease;',
                 'use Phlix\Shared\Database\MysqlRetryPolicy;',
                 'claimCommit(',
                 'claimRollback(',
-                '->handOff(',
-                '->acquire(',
-                '->markOpen(',
-                '->abandonIfHeld(',
+                'new TxLease(',
+                '$lease->begin(',
                 'holdingTransactionFor(',
+                '->markOpen(',
             ] as $needle
         ) {
             self::assertStringContainsString($needle, $code, "the retrofit wiring '$needle' must stay present");
         }
 
         self::assertStringContainsString(
-            'clearPoison: false',
+            'handOff($this->pushTransToken(...), $cid)',
             $code,
-            'the begin-threw cleanup arm must keep its non-spending release (register A-1/F-3)'
+            'the transaction-end releases must stay bound to the ceremony coroutine id '
+            . '(v0.59 bank row 1: a release whose holder moved is inert, not clobbering)'
         );
         self::assertStringContainsString(
-            'abandonIfHeld($cid, $this->pushTransToken(...));',
+            'fn(): bool => parent::beginTrans()',
             $code,
-            'the falsy-parent fold must keep the clearing-default release'
+            'the begin ceremony must stay delegated to the shared lease '
+            . '(its acquire / catch clearPoison:false / fold / markOpen laws are pinned by '
+            . 'the machine characterization suite + the landing differential)'
         );
     }
 

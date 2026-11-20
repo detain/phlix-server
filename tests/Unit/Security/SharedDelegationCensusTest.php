@@ -81,6 +81,7 @@ final class SharedDelegationCensusTest extends TestCase
     private const F_DB_MYSQL_ERROR = 'Phlix\Shared\Database\MysqlError';
     private const F_DB_MYSQL_TX_LOCK_STATE = 'Phlix\Shared\Database\MysqlTxLockState';
     private const F_DB_TX_END = 'Phlix\Shared\Database\TxEnd';
+    private const F_DB_TX_LEASE = 'Phlix\Shared\Database\TxLease';
     private const F_DB_MYSQL_RETRY_POLICY = 'Phlix\Shared\Database\MysqlRetryPolicy';
     private const F_DB_WRITE_RESULT = 'Phlix\Shared\Database\WriteResult';
     private const F_DB_UUID = 'Phlix\Shared\Database\Uuid';
@@ -226,7 +227,20 @@ final class SharedDelegationCensusTest extends TestCase
      *    joins the MysqlError carrier set (4 sites). Zero behavior: the constants carry
      *    the identical values. Set-equality drift pin: the SPB-local four vs kernel four
      *    closed set is asserted in tests/Unit/Media/Library/StreamProbeBackfillTest.php.
-     * Total 158 sites / 84 family-carrier rows (69 distinct files).
+     *  - V059-SRV row 3 (this wave): registered the 22nd family
+     *    Phlix\Shared\Database\TxLease (F_DB_TX_LEASE). beginTrans()'s whole
+     *    acquire/catch/fold/open/clear ceremony moved onto the shared lease
+     *    (zero-delta differential: 10 scenarios, /tmp/opencode/refactor-v059/
+     *    gates/SRV59-item3-diff-{pre,post}-swap.log), so the connection file
+     *    keeps no static forward to it — the sites row counts 0 and the pin
+     *    grows into shape (N): `$var = new Family(...)` binds the local, and
+     *    the second pass sees `$var->begin(...)` as the delegation, registered
+     *    in the new FAMILY_COLLABORATOR_CARRIERS table. The MysqlTxLockState
+     *    and TxEnd carrier rows are UNMOVED: the claimCommit/claimRollback
+     *    ladders, the poisoned-commit constant read and the finally handOff
+     *    stay consumer-side (the lease deliberately carries no end-ceremony).
+     * Total 158 sites / 84 family-carrier rows (69 distinct files) + 1
+     * collaborator-carrier row (V059 shape N: TxLease @ PhlixMySQLConnection).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -246,6 +260,12 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_MYSQL_ERROR => 21,
         self::F_DB_MYSQL_TX_LOCK_STATE => 1,
         self::F_DB_TX_END => 6,
+        // V059 row 3: the begin ceremony delegates through an INSTANCE
+        // (`new TxLease(...)` + `$lease->begin(...)`), so this family carries
+        // zero STATIC forwards — its pin lives in the shape (N) leg,
+        // FAMILY_COLLABORATOR_CARRIERS. The row keeps the import-orphan net
+        // honest: the import must keep a recognized site or go dead loudly.
+        self::F_DB_TX_LEASE => 0,
         self::F_DB_MYSQL_RETRY_POLICY => 1,
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
@@ -440,6 +460,25 @@ final class SharedDelegationCensusTest extends TestCase
         ],
         self::F_HUB_HOST_GRAMMAR => [
             'Hub/HostnameCandidateSanitizer.php' => ['isValidCandidate'],
+        ],
+    ];
+
+    /**
+     * Shape (N)/(O) carrier table: family => src-relative file => the exact
+     * multiset of members forwarded through an INSTANCE of the family (a
+     * type-declared collaborator, or a local bound by `$var = new Family(...)`,
+     * V059 row 3). Grown CONSCIOUSLY from the census's own prescription — the
+     * orphan leg's message names this move ("grow the recognizer consciously,
+     * the way T_MATCH acceptance caught CredentialDigest::match"). The leg
+     * below compares it against the disk walk for EVERY family, so an
+     * unregistered instance-forward anywhere still reddens: the census cannot
+     * thin silently through the new shape.
+     *
+     * @var array<string, array<string, list<string>>>
+     */
+    private const FAMILY_COLLABORATOR_CARRIERS = [
+        self::F_DB_TX_LEASE => [
+            'Common/Database/PhlixMySQLConnection.php' => ['begin'],
         ],
     ];
 
@@ -678,9 +717,15 @@ final class SharedDelegationCensusTest extends TestCase
     }
 
     /**
-     * Shape (O): shared-typed collaborator forwards — a property, promoted
-     * or plain parameter, or local variable declared with a family type,
-     * then called through `->` (directly or via `$this->prop->`).
+     * Shapes (O)+(N): shared-typed collaborator forwards — a property,
+     * promoted or plain parameter, or local variable declared with a family
+     * type, then called through `->` (directly or via `$this->prop->`);
+     * shape (N) (V059 row 3) additionally binds a local by its NEW-instantiation,
+     * `$lease = new TxLease(...)`, so the ceremony the local then runs through
+     * `$lease->begin(...)` is recognized as delegation. The chained inline
+     * form `(new Family(...))->m()` is deliberately NOT bound — an import
+     * carrying only that shape reddens the orphan leg, forcing the recognizer
+     * to grow consciously rather than silently.
      *
      * @param list<array{0:int,1:string,2:int}|string> $tokens
      * @param array<string, string> $aliasMap
@@ -694,6 +739,35 @@ final class SharedDelegationCensusTest extends TestCase
         for ($i = 0; $i < $count; $i++) {
             $token = $tokens[$i];
             if (!\is_array($token)) {
+                continue;
+            }
+            if ($token[0] === T_VARIABLE) {
+                // Shape (N): `$var = new Family(` — PHP has no local type
+                // annotation, so the fresh instance is what proves the binding.
+                $j = self::nextIndex($tokens, $i + 1);
+                if ($j === null || $tokens[$j] !== '=') {
+                    continue;
+                }
+                $k = self::nextIndex($tokens, $j + 1);
+                if ($k === null || !\is_array($tokens[$k]) || $tokens[$k][0] !== T_NEW) {
+                    continue;
+                }
+                $m = self::nextIndex($tokens, $k + 1);
+                if ($m === null || !\is_array($tokens[$m])) {
+                    continue;
+                }
+                $bound = null;
+                if ($tokens[$m][0] === T_STRING && isset($aliasMap[$tokens[$m][1]])) {
+                    $bound = $aliasMap[$tokens[$m][1]];
+                } elseif (
+                    $tokens[$m][0] === T_NAME_FULLY_QUALIFIED
+                    && isset(self::FAMILY_FORWARD_SITES[\ltrim($tokens[$m][1], '\\')])
+                ) {
+                    $bound = \ltrim($tokens[$m][1], '\\');
+                }
+                if ($bound !== null) {
+                    $familyByVar[\ltrim($token[1], '$')] = $bound;
+                }
                 continue;
             }
             $family = null;
@@ -1062,14 +1136,36 @@ final class SharedDelegationCensusTest extends TestCase
         }
 
         foreach ($data['collaborators'] as $family => $byFile) {
+            // Registered shapes (O)+(N): expected is the registered carrier
+            // table for this family, or NOTHING. Completeness is preserved:
+            // an instance-forward in any family without its row here (or a
+            // file without its row) reddens through the file-set equality —
+            // the pre-V059 blanket `assertSame([])` law, grown to carry
+            // registrations instead of dropped.
+            $expected = self::FAMILY_COLLABORATOR_CARRIERS[$family] ?? [];
+            $expectedFiles = array_keys($expected);
+            sort($expectedFiles);
+            $actualFiles = array_keys($byFile);
+            sort($actualFiles);
             $this->assertSame(
-                [],
-                $byFile,
-                $family . ': a shared-typed collaborator forward appeared. The recognizer '
-                . '(shape O) is proven by the canary leg; the static-forward pins do not '
-                . 'count it, so adopting the collaborator form must re-baseline BOTH legs '
-                . 'consciously from measured red — never let the census thin silently.'
+                $expectedFiles,
+                $actualFiles,
+                $family . ': the collaborator-carrier set drifted. A shape (O)/(N) forward '
+                . 'appeared without its registration, or a registered one vanished (the body '
+                . 'was re-inlined). Rotate FAMILY_COLLABORATOR_CARRIERS from the measured red '
+                . '— never let the census thin silently.'
             );
+            foreach ($expected as $relative => $expectedMembers) {
+                $actualMembers = $byFile[$relative] ?? [];
+                sort($expectedMembers);
+                sort($actualMembers);
+                $this->assertSame(
+                    $expectedMembers,
+                    $actualMembers,
+                    $family . ' @ ' . $relative . ': the instance-forwarded member multiset '
+                    . 'drifted (a new ceremony member adopted, or the seam moved).'
+                );
+            }
         }
     }
 
@@ -1342,6 +1438,41 @@ final class SharedDelegationCensusTest extends TestCase
             [],
             self::staticForwardMembers($collabTokens, self::familyAliasMap($collabTokens)),
             'A collaborator-only carrier must not be miscounted as a static forward.'
+        );
+
+        // Shape (N) — V059 row 3: a local BOUND by fresh instantiation, the
+        // TxLease ceremony shape. `new Family(` itself contributes no member
+        // (the ctor is not a forwarded seam); only `$lease->begin(` registers.
+        $newTokens = token_get_all(
+            "<?php\nuse Phlix\\Shared\\Database\\TxLease;\nclass SyntheticN\n"
+            . "{\n    public function run(int \$cid): bool\n"
+            . "    {\n        \$lease = new TxLease(\$this->state(), \$cid, static fn(): bool => true);\n"
+            . "        return \$lease->begin(static fn(): bool => true);\n    }\n}\n"
+        );
+        $this->assertSame(
+            [[self::F_DB_TX_LEASE, 'begin']],
+            self::collaboratorMembers($newTokens, self::familyAliasMap($newTokens)),
+            'Shape N (new-bound local forward) must register as delegation — this is the '
+            . 'exact token shape beginTrans() now carries on disk.'
+        );
+        $this->assertSame(
+            [],
+            self::staticForwardMembers($newTokens, self::familyAliasMap($newTokens)),
+            'Shape N must not be miscounted as a static forward (the sites row stays 0).'
+        );
+
+        // Shape N negative leg: a local bound to a NON-family instantiation
+        // must stay invisible — `$rows = new ArrayObject(...)` is not a
+        // delegation, and `$rows->append(...)` must never register.
+        $foreignTokens = token_get_all(
+            "<?php\nuse Phlix\\Shared\\Database\\TxLease;\nclass SyntheticNFake\n"
+            . "{\n    public function f(): void\n    {\n        \$bag = new ArrayObject();\n"
+            . "        \$bag->append(1);\n    }\n}\n"
+        );
+        $this->assertSame(
+            [],
+            self::collaboratorMembers($foreignTokens, self::familyAliasMap($foreignTokens)),
+            'A local bound to a non-family class must not register any forward.'
         );
     }
 

@@ -17,6 +17,7 @@ use Phlix\Shared\Database\MysqlError;
 use Phlix\Shared\Database\MysqlRetryPolicy;
 use Phlix\Shared\Database\MysqlTxLockState;
 use Phlix\Shared\Database\TxEnd;
+use Phlix\Shared\Database\TxLease;
 use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
@@ -628,48 +629,27 @@ class PhlixMySQLConnection extends Connection
         // replaces) and the bookkeeping-before-park law are the shared
         // MysqlTxLockState::acquire(); the Channel itself stays consumer
         // plumbing handed in as the park closure.
+        // V059 row 3 (begin-ceremony lease): the whole acquire/catch/fold/
+        // open/clear sequence below is the shared TxLease::begin() — the
+        // same ceremony both consumers landed, given its single faithful
+        // home. The differential over the pre-swap body (legacy VERBATIM
+        // from this file at 6c65c89d) proved zero delta on all 10
+        // observable scenarios (holder/nesting/poison/pushes/starts/
+        // outcome) before this swap landed; log SRV59-item3-diff-pre-swap.
+        // log. A BEGIN that never opened still must not spend the one-shot
+        // refusal budget: that is the lease's clearPoison:false catch arm
+        // (landed shape in both consumer repos).
         $lock = $this->transLock();
-        $this->txState()->acquire($cid, static fn(): bool => $lock->pop() !== false);
+        $lease = new TxLease(
+            $this->txState(),
+            $cid,
+            static fn(): bool => $lock->pop() !== false,
+            $this->pushTransToken(...)
+        );
 
-        // A parent that THROWS must still hand the mutex back. This is the same
-        // rule {@see commitTrans()} states for a COMMIT that throws, and it is
-        // load-bearing for the same reason: nothing else would ever release it.
-        // Every coroutine-reachable call site in `src/` writes
-        // `$db->beginTrans();` OUTSIDE their `try` (the one site inside a `try`
-        // is `MediaDedupePathsCommand`, which is CLI and never takes the mutex),
-        // so the throwing coroutine runs no `rollBackTrans()` of its own, and the
-        // holder guards in {@see commitTrans()}/{@see rollBackTrans()} correctly
-        // refuse a rescue from any OTHER coroutine — so on the shared socket
-        // (`DB_POOL_ENABLED=0`) one connect failure would otherwise leave a
-        // worker that can never open another transaction until it is restarted
-        // (measured: the next coroutine stayed parked indefinitely). Releasing
-        // is safe on both throw shapes: after a failed reconnect no transaction
-        // exists, and on "There is already an active transaction" the open
-        // transaction is not ours (nesting is still 0). The holder check
-        // keeps the release single and self-owned — the acquisition above
-        // guarantees it is us, and parent::beginTrans() can yield.
-        // The throw arm passes clearPoison: false: a BEGIN that never opened
-        // must not spend the one-shot refusal budget (landed shape in both
-        // consumer repos — see the machine's abandonIfHeld provenance note).
-        try {
-            $result = parent::beginTrans();
-        } catch (\Throwable $e) {
-            $this->txState()->abandonIfHeld($cid, $this->pushTransToken(...), clearPoison: false);
-            throw $e;
-        }
-
-        if ($result) {
-            $this->txState()->markOpen();
-        } else {
-            $this->txState()->abandonIfHeld($cid, $this->pushTransToken(...));
-        }
-        // TXMUTEX-A A1: the non-throwing exit of the holder path — poison is
-        // history once this coroutine stands up its own transaction (mirrors
-        // the hub's clear after parent begin; the falsy fold above already
-        // cleared it via abandonIfHeld, this line is that fall-through shape).
-        $this->txState()->clearPoison();
-
-        return $result;
+        // A non-static arrow fn: parent::beginTrans() needs the object scope,
+        // and the call position is identical to the legacy in-method site.
+        return $lease->begin(fn(): bool => parent::beginTrans());
     }
 
     /**
@@ -831,10 +811,16 @@ class PhlixMySQLConnection extends Connection
         // later transaction on this connection blocks forever. handOff()
         // clears the poison, frees the holder, and pushes LAST (§1.5) —
         // exactly the landed finally order.
+        // V059 row 1 consumer leg: the release binds this ceremony's coroutine
+        // id (v0.59 cid-binding); a call whose holder has moved on is now
+        // FULLY INERT instead of clobbering the new holder's ledger. The
+        // arm is unreachable in that shape here — only holder($cid) passes the
+        // claim ladder above — so this is defense semantics, not a behavior
+        // change (register names it explicitly; P2 differential probe).
         try {
             $result = parent::commitTrans();
         } finally {
-            $this->txState()->handOff($this->pushTransToken(...));
+            $this->txState()->handOff($this->pushTransToken(...), $cid);
         }
 
         return $result;
@@ -923,10 +909,12 @@ class PhlixMySQLConnection extends Connection
         // Outermost (CLOSE): end the transaction, then hand the mutex on. The
         // release is in a `finally` so a throwing ROLLBACK cannot strand the
         // mutex.
+        // V059 row 1 consumer leg: the release binds this ceremony's coroutine
+        // id (v0.59 cid-binding), inert-when-moved as in commitTrans above.
         try {
             $result = $this->rollBackParent();
         } finally {
-            $this->txState()->handOff($this->pushTransToken(...));
+            $this->txState()->handOff($this->pushTransToken(...), $cid);
         }
 
         return $result;

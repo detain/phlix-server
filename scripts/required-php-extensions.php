@@ -98,7 +98,7 @@ return [
     ],
     'fileinfo' => [
         'symbol' => 'finfo_open(',
-        'source' => 'src/Media/Storage/ImageResizer.php',
+        'source' => 'src/Common/Fs/Mime.php',
         'why' => 'Sniffing the real MIME type of uploaded/downloaded artwork instead of trusting '
             . 'the declared one — the check that stops a "poster" being served as HTML.',
     ],

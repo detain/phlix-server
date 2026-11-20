@@ -549,7 +549,14 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // body and lives outside the tests/Support exemption dir. From here a
     // scratch-DB test may carry either trait spelling; see the matcher.
     // Measured from the phpunit red (83), not predicted.
-    private const EXPECTED_ADOPTERS = 83;
+    // 83→84 by the tx-mutex T1-r2 real-mysqld KILL-mid-tx integration leg
+    // (1faa2947, SRV-TXMUTEX follow-up, 2026-11-19, measured at b3b4d9e9):
+    // +tests/Integration/Common/Database/PhlixMySQLConnectionGoneAwayRealDbTest.php
+    // — the file that commit added carried RequiresRealDatabase but the commit
+    // rotated the S431 files pin without bumping this counter, so the guard's
+    // own same-commit law caught it retroactively.
+    // Measured from the phpunit red (84), not predicted.
+    private const EXPECTED_ADOPTERS = 84;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

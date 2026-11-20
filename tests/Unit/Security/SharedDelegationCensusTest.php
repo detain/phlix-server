@@ -195,7 +195,14 @@ final class SharedDelegationCensusTest extends TestCase
      *    ImdbDatasetImporter's two multi-row staging upserts (grammar proven on
      *    real MySQL), FuzzyMatcher, RatingService and SubtitleProviderQuota-
      *    Repository adopt the row-alias form behind adapt().
-     * Total 138 sites / 67 family-carrier rows (55 distinct files).
+     *  - srv-W2-UPSERT C6 (same lane, session/stats cluster): UpsertSyntax 20 → 24 —
+     *    PlaybackController's playback_state write door, SyncPlaySnapshotService's
+     *    snapshot upsert, ClientHeartbeatStore's heartbeat upsert and
+     *    MetricsFlushService's flushConnections leg adopt the row-alias form behind
+     *    adapt(); the two additive/GREATEST flush legs in the same file stay
+     *    VALUES()-native (stored-column references render non-byte-identical under
+     *    the alias — KEEP-with-evidence, corpus FINDING rows).
+     * Total 142 sites / 71 family-carrier rows (58 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -218,7 +225,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_MYSQL_RETRY_POLICY => 1,
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
-        self::F_DB_UPSERT_SYNTAX => 20,
+        self::F_DB_UPSERT_SYNTAX => 24,
         self::F_SETTINGS_CODEC => 1,
         self::F_RELAY_LIVENESS_WINDOWS => 1,
         self::F_HUB_HOST_GRAMMAR => 1,
@@ -378,6 +385,10 @@ final class SharedDelegationCensusTest extends TestCase
             'Media/Metadata/RatingService.php' => ['adapt'],
             'Media/Subtitles/Quota/SubtitleProviderQuotaRepository.php' => ['adapt'],
             'Media/UserItemDataRepository.php' => ['adapt', 'adapt', 'adapt', 'adapt'],
+            'Session/PlaybackController.php' => ['adapt'],
+            'Session/SyncPlay/SyncPlaySnapshotService.php' => ['adapt'],
+            'Stats/ClientHeartbeatStore.php' => ['adapt'],
+            'Stats/Metrics/MetricsFlushService.php' => ['adapt'],
         ],
         self::F_SETTINGS_CODEC => [
             'Admin/SettingsRepository.php' => ['decode'],

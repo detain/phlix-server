@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Session\SyncPlay;
 
 use Phlix\Common\Database\ConnectionPool;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -82,20 +83,21 @@ class SyncPlaySnapshotService
 
         // Upsert: replace existing row
         $db->query(
-            "INSERT INTO syncplay_snapshots
+            UpsertSyntax::adapt("INSERT INTO syncplay_snapshots
                 (group_id, group_name, member_count, has_password, current_media_id,
                  is_playing, playback_position, playback_state, serialized_state, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              AS new_row
              ON DUPLICATE KEY UPDATE
-                group_name = VALUES(group_name),
-                member_count = VALUES(member_count),
-                has_password = VALUES(has_password),
-                current_media_id = VALUES(current_media_id),
-                is_playing = VALUES(is_playing),
-                playback_position = VALUES(playback_position),
-                playback_state = VALUES(playback_state),
-                serialized_state = VALUES(serialized_state),
-                updated_at = VALUES(updated_at)",
+                group_name = new_row.group_name,
+                member_count = new_row.member_count,
+                has_password = new_row.has_password,
+                current_media_id = new_row.current_media_id,
+                is_playing = new_row.is_playing,
+                playback_position = new_row.playback_position,
+                playback_state = new_row.playback_state,
+                serialized_state = new_row.serialized_state,
+                updated_at = new_row.updated_at"),
             [
                 $groupId,
                 $groupName,

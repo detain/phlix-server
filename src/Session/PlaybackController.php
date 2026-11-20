@@ -15,6 +15,7 @@ use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
 use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\MediaItemType;
+use Phlix\Shared\Database\UpsertSyntax;
 use Phlix\Stats\StatsCollector;
 use Phlix\Shared\Events\Playback\PlaybackPaused;
 use Phlix\Shared\Events\Playback\PlaybackResumed;
@@ -158,14 +159,18 @@ class PlaybackController
         $newStatus = $isPaused ? 'paused' : 'playing';
 
         // Update or create playback state
-        $this->db->query(
+        $sql = UpsertSyntax::adapt(
             "INSERT INTO playback_state (id, session_id, media_item_id, position_ticks, duration_ticks, playback_status)
              VALUES (?, ?, ?, ?, ?, ?)
+              AS new_row
              ON DUPLICATE KEY UPDATE
-                position_ticks = VALUES(position_ticks),
-                duration_ticks = VALUES(duration_ticks),
-                playback_status = VALUES(playback_status),
-                updated_at = NOW()",
+                position_ticks = new_row.position_ticks,
+                duration_ticks = new_row.duration_ticks,
+                playback_status = new_row.playback_status,
+                updated_at = NOW()"
+        );
+        $this->db->query(
+            $sql,
             [
                 $this->generateUuid(),
                 $sessionId,

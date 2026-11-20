@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Stats\Metrics;
 
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -294,22 +295,23 @@ final class MetricsFlushService
             $this->previousBytes[$id] = ['in' => $c['bytes_in'], 'out' => $c['bytes_out']];
 
             $this->db->query(
-                "INSERT INTO metrics_connections
+                UpsertSyntax::adapt("INSERT INTO metrics_connections
                  (connection_id, worker_id, kind, user_id, remote_ip, session_id,
                   media_item_id, bytes_in, bytes_out, bytes_in_rate, bytes_out_rate,
                   opened_at, last_seen_at)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  AS new_row
                  ON DUPLICATE KEY UPDATE
-                     kind           = VALUES(kind),
-                     user_id        = VALUES(user_id),
-                     remote_ip      = VALUES(remote_ip),
-                     session_id     = VALUES(session_id),
-                     media_item_id  = VALUES(media_item_id),
-                     bytes_in       = VALUES(bytes_in),
-                     bytes_out      = VALUES(bytes_out),
-                     bytes_in_rate  = VALUES(bytes_in_rate),
-                     bytes_out_rate = VALUES(bytes_out_rate),
-                     last_seen_at   = VALUES(last_seen_at)",
+                     kind           = new_row.kind,
+                     user_id        = new_row.user_id,
+                     remote_ip      = new_row.remote_ip,
+                     session_id     = new_row.session_id,
+                     media_item_id  = new_row.media_item_id,
+                     bytes_in       = new_row.bytes_in,
+                     bytes_out      = new_row.bytes_out,
+                     bytes_in_rate  = new_row.bytes_in_rate,
+                     bytes_out_rate = new_row.bytes_out_rate,
+                     last_seen_at   = new_row.last_seen_at"),
                 [
                     $id,
                     $workerId,

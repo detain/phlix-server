@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Stats;
 
+use Phlix\Shared\Database\UpsertSyntax;
 use Phlix\Shared\Database\WriteResult;
 use Workerman\MySQL\Connection;
 
@@ -96,14 +97,14 @@ final class ClientHeartbeatStore implements ClientHeartbeatStoreInterface
 
         try {
             $result = $this->db->query(
-                'INSERT INTO client_heartbeats'
+                UpsertSyntax::adapt('INSERT INTO client_heartbeats'
                 . ' (instance_id, version, client_type, build_token, first_seen_at, last_seen_at)'
                 . " VALUES (?, ?, ?, ?, NOW(), NOW())"
-                . ' ON DUPLICATE KEY UPDATE'
-                . ' version = VALUES(version),'
-                . ' client_type = VALUES(client_type),'
-                . ' build_token = VALUES(build_token),'
-                . ' last_seen_at = NOW()',
+                . '  AS new_row ON DUPLICATE KEY UPDATE'
+                . ' version = new_row.version,'
+                . ' client_type = new_row.client_type,'
+                . ' build_token = new_row.build_token,'
+                . ' last_seen_at = NOW()'),
                 [$instanceId, $version, $clientType, $buildToken],
             );
 

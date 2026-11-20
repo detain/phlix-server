@@ -60,6 +60,9 @@ final class DashOnDemandServeTest extends TestCase
     private TranscodeManager $manager;
     private DashController $controller;
 
+    /** @var array<string, true> Every filename a case asked the controller to serve. */
+    private array $requestedFiles = [];
+
     protected function setUp(): void
     {
         if (!is_executable(self::FFMPEG) || !is_executable(self::FFPROBE)) {
@@ -85,6 +88,21 @@ final class DashOnDemandServeTest extends TestCase
 
     protected function tearDown(): void
     {
+        // S439 hardening (RUNSUIT cure lane, 2026-11-20): drain the settle pipeline
+        // BEFORE the sweep. A launch this test reaped keeps its ledger token
+        // held until the registry confirms the settle, and a CLI test never
+        // runs the registry's timers — so those tokens are only ever released
+        // through the production settle gate, and every release republishes
+        // the ledger file beside the root (its atomic replace). Under
+        // parallel load the census measured this family's root re-created
+        // after the sweep had already run (s59 survived Patch-A-only trials).
+        // The gate call is the registry's own callback contract and is
+        // idempotent for keys with nothing held, so asking for every final
+        // this test requested is honest scope, not suppression.
+        foreach (array_keys($this->requestedFiles) as $file) {
+            $this->manager->onSegmentKeySettled($this->dir . '/' . $file, true);
+        }
+
         if ($this->root === '' || !is_dir($this->root)) {
             return;
         }
@@ -394,6 +412,8 @@ final class DashOnDemandServeTest extends TestCase
 
     private function get(string $file): Response
     {
+        $this->requestedFiles[$file] = true;
+
         return $this->controller->serveFile(new Request(), ['job_id' => self::JOB_ID, 'file' => $file]);
     }
 
@@ -597,7 +617,18 @@ final class DashOnDemandServeTest extends TestCase
 
     private static function rrmdir(string $dir): void
     {
-        foreach (glob("{$dir}/*") ?: [] as $path) {
+        // S439 fix (RUNSUIT cure lane, 2026-11-20): glob() does not match leading-dot
+        // entries, so the sweep never even looked at the .encode-slots /
+        // .encode-slots.lock sidecars the ledger publishes beside the root — rmdir
+        // cannot succeed with them present, so every retry pass spun and the
+        // survived root was booked as a zero-residue-census [UNKNOWN] (the s310/s58/
+        // s59 families in the CI exit-10 aborts). scandir sees everything, matching
+        // the sibling sweepers (Fmp4SegmentProductionTest, TrickplayBifProductionTest).
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $entry;
             is_dir($path) ? self::rrmdir($path) : @unlink($path);
         }
         @rmdir($dir);

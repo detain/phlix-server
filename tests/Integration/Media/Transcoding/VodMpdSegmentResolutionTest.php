@@ -60,9 +60,24 @@ final class VodMpdSegmentResolutionTest extends TestCase
 
     public static function tearDownAfterClass(): void
     {
-        if (self::$root !== null && is_dir(self::$root)) {
-            self::rrmdir(self::$root);
+        if (self::$root === null || !is_dir(self::$root)) {
+            self::$root = null;
+            return;
         }
+        // S439 hardening (mirrors DashOnDemandServeTest, S227 lane): the last
+        // encode's ledger release can publish .encode-slots into the class
+        // root AFTER the single rrmdir pass ran (RUNSUIT lane, 2026-11-20:
+        // exactly this family's root survived with only .encode-slots +
+        // .encode-slots.lock inside). Retry until the root is gone or the
+        // bounded deadline passes.
+        $deadline = hrtime(true) + 5_000_000_000;
+        do {
+            self::rrmdir(self::$root);
+            if (!is_dir(self::$root)) {
+                break;
+            }
+            usleep(100_000);
+        } while (hrtime(true) < $deadline);
         self::$root = null;
     }
 
@@ -447,7 +462,18 @@ final class VodMpdSegmentResolutionTest extends TestCase
 
     private static function rrmdir(string $dir): void
     {
-        foreach (glob("{$dir}/*") ?: [] as $path) {
+        // S439 fix (RUNSUIT cure lane, 2026-11-20): glob() does not match leading-dot
+        // entries, so the sweep never even looked at the .encode-slots /
+        // .encode-slots.lock sidecars the ledger publishes beside the root — rmdir
+        // cannot succeed with them present, so every retry pass spun and the
+        // survived root was booked as a zero-residue-census [UNKNOWN] (the s310/s58/
+        // s59 families in the CI exit-10 aborts). scandir sees everything, matching
+        // the sibling sweepers (Fmp4SegmentProductionTest, TrickplayBifProductionTest).
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $entry;
             is_dir($path) ? self::rrmdir($path) : @unlink($path);
         }
         @rmdir($dir);

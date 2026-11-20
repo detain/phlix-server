@@ -91,9 +91,25 @@ final class HlsFmp4OnDemandServeTest extends TestCase
 
     protected function tearDown(): void
     {
-        if ($this->root !== '' && is_dir($this->root)) {
-            self::rrmdir($this->root);
+        if ($this->root === '' || !is_dir($this->root)) {
+            return;
         }
+        // S439 hardening (mirrors DashOnDemandServeTest, S227 lane): a ledger
+        // release/settle read-modify-write can republish .encode-slots /
+        // .encode-slots.lock beside the root while the sweep runs — measured
+        // under parallel load (RUNSUIT lane, 2026-11-20): every case passed,
+        // yet 8 single-pass sweeps left residue that tripped the zero-residue
+        // census, surfacing as a paraunit exit-10 [UNKNOWN]. The minter owns
+        // the sweep, so retry until the root is gone or the bounded deadline
+        // passes.
+        $deadline = hrtime(true) + 5_000_000_000;
+        do {
+            self::rrmdir($this->root);
+            if (!is_dir($this->root)) {
+                return;
+            }
+            usleep(100_000);
+        } while (hrtime(true) < $deadline);
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -722,7 +738,18 @@ final class HlsFmp4OnDemandServeTest extends TestCase
 
     private static function rrmdir(string $dir): void
     {
-        foreach (glob("{$dir}/*") ?: [] as $path) {
+        // S439 fix (RUNSUIT cure lane, 2026-11-20): glob() does not match leading-dot
+        // entries, so the sweep never even looked at the .encode-slots /
+        // .encode-slots.lock sidecars the ledger publishes beside the root — rmdir
+        // cannot succeed with them present, so every retry pass spun and the
+        // survived root was booked as a zero-residue-census [UNKNOWN] (the s310/s58/
+        // s59 families in the CI exit-10 aborts). scandir sees everything, matching
+        // the sibling sweepers (Fmp4SegmentProductionTest, TrickplayBifProductionTest).
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $entry;
             is_dir($path) ? self::rrmdir($path) : @unlink($path);
         }
         @rmdir($dir);

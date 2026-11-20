@@ -450,6 +450,16 @@ final class CookieWsHandshakeRealSocketTest extends TestCase
     /** @param array<string, mixed> $server @return list<int> */
     private function rollPids(array $server): array
     {
+        // S439 hardening (RUNSUIT cure lane, 2026-11-20): the roll file is created
+        // by the forked worker only AFTER onStart(), so every readiness poll before
+        // that ran an @-suppressed read of a missing file — and PHPUnit's error
+        // handler records the suppressed stream warning anyway (CI measured 20
+        // 'Failed to open stream' entries per run for this family). The guard is
+        // poll logic, not an assertion: same answer for the caller, no warning to
+        // attribute.
+        if (!is_file((string) $server['roll'])) {
+            return [];
+        }
         $pids = [];
         foreach (preg_split('/\R/', (string) @file_get_contents($server['roll'])) ?: [] as $line) {
             if (trim($line) !== '') {
@@ -469,7 +479,13 @@ final class CookieWsHandshakeRealSocketTest extends TestCase
         $deadline = microtime(true) + 2.0;
         $contents = '';
         while (microtime(true) < $deadline) {
-            $contents = (string) @file_get_contents($server['log']);
+            // S439 hardening (RUNSUIT cure lane, 2026-11-20): same race as
+            // rollPids() — a read before the stream exists records a suppressed
+            // stream warning under PHPUnit's error handler; the guard answers
+            // '' exactly as the missing-file read did.
+            $contents = is_file((string) $server['log'])
+                ? (string) @file_get_contents($server['log'])
+                : '';
             if ($contents !== '') {
                 return $contents;
             }

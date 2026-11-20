@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Plugins\Repository;
 
 use DateTimeImmutable;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -141,9 +142,9 @@ class PluginSettingsRepository implements PluginSettingsStore
         $now = (new DateTimeImmutable('now'))->format('Y-m-d H:i:s');
 
         $this->db->query(
-            'INSERT INTO plugin_settings (plugin_name, settings_json, updated_at) '
-            . 'VALUES (?, ?, ?) '
-            . 'ON DUPLICATE KEY UPDATE settings_json = VALUES(settings_json), updated_at = VALUES(updated_at)',
+            UpsertSyntax::adapt('INSERT INTO plugin_settings (plugin_name, settings_json, updated_at) '
+            . 'VALUES (?, ?, ?) AS new_row '
+            . 'ON DUPLICATE KEY UPDATE settings_json = new_row.settings_json, updated_at = new_row.updated_at'),
             [$pluginName, (string) json_encode($settings), $now],
         );
     }

@@ -175,7 +175,11 @@ final class SharedDelegationCensusTest extends TestCase
      *    registration; both-arm byte-differential corpus and real-DB effect parity are
      *    pinned by tests/Unit/Common/Database/UpsertSyntaxAdoptionTest.php and
      *    tests/Integration/Common/Database/UpsertSyntaxAdoptionRealDbTest.php.
-     * Total 119 sites / 53 family-carrier rows (43 distinct files).
+     *  - srv-W2-UPSERT C2 (same lane, settings cluster): UpsertSyntax 1 → 3 — the
+     *    server_settings and plugin_settings write doors render through the kernel
+     *    (both-arms byte-differential corpus rows + real-DB effect parity already
+     *    prove the swap; carrier multiset grows adapt rows for both files).
+     * Total 121 sites / 55 family-carrier rows (44 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -198,7 +202,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_MYSQL_RETRY_POLICY => 1,
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
-        self::F_DB_UPSERT_SYNTAX => 1,
+        self::F_DB_UPSERT_SYNTAX => 3,
         self::F_SETTINGS_CODEC => 1,
         self::F_RELAY_LIVENESS_WINDOWS => 1,
         self::F_HUB_HOST_GRAMMAR => 1,
@@ -345,6 +349,8 @@ final class SharedDelegationCensusTest extends TestCase
         ],
         self::F_DB_UPSERT_SYNTAX => [
             'Common/Database/PhlixMySQLConnection.php' => ['detect'],
+            'Admin/SettingsRepository.php' => ['adapt'],
+            'Plugins/Repository/PluginSettingsRepository.php' => ['adapt'],
         ],
         self::F_SETTINGS_CODEC => [
             'Admin/SettingsRepository.php' => ['decode'],

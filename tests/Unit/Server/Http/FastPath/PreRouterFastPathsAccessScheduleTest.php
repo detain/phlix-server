@@ -413,6 +413,17 @@ final class PreRouterFastPathsAccessScheduleTest extends TestCase
      */
     private function dispatchOrNullOnTimer(PreRouterFastPaths $fastPaths, Request $request): ?\Phlix\Server\Http\Response
     {
+        // E1 SRV-CURE (pre-existing flake class, red in master CI runs 2026-11-18/19 and
+        // attempts 2-4 at d3e6692b): phpunit runs with executionOrder="random", and several
+        // sibling files in this suite instantiate Workerman\Worker or Timer::init an event
+        // loop. Both poison the process-static environment detection inside Timer::add
+        // (vendor workerman Timer.php:154-160): with self::$event or Worker::$workers set,
+        // the heartbeat registration SUCCEEDS and dispatch returns a Response instead of
+        // throwing the 'Timer can only be used in workerman' RuntimeException this harness
+        // deliberately relies on. Reset both slots before dispatching so the verdict is
+        // order-independent. Test-harness isolation only — zero production behavior.
+        self::resetWorkermanEnvironmentForTest();
+
         try {
             return $fastPaths->dispatch($request);
         } catch (\RuntimeException $e) {
@@ -422,6 +433,23 @@ final class PreRouterFastPathsAccessScheduleTest extends TestCase
 
             return null;
         }
+    }
+
+    /**
+     * Clear the process-static workerman environment slots consulted by
+     * Workerman\Timer::add(), so the heartbeat-throw contract holds no matter
+     * which tests ran earlier in the randomized order (E1 SRV-CURE isolation
+     * belt; reflection into the vendor class's own statics, nothing else).
+     */
+    private static function resetWorkermanEnvironmentForTest(): void
+    {
+        $timerEvent = new \ReflectionProperty(\Workerman\Timer::class, 'event');
+        $timerEvent->setAccessible(true);
+        $timerEvent->setValue(null);
+
+        $workers = new \ReflectionProperty(\Workerman\Worker::class, 'workers');
+        $workers->setAccessible(true);
+        $workers->setValue([]);
     }
 
     /** True when the scripted connection was asked to register a stream. */

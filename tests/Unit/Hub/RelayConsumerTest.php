@@ -3083,6 +3083,54 @@ class RelayConsumerTest extends TestCase
     }
 
     /**
+     * Overflow-regime pin (r1 Critical cure, srv-C5a): past the int-product
+     * edge (ping cadence > intdiv(PHP_INT_MAX, 3)) the legacy expression
+     * saturates to a FLOAT and was written silently — readers clamp it to
+     * MAX_STALE_AFTER_SECONDS. The VO delegation must never newly crash the
+     * write path there either: the belt skips delegation exactly when the
+     * product left the int domain, so these cadences keep the byte-exact
+     * pre-adoption value. The int-boundary row stays on the DELEGATED path
+     * (product == 3x cadence fits, the shared law judges it and passes).
+     * This test errors at the tip before the upper belt arm exists —
+     * TypeError: LivenessWindows::new(): Argument #2 must be of type int.
+     */
+    public function test_relay_state_keeps_legacy_semantics_beyond_the_int_product_edge(): void
+    {
+        $this->withStateDir(function (RelayStateStore $store): void {
+            // p => expected declared window; expected values are the raw
+            // legacy product expressions (int regime stays int, overflow
+            // regime saturates to float) — the same computation the
+            // pre-adoption writer performed.
+            $vectors = [
+                intdiv(PHP_INT_MAX, 3) => intdiv(PHP_INT_MAX, 3) * 3,
+                4611686018427387904 => 4611686018427387904 * 3,
+                PHP_INT_MAX => PHP_INT_MAX * 3,
+            ];
+            foreach ($vectors as $pingInterval => $expected) {
+                $consumer = $this->createConsumer(
+                    new RelayConfig(
+                        requireTls: false,
+                        enabled: true,
+                        hubRelayWsUrl: 'ws://hub.example.com:8802',
+                        localHttpAddress: '127.0.0.1:8096',
+                        pingInterval: $pingInterval,
+                    ),
+                    null,
+                    $store,
+                );
+                $this->activate($consumer);
+
+                $state = $store->readRelayState();
+                $this->assertSame(
+                    $expected,
+                    $state['staleAfterSeconds'],
+                    'cadence ' . $pingInterval . 's keeps the pre-adoption declared value'
+                );
+            }
+        });
+    }
+
+    /**
      * Extinction tripwire (scan-based, own-coverage floor): the staleness
      * declaration must run through the shared LivenessWindows law, not a
      * silently re-inlined max(). Red at the pre-adoption parent; reddens

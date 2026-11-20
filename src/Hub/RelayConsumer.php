@@ -729,7 +729,19 @@ final class RelayConsumer
         // sub-second axes fail-fast, and a live worker must not newly crash
         // on a config that historically wrote 30 (zero-behavior adoption law;
         // mirrors checkTunnelLiveness()'s own <1 grace guard).
-        if ($pingInterval >= 1) {
+        // The belt is two-sided (r1 cure): past the int-product edge the
+        // legacy expression saturates to a FLOAT and was always written
+        // silently — the readers clamp it at MAX_STALE_AFTER_SECONDS. The VO
+        // is an int domain, so delegation stops exactly where the product
+        // leaves it; overflow cadences keep the pre-adoption float pass-
+        // through instead of newly crashing the six event-path writers.
+        // The predicate is is_int(), not `<= PHP_INT_MAX`: PHP compares
+        // int-vs-float by casting the int, and the saturated float of
+        // (intdiv(PHP_INT_MAX,3) + 1) * 3 (9.2233720368547758e18) compares
+        // <= against the cast bound as EQUAL — the comparison shape lets
+        // exactly the float values it exists to exclude slip through into
+        // the int-typed VO. The extended differential measured that band.
+        if ($pingInterval >= 1 && is_int($staleAfterSeconds)) {
             $windows = LivenessWindows::new($pingInterval, $staleAfterSeconds);
             $windows->assertMargin();
             $staleAfterSeconds = $windows->reapAfterSilenceSeconds();

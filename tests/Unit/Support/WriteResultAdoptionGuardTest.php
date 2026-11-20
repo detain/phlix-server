@@ -56,7 +56,10 @@ use RecursiveIteratorIterator;
  * The scan tokenises every `*.php` under `src/` and finds every `->query(` /
  * `?->query(` call. For each it resolves the statement's leading keyword —
  * from a literal first argument, or through one hop to a `$sql = '…' . "…"`
- * assignment in the same method — and keeps only the `INSERT`/`REPLACE` ones.
+ * assignment in the same method (one that is transparent through
+ * `$sql = UpsertSyntax::adapt('…')`: the shared upsert-render kernel's literal
+ * first argument names the statement, so an adapted site counts exactly like
+ * the raw literal it grew from) — and keeps only the `INSERT`/`REPLACE` ones.
  * It then decides whether the result is consumed:
  *
  *  - **assigned to a variable** (`$result = $this->db->query(…)`) **and that
@@ -97,8 +100,17 @@ use RecursiveIteratorIterator;
  * ## Known limits — escapes that are accepted, not overlooked
  *
  *  - `$sql` resolution is one hop and straight-line only: an assignment in an
- *    `if`/`else`, or a statement built by a helper function, is not resolved,
+ *    `if`/`else`, or a statement built by a helper function other than the
+ *    estate's upsert-render kernel (`UpsertSyntax::adapt`), is not resolved,
  *    and the site then falls out of the `INSERT`/`REPLACE` count entirely.
+ *    (Lesson recorded the WRGUARD-CURE, 2026-11-20: the W2-UPSERT wave moved
+ *    seven INSERT sites to the `$sql = UpsertSyntax::adapt('…')` assignment
+ *    form and this escape swallowed 7/103 of the denominator — the landscape
+ *    had NOT changed, the scanner had gone blind, and a pin bump would have
+ *    pinned the blindness. Transparency through the wrapper is now code and
+ *    the pin kept its 103; a future mass-conversion through some OTHER helper
+ *    could repeat this exact trick, which is why the denominator's own
+ *    history matters more than its current value.)
  *  - Consumption is recognised as "variable assigned, then referenced later in
  *    the same method" or "inline in the helper". A consumption that reassigns
  *    the variable before the helper call, or passes it through a second local
@@ -197,6 +209,13 @@ final class WriteResultAdoptionGuardTest extends TestCase
      * their outcome; a failed mint surfaces as the missing-row fail-closed on
      * the next read, never as a phantom-stored success). Consumed denominator
      * unchanged. Measured 103 from the phpunit red.
+     * NOT re-pinned by the WRGUARD-CURE (2026-11-20): the W2-UPSERT wave had
+     * moved seven of these 103 sites to the `$sql = UpsertSyntax::adapt('…')`
+     * assignment form and the scanner read only 96. The pin stands — the true
+     * landscape never changed; the cure made `resolveSqlVariable` transparent
+     * through the wrapper (see unwrapUpsertAdaptCall), restoring tip
+     * enumeration to 103 with a zero set-difference against the 1091433b
+     * baseline, consumed side unchanged at 21.
      */
     private const EXPECTED_TOTAL_INSERT_CALLS = 103;
 
@@ -344,6 +363,138 @@ final class WriteResultAdoptionGuardTest extends TestCase
                 self::EXPECTED_CONSUMED_INSERT_RESULTS,
             ),
         );
+    }
+
+    /**
+     * The adapt-assignment RHS is unwrapped to its literal first argument, so
+     * a site the W2-UPSERT wave converted counts exactly like its pre-
+     * conversion raw-literal form — imported short-name and qualified (FQN)
+     * class forms both resolve, the REPLACE verb rides the same path, and the
+     * consumer side of a wrapped site is still analysed from the `query()`
+     * call itself (adopted helper, null-for-discarded).
+     */
+    public function testTheAdaptAssignmentFormIsCountedThroughTheWrapper(): void
+    {
+        $code = <<<'PHP'
+            <?php
+
+            class Probe
+            {
+                public function importForm($db): void
+                {
+                    $sql = UpsertSyntax::adapt('INSERT INTO t (a) VALUES (?)');
+                    $db->query($sql, [1]);
+                }
+
+                public function qualifiedForm($db): void
+                {
+                    $sql = \Phlix\Shared\Database\UpsertSyntax::adapt('REPLACE INTO t (a) VALUES (?)');
+                    $db->query($sql);
+                }
+
+                public function consumedThroughTheHelper($db): bool
+                {
+                    $sql = UpsertSyntax::adapt('INSERT INTO t (a) VALUES (?)');
+                    $result = $db->query($sql, [1]);
+
+                    return WriteResult::wroteNothing($result);
+                }
+            }
+            PHP;
+
+        /** @var list<array{0: int, 1: string, 2: int}|string> $tokens */
+        $tokens = token_get_all($code);
+        $calls = self::insertQueryCalls($tokens, 'probe.php');
+
+        $byMethod = [];
+        foreach ($calls as $call) {
+            $byMethod[$call['method']] = $call;
+        }
+
+        $this->assertSame(
+            ['importForm', 'qualifiedForm', 'consumedThroughTheHelper'],
+            array_keys($byMethod),
+            'source order — all three sites enumerated, none dropped',
+        );
+        $this->assertNull($byMethod['importForm']['consumedBy'], 'discarded result stays a non-consumer');
+        $this->assertNull($byMethod['qualifiedForm']['consumedBy'], 'discarded result stays a non-consumer');
+        $this->assertSame('$result', $byMethod['consumedThroughTheHelper']['consumedBy']);
+        $this->assertTrue($byMethod['consumedThroughTheHelper']['adopted']);
+    }
+
+    /**
+     * Negative arms of the unwrap: a non-INSERT literal resolves and is then
+     * NOT counted (nearest-assignment-wins, no fall-through to an older
+     * `$sql`), a foreign class sharing the `adapt` method name never unwraps,
+     * and a non-literal first argument stays the documented escape.
+     */
+    public function testTheAdaptUnwrapRejectsShapesThatAreNotInsertLiterals(): void
+    {
+        $code = <<<'PHP'
+            <?php
+
+            class Probe
+            {
+                public function selectLiteral($db): void
+                {
+                    $sql = UpsertSyntax::adapt('SELECT * FROM t');
+                    $db->query($sql);
+                }
+
+                public function foreignClass($db): void
+                {
+                    $sql = TableSyntax::adapt('INSERT INTO t (a) VALUES (?)');
+                    $db->query($sql);
+                }
+
+                public function nonLiteralArgument($db): void
+                {
+                    $rendered = 'INSERT INTO t (a) VALUES (?)';
+                    $sql = UpsertSyntax::adapt($rendered);
+                    $db->query($sql);
+                }
+            }
+            PHP;
+
+        /** @var list<array{0: int, 1: string, 2: int}|string> $tokens */
+        $tokens = token_get_all($code);
+
+        $this->assertSame(
+            [],
+            self::insertQueryCalls($tokens, 'probe.php'),
+            'the unwrap must not widen the denominator past INSERT/REPLACE literal statements',
+        );
+    }
+
+    /**
+     * The inline form `->query(UpsertSyntax::adapt('INSERT …'))` resolves on
+     * the firstArgString path and is never re-counted by the assignment path:
+     * the two resolution routes are exclusive, so no site passes through both.
+     * (The live corroboration is the tip-vs-1091433b multiset with GAINED=0.)
+     */
+    public function testTheInlineAdaptFormIsCountedOnceThroughEitherPath(): void
+    {
+        $code = <<<'PHP'
+            <?php
+
+            class Probe
+            {
+                public function inlineAdapt($db): void
+                {
+                    $db->query(
+                        UpsertSyntax::adapt('INSERT INTO t (a) VALUES (?)'),
+                        [1]
+                    );
+                }
+            }
+            PHP;
+
+        /** @var list<array{0: int, 1: string, 2: int}|string> $tokens */
+        $tokens = token_get_all($code);
+        $calls = self::insertQueryCalls($tokens, 'probe.php');
+
+        $this->assertCount(1, $calls);
+        $this->assertSame('inlineAdapt', $calls[0]['method']);
     }
 
     /**
@@ -562,6 +713,19 @@ final class WriteResultAdoptionGuardTest extends TestCase
                 continue;
             }
 
+            // Transparency through the shared upsert-render kernel: an
+            // `$sql = UpsertSyntax::adapt('INSERT …')` assignment IS the INSERT
+            // statement it wrapped, so unwrap its literal first argument and
+            // let the caller's verb gate decide — exactly how the raw-literal
+            // form counted before the W2-UPSERT conversion. Returning here on
+            // a RESOLVED adapt-call (even a non-INSERT literal) keeps the
+            // nearest-assignment-wins law: a fall-through would misread an
+            // older `$sql` assignment the call never saw.
+            $adapted = self::unwrapUpsertAdaptCall($tokens, $eq + 1, $paren);
+            if ($adapted !== null) {
+                return $adapted;
+            }
+
             $parts = [];
             $depth = 0;
             for ($j = $eq + 1; $j < $paren; $j++) {
@@ -607,6 +771,85 @@ final class WriteResultAdoptionGuardTest extends TestCase
         }
 
         return null;
+    }
+
+    /**
+     * The literal first argument of an `UpsertSyntax::adapt(…)` call when the
+     * assignment's right-hand side begins with exactly that static call, else
+     * null — the scanner's transparency arm through the shared upsert-render
+     * kernel (W2-UPSERT wave: `$sql = UpsertSyntax::adapt('INSERT …');`).
+     *
+     * Class references resolve by the same final-segment convention the
+     * scanner already applies to the helper calls (`inlineConsumer()` +
+     * `lastNameSegment()`): the imported short-name form `UpsertSyntax::adapt`
+     * and the qualified form `\Phlix\Shared\Database\UpsertSyntax::adapt`
+     * (PHP 8 emits the latter as a single T_NAME_FULLY_QUALIFIED token) both
+     * match. An instance call, a foreign class, a bare `self::`/`static::`, or
+     * a non-literal first argument returns null so the caller's existing rules
+     * stand. No sibling render helper is armed because none exists in `src/`
+     * (census 2026-11-20: `adapt` at 36 sites plus `detect`, which takes a
+     * server-version string, not a statement) — arming invented names would
+     * scan code that does not exist.
+     *
+     * Returns the literal text WITHOUT deciding its verb: the caller's
+     * existing INSERT/REPLACE gate does, so `adapt('SELECT …')` resolves and
+     * is then correctly not counted rather than falling through to an older
+     * `$sql` assignment the call never saw (nearest-assignment-wins).
+     *
+     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
+     * @param int $from  index just after the assignment's `=`
+     * @param int $limit the `->query(` call's own open paren — the RHS region
+     *                   of the nearest assignment lies entirely before it
+     */
+    private static function unwrapUpsertAdaptCall(array $tokens, int $from, int $limit): ?string
+    {
+        $class = '';
+        $pos = self::significantIndex($tokens, $from);
+
+        while (
+            $pos !== null
+            && $pos < $limit
+            && is_array($tokens[$pos])
+            && in_array(
+                $tokens[$pos][0],
+                [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED, T_NS_SEPARATOR],
+                true,
+            )
+        ) {
+            $class .= $tokens[$pos][1];
+            $pos = self::significantIndex($tokens, $pos + 1);
+        }
+
+        if ($class === '' || self::lastNameSegment($class) !== 'UpsertSyntax') {
+            return null;
+        }
+
+        if (
+            $pos === null
+            || $pos >= $limit
+            || !is_array($tokens[$pos])
+            || $tokens[$pos][0] !== T_DOUBLE_COLON
+        ) {
+            return null;
+        }
+
+        $method = self::significantIndex($tokens, $pos + 1);
+        if (
+            $method === null
+            || $method >= $limit
+            || !is_array($tokens[$method])
+            || $tokens[$method][0] !== T_STRING
+            || $tokens[$method][1] !== 'adapt'
+        ) {
+            return null;
+        }
+
+        $open = self::significantIndex($tokens, $method + 1);
+        if ($open === null || $open >= $limit || $tokens[$open] !== '(') {
+            return null;
+        }
+
+        return self::firstArgString($tokens, $open);
     }
 
     /**

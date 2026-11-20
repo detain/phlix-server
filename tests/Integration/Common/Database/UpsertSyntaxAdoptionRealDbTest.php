@@ -84,6 +84,7 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
             $alias,
             ['row-1', 'theme', 'midnight', 'string'],
             ['row-1', 'theme', 'nocturne', 'string'],
+            '0',
         );
     }
 
@@ -99,6 +100,7 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
             $alias,
             ['col-1', 'item-1', 5, '2026-01-01 00:00:00'],
             ['col-1', 'item-1', 9, '2026-02-02 00:00:00'],
+            null,
         );
     }
 
@@ -114,6 +116,7 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
             $alias,
             ['col-1', 'item-1', 1, '2026-01-01 00:00:00', 'col-1', 'item-2', 2, '2026-01-01 00:00:00'],
             ['col-1', 'item-1', 10, '2026-02-02 00:00:00', 'col-1', 'item-2', 20, '2026-02-02 00:00:00'],
+            null,
         );
     }
 
@@ -129,6 +132,7 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
             $alias,
             ['col-2', 'item-1', 1, '2026-01-01 00:00:00', 'col-2', 'item-1', 2, '2026-01-01 00:00:00'],
             ['col-2', 'item-1', 30, '2026-02-02 00:00:00', 'col-2', 'item-1', 40, '2026-02-02 00:00:00'],
+            null,
         );
     }
 
@@ -144,6 +148,7 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
             $alias,
             ['pb-1', 'sess-1', 'item-1', 100, 9000, 'playing'],
             ['pb-1', 'sess-1', 'item-1', 4500, 9000, 'paused'],
+            '0',
         );
     }
 
@@ -159,6 +164,7 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
             $alias,
             ['grp-1', 'Night', 2, 0, 'item-1', 1, 1000, 'playing', 'a:0:{}', '2026-01-01 00:00:00'],
             ['grp-1', 'Late Night', 3, 1, 'item-2', 0, 5000, 'paused', 'a:1:{}', '2026-02-02 00:00:00'],
+            '0',
         );
     }
 
@@ -174,6 +180,7 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
             $alias,
             ['hb-1', '1.0.0', 'web', 'tok-a'],
             ['hb-1', '1.2.0', 'desktop', 'tok-b'],
+            '0',
         );
     }
 
@@ -189,6 +196,7 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
             $alias,
             ['conn-1', 'w1', 'web', null, '10.0.0.1', null, null, 10, 20, 1, 2, '2026-01-01 00:00:00', '2026-01-01 00:00:00'],
             ['conn-1', 'w1', 'ws', 'usr-1', '10.0.0.2', 'sess-1', 'item-1', 300, 400, 30, 40, '2026-01-01 00:00:00', '2026-02-02 00:00:00'],
+            '0',
         );
     }
 
@@ -204,6 +212,7 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
             $alias,
             ['lib-1', '/a1', '/u1', 100, 'mp3', '/v1', '/vu1', 200, 640, 480, 'mp4', '2026-01-01 00:00:00'],
             ['lib-1', '/a2', '/u2', 101, 'ogg', '/v2', '/vu2', 201, 1280, 720, 'webm', '2026-02-02 00:00:00'],
+            '0',
         );
     }
 
@@ -219,6 +228,7 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
             $alias,
             ['ts-1', 'sess-1', 'ch-1', '/tmp/b1', 100, '2026-01-01 00:00:00', '2026-01-01 01:00:00', 3600, 10, 'active'],
             ['ts-1', 'sess-2', 'ch-2', '/tmp/b2', 200, '2026-02-01 00:00:00', '2026-02-01 01:00:00', 7200, 999, 'paused'],
+            '0',
         );
     }
 
@@ -234,6 +244,7 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
             $alias,
             ['mk-1', 'chapter', 0, 1000, 'Intro', 'usr-1', null],
             ['mk-1', 'credit', 5000, 6000, 'Credits', 'usr-2', '/t/1.png'],
+            '0',
         );
     }
 
@@ -249,6 +260,7 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
             $alias,
             ['usr-1', 2],
             ['usr-1', 7],
+            '0',
         );
     }
 
@@ -264,19 +276,31 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
             $alias,
             ['usr-2', 1, 'en'],
             ['usr-2', 4, 'de'],
+            '0',
         );
     }
 
     /**
      * Seed one arm from empty, run the updating statement, snapshot rows and
-     * the driver-visible return; repeat for the other arm; require equality.
+     * the driver-visible return; repeat for the other arm; require equality —
+     * on the RAW return values, not a kind-bucket of them.
      *
-     * @param string      $table     Scratch table under test.
-     * @param string      $probeCols Deterministic columns for the snapshot SELECT.
-     * @param string      $legacy    Pre-wave `VALUES(col)` statement text.
-     * @param string      $alias     Adopted `AS new_row` statement text.
-     * @param list<mixed> $bindsOld  Statement binds for the seeding run.
-     * @param list<mixed> $bindsNew  Statement binds for the arm runs.
+     * The raw law (Workerman\MySQL\Connection::query(), insert branch): an
+     * INSERT-class statement that the server reports as affecting rows
+     * returns `lastInsertId()` — the string `'0'` on these fixed-PK scratch
+     * tables, which carry no AUTO_INCREMENT column — while a duplicate-key
+     * update that matched but changed nothing returns null. Asserting the
+     * exact value kills both failure modes the old normalizer hid: values
+     * of the same kind but different content collapsed together, and two
+     * nulls passed vacuously.
+     *
+     * @param string      $table           Scratch table under test.
+     * @param string      $probeCols       Deterministic columns for the snapshot SELECT.
+     * @param string      $legacy          Pre-wave `VALUES(col)` statement text.
+     * @param string      $alias           Adopted `AS new_row` statement text.
+     * @param list<mixed> $bindsOld        Statement binds for the seeding run.
+     * @param list<mixed> $bindsNew        Statement binds for the arm runs.
+     * @param mixed       $expectedReturn  Exact raw driver return all three arms must produce.
      */
     private function assertArmsEquivalent(
         string $table,
@@ -285,6 +309,7 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
         string $alias,
         array $bindsOld,
         array $bindsNew,
+        mixed $expectedReturn,
     ): void {
         [$rowsL, $retL] = $this->runArm($legacy, $legacy, $bindsOld, $bindsNew, $table, $probeCols);
         [$rowsA, $retA] = $this->runArm($legacy, $alias, $bindsOld, $bindsNew, $table, $probeCols);
@@ -293,8 +318,9 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
         self::assertSame($rowsL, $rowsA, "update-arm row-state divergence on {$table}");
         self::assertSame($rowsL, $rowsF, "insert+update full-alias row-state divergence on {$table}");
 
-        self::assertSame($this->normalizeReturn($retL), $this->normalizeReturn($retA), "driver-visible return divergence on {$table}");
-        self::assertSame($this->normalizeReturn($retL), $this->normalizeReturn($retF), "full-alias return divergence on {$table}");
+        self::assertSame($expectedReturn, $retL, "legacy-arm raw driver return on {$table}");
+        self::assertSame($expectedReturn, $retA, "alias-arm raw driver return on {$table}");
+        self::assertSame($expectedReturn, $retF, "full-alias raw driver return on {$table}");
     }
 
     /**
@@ -312,23 +338,5 @@ final class UpsertSyntaxAdoptionRealDbTest extends TestCase
         $rows = $this->db->query("SELECT {$probeCols} FROM {$table} ORDER BY 1");
 
         return [$rows, $ret];
-    }
-
-    /**
-     * lastInsertId()/0-vs-null is the only thing the wrapper exposes for an
-     * INSERT-class statement; autoincrement noise must not mask divergence,
-     * so returns are compared by kind + null-ness.
-     */
-    private function normalizeReturn(mixed $ret): string
-    {
-        if (is_array($ret)) {
-            return 'array:' . count($ret);
-        }
-
-        if ($ret === null) {
-            return 'null';
-        }
-
-        return 'scalar:' . gettype($ret);
     }
 }

@@ -156,7 +156,11 @@ final class RetentionPruneTest extends TestCase
         foreach ([0, -1, -100] as $batch) {
             $this->resetStatements();
             $deleted = RetentionPrune::sweep(
-                $this->connection(static fn(): int => self::fail('no statement may run')),
+                // Block closure, not arrow: psalm 6.5 invalidates a throw/fail expression
+                // used as an arrow-return value (NoValue) — E1 SRV-CURE 2026-11-20.
+                $this->connection(static function (): int {
+                    self::fail('no statement may run');
+                }),
                 'oauth_state_store',
                 'expires_at',
                 PruneDeadline::notAfterNow(),
@@ -178,7 +182,11 @@ final class RetentionPruneTest extends TestCase
 
     public function testHardArmPropagatesAndSoftArmSwallowsSweepFailure(): void
     {
-        $boom = static fn(): mixed => throw new RuntimeException('db down');
+        // Block closure, not arrow: psalm 6.5 invalidates a throw expression
+        // used as an arrow-return value (NoValue) — E1 SRV-CURE 2026-11-20.
+        $boom = static function (): mixed {
+            throw new RuntimeException('db down');
+        };
 
         $this->expectException(RuntimeException::class);
         RetentionPrune::sweep($this->connection($boom), 't', 'c', PruneDeadline::notAfterNow(), 100, failLoud: true);
@@ -189,7 +197,9 @@ final class RetentionPruneTest extends TestCase
         $deleted = null;
         $log = $this->captureErrorLog(function () use (&$deleted): void {
             $deleted = RetentionPrune::sweep(
-                $this->connection(static fn(): mixed => throw new RuntimeException('db down')),
+                $this->connection(static function (): mixed {
+                    throw new RuntimeException('db down');
+                }),
                 't',
                 'c',
                 PruneDeadline::notAfterNow(),
@@ -433,7 +443,11 @@ final class RetentionPruneTest extends TestCase
     public function testSubOneBatchRefusesTheTwoPhaseArm(): void
     {
         $deleted = RetentionPrune::sweepByIds(
-            $this->connection(static fn(): mixed => self::fail('no statement may run')),
+            // Block closure, not arrow: psalm 6.5 invalidates a fail expression
+            // used as an arrow-return value (NoValue) — E1 SRV-CURE 2026-11-20.
+            $this->connection(static function (): mixed {
+                self::fail('no statement may run');
+            }),
             't',
             'c',
             PruneDeadline::beforeDateSubNowDays(1),

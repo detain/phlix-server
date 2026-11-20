@@ -1522,6 +1522,9 @@ final class PhlixMySQLConnectionTest extends TestCase
      * shape's read-only properties are never written from outside.
      *
      * @return \PDO&object{prepareAttempts:int, goneOnPrepare:bool, clearAfterFirst:bool}
+     *
+     * @psalm-suppress InvalidReturnType, InvalidReturnStatement -- object{} intersection is
+     *             phpstan-only for anonymous classes; psalm 6.5 cannot name the anon handle (E1 SRV-CURE)
      */
     private static function goneAwayHandle(bool $armed = false, bool $clearAfterFirst = false): \PDO
     {

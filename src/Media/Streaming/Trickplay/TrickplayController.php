@@ -362,7 +362,15 @@ class TrickplayController
         // "<root>-sibling" string-starts with "<root>" and passes, so a job directory
         // linked to a sibling of the trickplay root would be served.
         $realPath = realpath($this->getJobDir($jobId) . '/' . $fileName);
-        if ($realPath === false || !str_starts_with($realPath, $this->trickplayDir . '/')) {
+        // Split guards (not one disjunction): psalm 6.5 cannot narrow through '||', so the
+        // ternary below still saw false in its subject until this reshape — is_string()
+        // keeps the value set identical to '=== false' for realpath()'s string|false domain
+        // (E1 SRV-CURE 2026-11-20).
+        if (!is_string($realPath)) {
+            return null;
+        }
+
+        if (!str_starts_with($realPath, $this->trickplayDir . '/')) {
             return null;
         }
 

@@ -905,7 +905,10 @@ final class MediaAssetJobStore
     private function oldestStreamJobFiles(int $count): array
     {
         // Largest name on top: extract() then drops the newest name whenever the heap holds more than $count.
-        $heap = new class extends \SplHeap {
+        // Element type declared array-key (not string) because the iterator can hand back
+        // whatever SPL stored — the is_string belts below are load-bearing documentation
+        // of that, and phpstan flags a narrowed template that makes them dead (E1 SRV-CURE).
+        $heap = new /** @extends \SplHeap<array-key> */ class extends \SplHeap {
             protected function compare(mixed $value1, mixed $value2): int
             {
                 if (!is_string($value1) || !is_string($value2)) {

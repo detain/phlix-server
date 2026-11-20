@@ -17,6 +17,7 @@ use Phlix\Auth\TokenSessionRepository;
 use Phlix\Auth\WebAuthn\WebAuthnChallengeStore;
 use Phlix\Casting\CastingSessionStore;
 use Phlix\Common\RateLimit\DbRateLimiter;
+use Phlix\Common\RateLimit\RateLimitState;
 use Phlix\Plugins\OAuth2\DbOAuth2StateStore;
 use Phlix\Plugins\Oidc\DbOidcStateStore;
 use Phlix\Server\Integrations\Lastfm\DbLastfmOAuthStateStore;
@@ -97,9 +98,16 @@ final class RetentionPruneSitePostureTest extends TestCase
             return ($this->sweepThrowsHandler('DELETE FROM rate_limit_buckets'))($sql, $params);
         });
 
+        $state = null;
         $log = $this->captureErrorLog(function () use (&$db, &$state): void {
             $state = (new DbRateLimiter($db))->hit('login:1.2.3.4');
         });
+
+        // Narrow the by-ref out-param for psalm 6.5 (UndefinedVariable otherwise);
+        // a non-State answer is a hard test failure, not a silent pass (E1 SRV-CURE).
+        if (!$state instanceof RateLimitState) {
+            self::fail('the decision path must have answered even when the sweep threw');
+        }
 
         $this->assertContains('DELETE FROM rate_limit_buckets WHERE reset_at <= ? LIMIT ?', $seen);
         $this->assertSame(1, $state->remaining >= 0 ? 1 : 0, 'the decision path still answered');

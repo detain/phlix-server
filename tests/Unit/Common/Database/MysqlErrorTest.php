@@ -40,7 +40,7 @@ final class MysqlErrorTest extends TestCase
     private const SELF_PATH = __DIR__ . '/MysqlErrorTest.php';
 
     /**
-     * @return array<array{array<array-key,mixed>|int|null}> [errorInfo, expected]
+     * @return array<array-key, list{array<array-key, mixed>, int|null}> [errorInfo, expected]
      */
     public static function errorInfoShapes(): array
     {

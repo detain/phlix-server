@@ -58,7 +58,7 @@ final class SharedPrimitiveDelegationTest extends TestCase
         return base64_decode(strtr($data, '-_', '+/'), true) ?: '';
     }
 
-    /** @return array<string, array{0: string}> */
+    /** @return array<array-key, list{string}> */
     public static function provideByteCorpus(): array
     {
         $vectors = [[''], ['a'], ['ab'], ['abc'], ['hello world'], ["\x00\x01\x02"], ["\xff\xfe\xfd"], ['0'], ['Hello World']];

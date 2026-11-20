@@ -42,7 +42,7 @@ final class PasswordHasherAdoptionTest extends TestCase
      *
      * @param array<string, mixed> $userRow row returned for any SELECT
      *
-     * @return array{UserRepository, stdClass} the stdClass carries ->calls
+     * @return array{UserRepository, object{calls: list<array{string, array<int|string, mixed>}>}} the recorder shape carries ->calls
      */
     private function repoRecordingQueries(array $userRow): array
     {
@@ -64,11 +64,11 @@ final class PasswordHasherAdoptionTest extends TestCase
     }
 
     /**
-     * @param stdClass $recorder recorder from {@see self::repoRecordingQueries()}
+     * @param object{calls: list<array{string, array<int|string, mixed>}>} $recorder recorder from {@see self::repoRecordingQueries()}
      *
      * @return list<array{string, array<int|string, mixed>}>
      */
-    private function updates(stdClass $recorder): array
+    private function updates(object $recorder): array
     {
         return array_values(array_filter(
             $recorder->calls,
@@ -241,9 +241,14 @@ final class PasswordHasherAdoptionTest extends TestCase
         $manager = new UserProfileManager($db);
         $manager->setPin('profile-1', '482917');
 
-        $this->assertCount(1, $recorder->calls);
-        $this->assertStringStartsWith('UPDATE profile_settings SET pin_hash = ?', $recorder->calls[0][0]);
-        $pinHash = $recorder->calls[0][1][0];
+        // Extract the recorder's calls behind a typed local: psalm 6.5 does not keep
+        // the object{} shape across a stdClass assignment + closure-by-value, so the
+        // consumer narrows here instead (E1 SRV-CURE 2026-11-20).
+        /** @var list<array{string, array<int|string, mixed>}> $calls */
+        $calls = $recorder->calls;
+        $this->assertCount(1, $calls);
+        $this->assertStringStartsWith('UPDATE profile_settings SET pin_hash = ?', $calls[0][0]);
+        $pinHash = $calls[0][1][0];
         $this->assertIsString($pinHash);
         $this->assertStringStartsWith(
             self::CANONICAL_EMBEDDED_PARAMS,

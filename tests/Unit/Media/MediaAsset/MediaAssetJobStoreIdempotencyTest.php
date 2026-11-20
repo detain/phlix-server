@@ -447,7 +447,10 @@ final class MediaAssetJobStoreIdempotencyTest extends TestCase
         $this->assertSame($seen['writeTo'], $seen['renameFrom']);
         $this->assertMatchesRegularExpression('/\/\d{20}-item-a\.streams\.job\.json$/', (string) $seen['renameTo']);
 
-        $entries = array_values(array_diff((array) scandir($this->queueDir), ['.', '..']));
+        // scandir() can return false; naming the listing keeps psalm's array_filter
+        // subject list<string> instead of list<string|false> (E1 SRV-CURE 2026-11-20).
+        $listing = scandir($this->queueDir);
+        $entries = array_values(array_diff($listing === false ? [] : $listing, ['.', '..']));
         $finals = array_values(array_filter($entries, static fn (string $e): bool => str_ends_with($e, '.streams.job.json')));
         $temps = array_values(array_filter($entries, static fn (string $e): bool => str_ends_with($e, '.tmp')));
 

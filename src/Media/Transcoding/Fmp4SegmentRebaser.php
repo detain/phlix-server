@@ -90,6 +90,12 @@ namespace Phlix\Media\Transcoding;
  *     promoted: bool
  * }
  *
+ * Note (E1 SRV-CURE 2026-11-20): psalm 6.5 does not resolve the phpstan-type
+ * aliases above, and class-level alias tables can be lost by ordering when this file
+ * is dependency-loaded from scripts/fmp4-rebase-segment.php before psalm scans it.
+ * Its own type-alias tag therefore rides on each using method below; the phpstan
+ * pair above stays untouched.
+ *
  * @package Phlix\Media\Transcoding
  * @since S56
  */
@@ -163,7 +169,18 @@ final class Fmp4SegmentRebaser
     {
         self::assertStart($startSeconds);
 
-        /** @var Plan $plan */
+        /**
+         * Seed of the plan; literal shape because class-level aliases are not
+         * psalm-order-safe (E1 SRV-CURE 2026-11-20).
+         *
+         * @var array{
+         *     edits: list<array{int, int}>,
+         *     patches: list<array{int, int, string}>,
+         *     dataOffsets: list<array{int, int, int}>,
+         *     absoluteBase: bool,
+         *     rewritten: int
+         * } $plan
+         */
         $plan = ['edits' => [], 'patches' => [], 'dataOffsets' => [], 'absoluteBase' => false, 'rewritten' => 0];
         $sidxs = [];
 
@@ -305,6 +322,17 @@ final class Fmp4SegmentRebaser
      * can also force promotion; rebaseBytes() decides that once every edit is known, and the growth
      * is recorded after every box has been planned. A version other than 0 or 1 is refused.
      *
+     * @psalm-type SidxPlan = array{
+     *     offset: int,
+     *     size: int,
+     *     header: int,
+     *     version: int,
+     *     timescale: int,
+     *     earliest: int,
+     *     firstOffset: int,
+     *     promoted: bool
+     * }
+     *
      * @return SidxPlan
      *
      * @throws \RuntimeException For a sidx of version 2 or later, or a zero timescale.
@@ -359,6 +387,14 @@ final class Fmp4SegmentRebaser
      * Plans `moof`: each `traf` in it, then the `moof` header if any traf grew it.
      *
      * @param array<int, int> $timescales `track_ID => media timescale`, from {@see trackTimescales()}.
+     * @psalm-type Plan = array{
+     *     edits: list<array{int, int}>,
+     *     patches: list<array{int, int, string}>,
+     *     dataOffsets: list<array{int, int, int}>,
+     *     absoluteBase: bool,
+     *     rewritten: int
+     * }
+     *
      * @param Plan            $plan       Updated in place.
      */
     private static function planMoof(
@@ -401,6 +437,14 @@ final class Fmp4SegmentRebaser
      * `trun@data_offset` fields whose base is the moof start.
      *
      * @param array<int, int> $timescales `track_ID => media timescale`, from {@see trackTimescales()}.
+     * @psalm-type Plan = array{
+     *     edits: list<array{int, int}>,
+     *     patches: list<array{int, int, string}>,
+     *     dataOffsets: list<array{int, int, int}>,
+     *     absoluteBase: bool,
+     *     rewritten: int
+     * }
+     *
      * @param Plan            $plan       Updated in place.
      *
      * @return int Bytes this traf grew by (0 or 4).
@@ -512,6 +556,17 @@ final class Fmp4SegmentRebaser
      * first_offset is recomputed from the new position of the first referenced byte, measured from
      * the new end of the sidx. Only these fields change; the reserved bytes and reference_count are
      * copied through.
+     *
+     * @psalm-type SidxPlan = array{
+     *     offset: int,
+     *     size: int,
+     *     header: int,
+     *     version: int,
+     *     timescale: int,
+     *     earliest: int,
+     *     firstOffset: int,
+     *     promoted: bool
+     * }
      *
      * @param SidxPlan                  $sidx
      * @param list<array{int, int}>     $edits

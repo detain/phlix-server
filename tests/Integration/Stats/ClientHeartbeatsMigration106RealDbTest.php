@@ -53,11 +53,10 @@ final class ClientHeartbeatsMigration106RealDbTest extends TestCase
         // S126 gate + scratch create/quintet/naming + fix-dir copy all live in
         // UsesScratchDatabase (H-08): skip on genuine absence, LOUD on
         // reachable-but-unusable.
-        $this->openScratchDatabase('skipping the S518 migration-106 upsert proof. Runs in CI.', 's518');
+        $db = $this->openScratchDatabase('skipping the S518 migration-106 upsert proof. Runs in CI.', 's518');
 
         $this->fixDir = $this->scratchFixDir('fix', [self::MIGRATION_106]);
 
-        $db = $this->db;
         $runner = new MigrationRunner(static fn (): Connection => $db, $this->fixDir);
         $result = $runner->run();
         $this->assertSame(

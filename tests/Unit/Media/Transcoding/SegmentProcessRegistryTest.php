@@ -745,10 +745,10 @@ final class SegmentProcessRegistryTest extends TestCase
         // No progress for longer than the stall window (1 s), while the launch is younger than the wall cap (2 s).
         // Only the stall branch of watchdogReason() can reap it, so the logged reason must be 'stall'.
         $logger = new class extends AbstractLogger {
-            /** @var list<array{message: string, context: array<string, mixed>}> */
+            /** @var list<array{message: string, context: array<array-key, mixed>}> */
             public array $records = [];
 
-            /** @param array<string, mixed> $context */
+            /** @param array<array-key, mixed> $context */
             public function log($level, $message, array $context = []): void
             {
                 $this->records[] = ['message' => (string) $message, 'context' => $context];

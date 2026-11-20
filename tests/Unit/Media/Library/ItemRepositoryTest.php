@@ -4643,6 +4643,7 @@ class ItemRepositoryTest extends TestCase
         foreach ($bucketVectors as $row) {
             $feed = array_merge(['letter' => 'A'], $row);
             $service = new ItemRepository($this->rowConnection([$feed], 'AS letter'));
+            /** @psalm-suppress InvalidArrayOffset -- the verbatim :3785 letter leg probes a legacy SQL-alias key this fixture never carries by design (E1 SRV-CURE) */
             $count = isset($feed['n']) && is_numeric($feed['n']) ? (int) $feed['n'] : 0;
             $this->assertSame([['letter' => 'A', 'count' => $count]], $service->letterCounts([]));
         }

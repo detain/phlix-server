@@ -19,7 +19,12 @@ namespace Phlix\LiveTv {
             return "4242\n";
         }
 
-        return \shell_exec($command);
+        // psalm 6.5 maps \shell_exec() to false|string|null while PHP documents
+        // string|null; normalize the false arm without changing the value domain
+        // (E1 SRV-CURE 2026-11-20).
+        $output = \shell_exec($command);
+
+        return is_string($output) ? $output : null;
     }
 }
 

@@ -173,11 +173,13 @@ final class TxMutexExtinctionSoleImplTest extends TestCase
             }
         }
 
-        // Measured 2026-11-23 at the V059 tip: 806 PHP files under src/
-        // (781 throw-statement literal sites, zero convictions under the
-        // broadened law). The floor exists to catch a silently-broken scan
-        // (cwd/iterator regression), not to pin the corpus size — keep
-        // generous headroom below the measured value.
+        // Measured 2026-11-20 at the V059 tip, re-counted unchanged at
+        // the v1.0.3 re-pin tip the same day: 806 PHP files under src/,
+        // 663 of its 782 throw statements carry a string literal, zero
+        // convictions under the broadened law. The floor exists to
+        // catch a silently-broken scan (cwd/iterator regression), not
+        // to pin the corpus size — keep generous headroom below the
+        // measured value.
         self::assertGreaterThan(500, $scanned, 'the src/ corpus scan must actually run');
     }
 
@@ -324,10 +326,13 @@ final class TxMutexExtinctionSoleImplTest extends TestCase
      * Scope law (honest limits, same spirit as the census classifier):
      * BYTE wordings in throw regions convict; indirection — a variable
      * hold, a helper call returning the shared const — is the blessed
-     * form and is not chased statically; escape sequences are NOT
-     * decoded, which is safe because no character of the four law
-     * wordings is escape-representable, so a byte-identical re-inline
-     * cannot hide behind one.
+     * form and is not chased statically. Escape sequences are likewise
+     * NOT decoded: token_get_all hands the raw escaped source to the
+     * byte comparison, so a DELIBERATE escape-encoded re-inline (e.g.
+     * "\x20" for a space inside a double-quoted throw) evades it. That
+     * shares the sanctioned indirection trade above rather than needing
+     * new cover — the law exists to catch ACCIDENTAL shapes, and every
+     * accidental shape convicts.
      *
      * @param list<array{0:int,1:string,2:int}|string> $tokens
      * @return list<array{0:int,1:string}>

@@ -55,6 +55,24 @@
             "method": "repository",
             "recorded": "2026-11-10",
             "reason": "The site is `self::fail('unexpected statement issued by searchCount(): ' . $sql)` — the last-arm guard of the repository() helper's willReturnCallback, added with the SH-023 search-count legs (2ded3496). The closure IS invoked on every query the method under test dispatches, but only its three leg arms (artists JOIN, albums JOIN, COUNT(*) primary) run: the guard line is reached only if searchCount() issues a fourth statement shape or a leg whose answer the test did not stub — unreachable on the passing path BY DESIGN, since making it run would mean the code under test issuing SQL it must not (and a fail() arm that ever executes reddens the test itself). The sibling legs of the same helper GATES, proving the probe executes this file's mock wiring. Mocked Workerman MySQL Connection, no database touched — deterministic on every box (measured NOT-REACHED locally and on CI run 42795623411, 2026-11-10)."
+        },
+        {
+            "file": "tests/Unit/Playlists/SmartPlaylistDecodeInboundTest.php",
+            "method": "createHarness",
+            "recorded": "2026-11-20",
+            "reason": "The site is `$this->fail('unexpected SQL reached by the create path: ' . $sql)` — the last-arm guard of the createHarness() mock's willReturnCallback, added with the smart-playlist decode adoption (7506f306). The closure IS invoked on every create-path test, but only its handler arm runs: the flow under test issues exactly the INSERT INTO smart_playlists shape that arm resolves. The guard line is unreachable on the passing path BY DESIGN — making it run would mean the controller issuing SQL it must not, i.e. breaking the behaviour under test (and a fail() arm that ever executes reddens the test itself). The same tests' own 201 + recorded-insert assertions prove the enclosing mock wiring does execute; the decode-shape legs of this file's sibling harnesses GATE. Mocked Connection, no database — deterministic on every box (measured NOT-REACHED locally, and the sole UNRECORDED discrepancy of the S180 prober on CI job 136316431205, run 44744570073, 2026-11-20)."
+        },
+        {
+            "file": "tests/Unit/Common/Database/RetentionPruneTest.php",
+            "method": "testSubOneBatchRefusesToSweep",
+            "recorded": "2026-11-20",
+            "reason": "The site is `self::fail('no statement may run')` — the body of the never-arming guard closure passed to connection() inside the sub-one-batch loop. RetentionPrune::sweep() must refuse BEFORE dispatching any statement, so the closure is never invoked on the passing path BY DESIGN: making the guard run would mean the sweep-arm under test leaked a query it must not issue. The site exists as a prober closure only since the arrow→block conversion of the E1 SRV-CURE psalm 6.5 NoValue fix (before it, arrow fn bodies were out of the census); the file's boom-exercised closures (hard-arm throw, soft-arm swallow) GATE, proving the probe executes this file's wiring. Mocked Connection, no database — deterministic on every box (measured NOT-REACHED locally, bulk --probe 2026-11-20)."
+        },
+        {
+            "file": "tests/Unit/Common/Database/RetentionPruneTest.php",
+            "method": "testSubOneBatchRefusesTheTwoPhaseArm",
+            "recorded": "2026-11-20",
+            "reason": "Same shape as the testSubOneBatchRefusesToSweep entry: the `self::fail('no statement may run')` guard closure inside the two-phase-arm refusal loop, introduced as a prober site by the arrow→block psalm NoValue conversion (E1 SRV-CURE 2026-11-20). The two-phase sweep must refuse at the batch-count gate without touching the connection, so the closure never runs on the passing path by design; making it run would break the very refusal the test asserts. Mocked Connection, no database — deterministic on every box (measured NOT-REACHED locally, bulk --probe 2026-11-20)."
         }
     ]
 }

@@ -21,6 +21,7 @@ use Phlix\LiveTv\Tuners\Dvbt\DvbtDevice;
 use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
 use Phlix\LiveTv\Tuners\Iptv\IptvDevice;
 use Phlix\LiveTv\Tuners\TunerDriverInterface;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -333,9 +334,10 @@ class LiveTvManager
     private function registerTuner(array $tuner): void
     {
         $this->db->query(
-            "INSERT INTO livetv_tuners (tuner_id, name, type, status, capabilities, discovered_at)
+            UpsertSyntax::adapt("INSERT INTO livetv_tuners (tuner_id, name, type, status, capabilities, discovered_at)
              VALUES (?, ?, ?, ?, ?, NOW())
-             ON DUPLICATE KEY UPDATE name = VALUES(name), type = VALUES(type), status = VALUES(status)",
+              AS new_row
+             ON DUPLICATE KEY UPDATE name = new_row.name, type = new_row.type, status = new_row.status"),
             [
                 $tuner['id'],
                 $tuner['name'],

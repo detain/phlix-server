@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\LiveTv\TimeShift;
 
 use Phlix\Common\Util\RowMap;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -62,21 +63,22 @@ final class DbTimeShiftSessionStore
     public function save(TimeShiftSession $session): void
     {
         $this->db->query(
-            "INSERT INTO livetv_timeshift_sessions
+            UpsertSyntax::adapt("INSERT INTO livetv_timeshift_sessions
                 (id, session_id, channel_id, buffer_dir, pid,
                  buffer_start_at, buffer_end_at, window_seconds,
                  cursor_position, status)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              AS new_row
              ON DUPLICATE KEY UPDATE
-                channel_id = VALUES(channel_id),
-                buffer_dir = VALUES(buffer_dir),
-                pid = VALUES(pid),
-                buffer_start_at = VALUES(buffer_start_at),
-                buffer_end_at = VALUES(buffer_end_at),
-                window_seconds = VALUES(window_seconds),
-                cursor_position = VALUES(cursor_position),
-                status = VALUES(status),
-                updated_at = CURRENT_TIMESTAMP",
+                channel_id = new_row.channel_id,
+                buffer_dir = new_row.buffer_dir,
+                pid = new_row.pid,
+                buffer_start_at = new_row.buffer_start_at,
+                buffer_end_at = new_row.buffer_end_at,
+                window_seconds = new_row.window_seconds,
+                cursor_position = new_row.cursor_position,
+                status = new_row.status,
+                updated_at = CURRENT_TIMESTAMP"),
             [
                 $session->id,
                 $session->session_id,

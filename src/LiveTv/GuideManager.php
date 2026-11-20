@@ -17,6 +17,7 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Uuid;
 use Phlix\LiveTv\Dto\RowAccess;
 use Phlix\LiveTv\Dto\RowQuery;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -454,27 +455,28 @@ class GuideManager
             : ($data['series_episode'] ?? null);
 
         $this->db->query(
-            "INSERT INTO livetv_programs
+            UpsertSyntax::adapt("INSERT INTO livetv_programs
              (program_id, channel_id, title, description, start_time, end_time,
               category, series_id, episode_number, episode_title, rating_system,
               rating, year, series_episode, is_repeat, is_film, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+              AS new_row
              ON DUPLICATE KEY UPDATE
-                title = VALUES(title),
-                description = VALUES(description),
-                start_time = VALUES(start_time),
-                end_time = VALUES(end_time),
-                category = VALUES(category),
-                series_id = VALUES(series_id),
-                episode_number = VALUES(episode_number),
-                episode_title = VALUES(episode_title),
-                rating_system = VALUES(rating_system),
-                rating = VALUES(rating),
-                year = VALUES(year),
-                series_episode = VALUES(series_episode),
-                is_repeat = VALUES(is_repeat),
-                is_film = VALUES(is_film),
-                updated_at = NOW()",
+                title = new_row.title,
+                description = new_row.description,
+                start_time = new_row.start_time,
+                end_time = new_row.end_time,
+                category = new_row.category,
+                series_id = new_row.series_id,
+                episode_number = new_row.episode_number,
+                episode_title = new_row.episode_title,
+                rating_system = new_row.rating_system,
+                rating = new_row.rating,
+                year = new_row.year,
+                series_episode = new_row.series_episode,
+                is_repeat = new_row.is_repeat,
+                is_film = new_row.is_film,
+                updated_at = NOW()"),
             [
                 $programId,
                 $channelId,

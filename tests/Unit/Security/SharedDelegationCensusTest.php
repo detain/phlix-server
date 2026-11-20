@@ -202,7 +202,12 @@ final class SharedDelegationCensusTest extends TestCase
      *    adapt(); the two additive/GREATEST flush legs in the same file stay
      *    VALUES()-native (stored-column references render non-byte-identical under
      *    the alias — KEEP-with-evidence, corpus FINDING rows).
-     * Total 142 sites / 71 family-carrier rows (58 distinct files).
+     *  - srv-W2-UPSERT C7 (same lane, LiveTv cluster): UpsertSyntax 24 → 28 —
+     *    DbTimeShiftSessionStore's claim-renewal upsert, GuideManager's programme
+     *    row upsert, ChannelManager's channel-row upsert (the :413 added_at=NOW()
+     *    site there is a refs=0 KEEP) and LiveTvManager's schedule upsert adopt the
+     *    row-alias form behind adapt().
+     * Total 146 sites / 75 family-carrier rows (62 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -225,7 +230,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_MYSQL_RETRY_POLICY => 1,
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
-        self::F_DB_UPSERT_SYNTAX => 24,
+        self::F_DB_UPSERT_SYNTAX => 28,
         self::F_SETTINGS_CODEC => 1,
         self::F_RELAY_LIVENESS_WINDOWS => 1,
         self::F_HUB_HOST_GRAMMAR => 1,
@@ -389,6 +394,10 @@ final class SharedDelegationCensusTest extends TestCase
             'Session/SyncPlay/SyncPlaySnapshotService.php' => ['adapt'],
             'Stats/ClientHeartbeatStore.php' => ['adapt'],
             'Stats/Metrics/MetricsFlushService.php' => ['adapt'],
+            'LiveTv/ChannelManager.php' => ['adapt'],
+            'LiveTv/GuideManager.php' => ['adapt'],
+            'LiveTv/LiveTvManager.php' => ['adapt'],
+            'LiveTv/TimeShift/DbTimeShiftSessionStore.php' => ['adapt'],
         ],
         self::F_SETTINGS_CODEC => [
             'Admin/SettingsRepository.php' => ['decode'],

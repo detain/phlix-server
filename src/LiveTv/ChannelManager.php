@@ -17,6 +17,7 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
 use Phlix\LiveTv\Dto\RowAccess;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -566,9 +567,10 @@ class ChannelManager
     public function addChannelToLineup(string $lineupId, string $channelId, int $position = 0): bool
     {
         $this->db->query(
-            "INSERT INTO livetv_lineup_channels (lineup_id, channel_id, position)
+            UpsertSyntax::adapt("INSERT INTO livetv_lineup_channels (lineup_id, channel_id, position)
              VALUES (?, ?, ?)
-             ON DUPLICATE KEY UPDATE position = VALUES(position)",
+              AS new_row
+             ON DUPLICATE KEY UPDATE position = new_row.position"),
             [$lineupId, $channelId, $position]
         );
 

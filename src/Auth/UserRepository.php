@@ -16,6 +16,7 @@ use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
 use Phlix\Plugins\ThemeRegistryFleetSync;
 use Phlix\Shared\Auth\PasswordHasher as SharedHasher;
+use Phlix\Shared\Database\UpsertSyntax;
 use Phlix\Shared\Security\CredentialDigest;
 use Phlix\Theming\BuiltInThemes;
 use Phlix\Theming\ThemeSourceRegistry;
@@ -896,20 +897,25 @@ class UserRepository
         }
 
         if ($columns !== []) {
-            // Upsert in a single statement (user_id is the PRIMARY KEY), matching the
-            // INSERT ... ON DUPLICATE KEY UPDATE convention used elsewhere in this
-            // codebase (e.g. AudiobookProgressStore). On a new row the VALUES() are
-            // inserted; on an existing row only the supplied columns are updated.
+            // Upsert in a single statement (user_id is the PRIMARY KEY), written in
+            // row-alias form and rendered through the shared UpsertSyntax kernel like
+            // the other upsert doors in this codebase (e.g. AudiobookProgressStore):
+            // adapt() keeps the alias form on engines that know it (MySQL 8.0.19+)
+            // and falls back to the VALUES() form on MariaDB. On a new row the
+            // VALUES are inserted; on an existing row only the supplied columns update.
             $insertColumns = array_merge(['user_id'], $columns);
             $placeholders = implode(', ', array_fill(0, count($insertColumns), '?'));
             $updateClause = implode(
                 ', ',
-                array_map(static fn (string $col): string => "{$col} = VALUES({$col})", $columns)
+                array_map(static fn (string $col): string => "{$col} = new_row.{$col}", $columns)
             );
 
-            $sql = 'INSERT INTO user_settings (' . implode(', ', $insertColumns) . ')'
+            $sql = UpsertSyntax::adapt(
+                'INSERT INTO user_settings (' . implode(', ', $insertColumns) . ')'
                 . ' VALUES (' . $placeholders . ')'
-                . ' ON DUPLICATE KEY UPDATE ' . $updateClause;
+                . ' AS new_row'
+                . ' ON DUPLICATE KEY UPDATE ' . $updateClause
+            );
 
             $this->db->query($sql, array_merge([$userId], $values));
         }

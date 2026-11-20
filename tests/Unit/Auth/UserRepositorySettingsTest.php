@@ -11,8 +11,10 @@ use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Manifest;
 use Phlix\Plugins\PluginLoader;
 use Phlix\Plugins\ThemeRegistryFleetSync;
+use Phlix\Shared\Database\UpsertSyntax;
 use Phlix\Theming\ThemeSourceInterface;
 use Phlix\Theming\ThemeSourceRegistry;
+use PHPUnit\Framework\Attributes\After;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Workerman\MySQL\Connection;
@@ -68,13 +70,75 @@ final class UserRepositorySettingsTest extends TestCase
         $this->assertStringContainsString('VALUES (?, ?, ?)', $capturedSql);
         $this->assertStringNotContainsString('= ?,', $capturedSql, 'INSERT column list must not contain assignment fragments');
 
-        // Upsert clause keeps the existing-row path correct.
+        // Upsert clause keeps the existing-row path correct. W2-UPSERT: the unit
+        // thread defaults to the kernel's row-alias arm; the MariaDB VALUES() arm
+        // is pinned by test_update_settings_emits_flavor_specific_upsert_sql.
         $this->assertStringContainsString('ON DUPLICATE KEY UPDATE', $capturedSql);
-        $this->assertStringContainsString('max_streams = VALUES(max_streams)', $capturedSql);
-        $this->assertStringContainsString('preferred_audio_language = VALUES(preferred_audio_language)', $capturedSql);
+        $this->assertStringContainsString('max_streams = new_row.max_streams', $capturedSql);
+        $this->assertStringContainsString(
+            'preferred_audio_language = new_row.preferred_audio_language',
+            $capturedSql
+        );
 
         // Bind order: user_id first, then column values (no duplicated user_id).
         $this->assertSame(['user-1', 5, 'fr'], $capturedBindings);
+    }
+
+    /**
+     * The W2-UPSERT adoption made this builder flavor-aware: the shared kernel
+     * decides which upsert grammar goes on the wire. Both arms are pinned
+     * against the REAL builder (not a re-render): modern MySQL keeps the
+     * row-alias form, MariaDB gets the VALUES() form byte-for-byte as the
+     * pre-wave code emitted. Corpus + real-MySQL effect parity:
+     * UpsertSyntaxAdoptionTest / UpsertSyntaxAdoptionRealDbTest.
+     */
+    public function test_update_settings_emits_flavor_specific_upsert_sql(): void
+    {
+        $build = function (): string {
+            $capturedSql = null;
+            $db = $this->createMock(Connection::class);
+            $db->expects($this->once())
+                ->method('query')
+                ->willReturnCallback(function (string $sql, array $bindings = []) use (&$capturedSql) {
+                    $capturedSql = $sql;
+                    return [];
+                });
+
+            $repo = new UserRepository($db);
+            $repo->updateSettings('user-1', [
+                'max_streams' => 5,
+                'preferred_audio_language' => 'fr',
+            ]);
+
+            $this->assertIsString($capturedSql);
+
+            return $capturedSql;
+        };
+
+        $aliasArm = 'INSERT INTO user_settings (user_id, max_streams, preferred_audio_language)'
+            . ' VALUES (?, ?, ?) AS new_row'
+            . ' ON DUPLICATE KEY UPDATE max_streams = new_row.max_streams,'
+            . ' preferred_audio_language = new_row.preferred_audio_language';
+        $legacyArm = 'INSERT INTO user_settings (user_id, max_streams, preferred_audio_language)'
+            . ' VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE max_streams = VALUES(max_streams),'
+            . ' preferred_audio_language = VALUES(preferred_audio_language)';
+
+        UpsertSyntax::reset();
+        $this->assertSame($aliasArm, $build(), 'modern MySQL keeps the row-alias form');
+
+        UpsertSyntax::detect('10.11.8-MariaDB-1:10.11.8');
+        $this->assertSame(
+            $legacyArm,
+            $build(),
+            'MariaDB renders the VALUES() form exactly as the pre-wave wire did'
+        );
+    }
+
+    #[After]
+    protected function restoreKernelFlavor(): void
+    {
+        // The kernel flavor flag is process-global; never bleed into later tests.
+        UpsertSyntax::reset();
     }
 
     public function test_update_settings_encodes_transcoding_preferences(): void

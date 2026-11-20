@@ -212,7 +212,14 @@ final class SharedDelegationCensusTest extends TestCase
      *    StreamSessionService, CustomFormatSyncer, LastfmSessionRepository,
      *    MigrationRunner's ledger stamp (self::LEDGER_TABLE-resolved concat) and
      *    StreamManager's session-row upsert adopt the row-alias form behind adapt().
-     * Total 153 sites / 82 family-carrier rows (68 distinct files).
+     *  - srv-W2-UPSERT C9 (same lane, the last door): UpsertSyntax 35 → 36 — the
+     *    dynamic user_settings builder in UserRepository::updateSettings() maps its
+     *    column-leg closures onto new_row references and carries the AS new_row
+     *    fragment; both arms are corpus-proven (harness pairs n=1/n=2) and
+     *    real-MySQL effect-parity legs (integration Dyn methods); the capture pins
+     *    in UserRepositorySettingsTest now pin both flavors' full strings against
+     *    the REAL builder.
+     * Total 154 sites / 83 family-carrier rows (68 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -235,7 +242,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_MYSQL_RETRY_POLICY => 1,
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
-        self::F_DB_UPSERT_SYNTAX => 35,
+        self::F_DB_UPSERT_SYNTAX => 36,
         self::F_SETTINGS_CODEC => 1,
         self::F_RELAY_LIVENESS_WINDOWS => 1,
         self::F_HUB_HOST_GRAMMAR => 1,
@@ -410,6 +417,7 @@ final class SharedDelegationCensusTest extends TestCase
             'Server/Arr/CustomFormatSyncer.php' => ['adapt'],
             'Server/Integrations/Lastfm/LastfmSessionRepository.php' => ['adapt'],
             'Theming/ThemeMediaRepository.php' => ['adapt'],
+            'Auth/UserRepository.php' => ['adapt'],
         ],
         self::F_SETTINGS_CODEC => [
             'Admin/SettingsRepository.php' => ['decode'],

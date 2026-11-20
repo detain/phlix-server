@@ -13,7 +13,7 @@ namespace Phlix\Auth;
 
 use Phlix\Common\Database\PruneDeadline;
 use Phlix\Common\Database\RetentionPrune;
-use Phlix\Shared\Database\WriteResult;
+use Phlix\Shared\Auth\GrantConsume;
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
@@ -393,10 +393,12 @@ class TokenSessionRepository
      * table ({@see \Phlix\Auth\AuthManager} lost-race arm) rather than
      * minting on a consumption it never made.
      *
-     * Return table ({@see WriteResult}): an `UPDATE` answers an int rowCount.
-     * `WriteResult::wroteNothing()` (null — the reformat trap — or false) and
-     * an int 0 (another writer flipped the row first, or the grant is gone)
-     * both read as "not consumed by this call".
+     * Return table (`GrantConsume::fromWriteVerdict()`, V059 bank row 6): an
+     * `UPDATE` answers an int rowCount. The unobservable answers (`false` or
+     * `null` — the reformat trap) name `Indeterminate` and an int 0 (another
+     * writer flipped the row first, or the grant is gone) names
+     * `NotConsumed` — both read as "not consumed by this call" through
+     * `won()`; only an int >= 1 names `Consumed`.
      *
      * @param string $jti Presented token's `jti`.
      *
@@ -409,12 +411,12 @@ class TokenSessionRepository
             [$jti]
         );
 
-        if (WriteResult::wroteNothing($result)) {
-            return false;
-        }
-
-        // An UPDATE answers an int rowCount: 0 = this call flipped nothing.
-        return $result !== 0;
+        // V059 bank row 6 (S2-ADOPT 2.4): the verdict math rides the shared
+        // three-state consume vocabulary — fromWriteVerdict folds the
+        // WriteResult predicate and the rowCount reading, and won() hands
+        // this bool seam the same answer (Indeterminate and NotConsumed
+        // share the fail-closed false; only Consumed wins).
+        return GrantConsume::fromWriteVerdict($result)->won();
     }
 
     /**

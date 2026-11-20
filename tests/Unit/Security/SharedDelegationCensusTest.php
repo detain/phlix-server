@@ -74,6 +74,7 @@ final class SharedDelegationCensusTest extends TestCase
     private const F_PKCE = 'Phlix\Shared\Security\Pkce';
     private const F_ORIGIN_POLICY = 'Phlix\Shared\Security\OriginPolicy';
     private const F_SESSION_FAMILY = 'Phlix\Shared\Auth\SessionFamily';
+    private const F_AUTH_GRANT_CONSUME = 'Phlix\Shared\Auth\GrantConsume';
     private const F_SHARED_PASSWORD_HASHER = 'Phlix\Shared\Auth\PasswordHasher';
     private const F_FRAME_CODEC = 'Phlix\Shared\Relay\FrameCodec';
     private const F_SYNCPLAY_DIALECT = 'Phlix\Shared\Relay\SyncPlayDialect';
@@ -249,6 +250,13 @@ final class SharedDelegationCensusTest extends TestCase
      *    importers unaffected, and tests/Unit/Common/Util/RowMapAccessorsTest.php
      *    (behavior + signature-shape pins) is the acceptance baseline and ran
      *    UNMODIFIED (18T/168A).
+     *  - V059-SRV row 6 (same wave): registered the 24th family
+     *    Phlix\Shared\Auth\GrantConsume (F_AUTH_GRANT_CONSUME) — the
+     *    markGrantConsumed arbiter now answers through the shared verdict
+     *    vocabulary (fromWriteVerdict()->won(), S2-ADOPT 2.4 bool seam kept):
+     *    one static forward here, and TokenSessionRepository's
+     *    WriteResult::wroteNothing forward retired (20 -> 19). Net totals
+     *    unmoved; truth table re-pinned test-side against the enum itself.
      * Total 174 sites / 85 family-carrier rows (70 distinct files) + 1
      * collaborator-carrier row (V059 shape N: TxLease @ PhlixMySQLConnection).
      * Re-pin from measured red only.
@@ -263,6 +271,10 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_PKCE => 2,
         self::F_ORIGIN_POLICY => 8,
         self::F_SESSION_FAMILY => 2,
+        // V059 row 6: the srv consume seam answers through the shared verdict
+        // vocabulary — one static forward (fromWriteVerdict); the chained
+        // `->won()` rides the returned instance and is not a static site.
+        self::F_AUTH_GRANT_CONSUME => 1,
         self::F_SHARED_PASSWORD_HASHER => 5,
         self::F_FRAME_CODEC => 3,
         self::F_SYNCPLAY_DIALECT => 19,
@@ -277,7 +289,9 @@ final class SharedDelegationCensusTest extends TestCase
         // honest: the import must keep a recognized site or go dead loudly.
         self::F_DB_TX_LEASE => 0,
         self::F_DB_MYSQL_RETRY_POLICY => 1,
-        self::F_DB_WRITE_RESULT => 20,
+        // V059 row 6: TokenSessionRepository's consume arithmetic folded into
+        // GrantConsume::fromWriteVerdict — one WriteResult forward retired here.
+        self::F_DB_WRITE_RESULT => 19,
         self::F_DB_UUID => 2,
         self::F_DB_UPSERT_SYNTAX => 36,
         // V059 row 5: the srv RowMap is a thin delegate — one static forward
@@ -337,6 +351,9 @@ final class SharedDelegationCensusTest extends TestCase
         ],
         self::F_SESSION_FAMILY => [
             'Auth/JwtHandler.php' => ['CLAIM_PROFILE_ID', 'CLAIM_SESSION_ID'],
+        ],
+        self::F_AUTH_GRANT_CONSUME => [
+            'Auth/TokenSessionRepository.php' => ['fromWriteVerdict'],
         ],
         self::F_SHARED_PASSWORD_HASHER => [
             'Auth/PasswordHasher.php' => ['ARGON2ID_OPTIONS', 'hash', 'needsRehash', 'verify'],
@@ -419,7 +436,6 @@ final class SharedDelegationCensusTest extends TestCase
             'Admin/NewsletterSender.php' => ['wroteNothing'],
             'Auth/DbLoginRateLimitStore.php' => ['wroteNothing'],
             'Auth/QuickConnectStateStore.php' => ['wroteNothing', 'wroteNothing', 'wroteNothing'],
-            'Auth/TokenSessionRepository.php' => ['wroteNothing'],
             'Auth/WebAuthn/WebAuthnChallengeStore.php' => ['wroteNothing'],
             'Casting/CastingSessionStore.php' => ['wroteNothing'],
             'Media/Library/ScanJobRepository.php' => ['wroteNothing', 'wroteNothing'],

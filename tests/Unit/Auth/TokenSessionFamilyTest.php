@@ -17,6 +17,7 @@ use Phlix\Auth\TokenSessionRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Shared\Auth\GrantConsume;
 use Phlix\Session\SessionManager;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
@@ -1006,6 +1007,56 @@ final class TokenSessionFamilyTest extends TestCase
                 'driver answer ' . var_export($driverAnswer, true)
             );
         }
+    }
+
+    /**
+     * V059 bank row 6 (S2-ADOPT 2.4): the seam consumes the shared enum
+     * vocabulary directly — the same truth table seen through
+     * `GrantConsume::fromWriteVerdict()->won()`, named per state. The
+     * documented unreachable-shape divergence is a numeric STRING verdict
+     * (a '0' answer): the retired local math answered strict-`!== 0`, so
+     * `'0'` read as a win by mystery; the enum folds it through
+     * `WriteResult::affectedRows()` to the conservative 0 rows = LOST.
+     * `Workerman\MySQL\Connection::query()` answers an UPDATE as an int
+     * rowCount (the measured contract in `Phlix\Common\Database` AGENTS
+     * prose), so the divergent shape cannot reach this seam; the pin names
+     * it rather than hiding it.
+     */
+    public function testMarkGrantConsumedVerdictRidesTheSharedEnumVocabulary(): void
+    {
+        $cases = [
+            'winner' => [1, GrantConsume::Consumed],
+            'loser' => [0, GrantConsume::NotConsumed],
+            'reformat-trap' => [null, GrantConsume::Indeterminate],
+            'driver-error' => [false, GrantConsume::Indeterminate],
+        ];
+        foreach ($cases as $label => [$driverAnswer, $verdict]) {
+            $this->assertSame(
+                $verdict,
+                GrantConsume::fromWriteVerdict($driverAnswer),
+                'verdict name for ' . $label
+            );
+
+            $db = $this->createMock(Connection::class);
+            $db->expects($this->once())
+                ->method('query')
+                ->with($this->stringStartsWith('UPDATE auth_refresh_grants SET consumed_at = NOW()'))
+                ->willReturn($driverAnswer);
+            $this->assertSame(
+                $verdict->won(),
+                (new TokenSessionRepository($db))->markGrantConsumed(str_repeat('0a', 16)),
+                'seam answer for ' . $label
+            );
+        }
+
+        // The fail-closed law: only Consumed wins; every other name refuses.
+        $this->assertTrue(GrantConsume::Consumed->won());
+        $this->assertFalse(GrantConsume::NotConsumed->won());
+        $this->assertFalse(GrantConsume::Indeterminate->won());
+
+        // Named divergence (unreachable shape — see docblock).
+        $this->assertSame(GrantConsume::NotConsumed, GrantConsume::fromWriteVerdict('0'));
+        $this->assertSame(GrantConsume::Consumed, GrantConsume::fromWriteVerdict('1'));
     }
 
     /**

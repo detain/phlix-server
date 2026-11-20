@@ -51,6 +51,19 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Advertised host candidates are now judged by the estate's one host grammar.**
+  `HostnameCandidateSanitizer::isAcceptable` — the gate every `hostnameCandidates`
+  entry passes before it is offered to the hub — forwards to
+  `Phlix\Shared\Hub\HostGrammar::isValidCandidate` (v0.57 M-34 public-stable), so
+  the sender-side check and the hub-side intake check are literally the same code.
+  The local grammar twin (its `LABEL` constant and `isHost()` walker) retired under
+  an in-file extinction tripwire after a 55,938-case both-direction differential
+  measured zero verdict changes — including the shapes the alignment brief had
+  pre-computed as divergent: the twin carried its lowercase classes under `/i`, so
+  case tolerance never actually differed. The mapping leg (`sanitizeHostname`)
+  stays in-repo: no shared class maps raw `gethostname()` bytes onto the grammar.
+  No candidate that was ever advertised stops being one; no rejected one returns.
+  [refactor V057-C1-SRV srv-C5b]
 - **The 3x liveness-margin law is now executable at the relay state writer.**
   `RelayConsumer`'s heartbeat-cadence pair — the `staleAfterSeconds` window it
   declares to the S40 staleness-gate readers — now runs through

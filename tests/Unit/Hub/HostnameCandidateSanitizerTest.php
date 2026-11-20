@@ -73,4 +73,64 @@ final class HostnameCandidateSanitizerTest extends TestCase
             HostnameCandidateSanitizer::filter(['http://my_nas.local:8096', 'http://10.0.0.2:8096']),
         );
     }
+
+    /**
+     * Ratified accept-set table for the delegated grammar (srv-C5b). Every
+     * vector's verdict is identical under the retired in-repo twin and the
+     * shared HostGrammar — the both-direction 55,938-vector differential
+     * (gates/C1SRV-4b-differential.log) proved the fold moves no acceptance,
+     * including the case shapes: the old local LABEL was lowercase-only but
+     * carried /i, so uppercase was NEVER actually rejected. This table is the
+     * committed extract of that proof for the estate ledger.
+     *
+     * @return array<string, array{string, bool}>
+     */
+    public static function ratifiedGrammarVectors(): array
+    {
+        return [
+            'uppercase bare host' => ['HOST.EXAMPLE', true],
+            'uppercase in url' => ['http://EXAMPLE.com:8096', true],
+            'uppercase mixed label' => ['Phlix-Node.Local:8096', true],
+            'bare ipv6' => ['::1', true],
+            'bracketed ipv6' => ['[fe80::1]', true],
+            'backslash in brackets' => ['[a\\b]', false],
+            'backslash bare' => ['a\\b', false],
+            'empty label' => ['x..y', false],
+            'trailing hyphen label' => ['host-.example', false],
+            'six-digit port' => ['host:123456', false],
+            'port above range url' => ['https://a.com:65536', false],
+            'url path allowed' => ['https://a.com/base', true],
+            'empty url host' => ['http://', false],
+        ];
+    }
+
+    #[DataProvider('ratifiedGrammarVectors')]
+    public function testRatifiedGrammarVectors(string $candidate, bool $expected): void
+    {
+        $this->assertSame($expected, HostnameCandidateSanitizer::isAcceptable($candidate), $candidate);
+    }
+
+    /**
+     * Extinction tripwire (srv-C5b): the sanitizer's candidate grammar now
+     * lives ONLY in shared HostGrammar. Re-growing any local parsing — the
+     * retired LABEL constant or isHost() method — reddens here before it can
+     * fork the law the hub DTOs enforce at intake.
+     */
+    public function testCandidateGrammarLivesOnlyInSharedHostGrammar(): void
+    {
+        $src = (string) file_get_contents(__DIR__ . '/../../../src/Hub/HostnameCandidateSanitizer.php');
+
+        $this->assertStringNotContainsString('private const LABEL', $src, 'retired grammar LABEL re-grown in-repo');
+        $this->assertStringNotContainsString('function isHost', $src, 'retired isHost() re-grown in-repo');
+        $this->assertStringNotContainsString(
+            'filter_var',
+            $src,
+            'validation machinery must not return to the sanitizer'
+        );
+        $this->assertSame(
+            1,
+            substr_count($src, 'HostGrammar::isValidCandidate('),
+            'the delegation voice print must remain exactly one forward',
+        );
+    }
 }

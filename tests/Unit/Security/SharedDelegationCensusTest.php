@@ -83,6 +83,7 @@ final class SharedDelegationCensusTest extends TestCase
     private const F_DB_UUID = 'Phlix\Shared\Database\Uuid';
     private const F_SETTINGS_CODEC = 'Phlix\Shared\Settings\SettingsCodec';
     private const F_RELAY_LIVENESS_WINDOWS = 'Phlix\Shared\Relay\LivenessWindows';
+    private const F_HUB_HOST_GRAMMAR = 'Phlix\Shared\Hub\HostGrammar';
 
     /**
      * Exact static-forward site counts over src/ at tip 3dd624e0 (the
@@ -145,8 +146,12 @@ final class SharedDelegationCensusTest extends TestCase
      *    T_NEW, not T_STRING), so the recognizer grew T_NEW acceptance exactly as the
      *    T_MATCH precedent grew it for CredentialDigest::match. The import-orphan net
      *    is what forced this adjudication into the open.
-     * Total 111 sites / 48 family-carrier rows (42 distinct files — the new
-     * carrier file was already counted through its F_SUPPORT_JSON row).
+     *  - srv-C5b (same lane): Shared\Hub\HostGrammar 1 — HostnameCandidateSanitizer's
+     *    candidate check became a pure delegation to the estate grammar the hub DTOs
+     *    enforce at intake, after a both-direction 55,938-vector differential measured
+     *    0 verdict deltas; the retired local LABEL/isHost twin is pinned extinct by a
+     *    voice-print tripwire (the sanitizer file joins the carrier set: 43 distinct).
+     * Total 112 sites / 49 family-carrier rows (43 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -168,6 +173,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_UUID => 2,
         self::F_SETTINGS_CODEC => 1,
         self::F_RELAY_LIVENESS_WINDOWS => 1,
+        self::F_HUB_HOST_GRAMMAR => 1,
     ];
 
     /**
@@ -298,6 +304,9 @@ final class SharedDelegationCensusTest extends TestCase
         ],
         self::F_RELAY_LIVENESS_WINDOWS => [
             'Hub/RelayConsumer.php' => ['new'],
+        ],
+        self::F_HUB_HOST_GRAMMAR => [
+            'Hub/HostnameCandidateSanitizer.php' => ['isValidCandidate'],
         ],
     ];
 

@@ -309,8 +309,9 @@ class PhlixMySQLConnection extends Connection
             // else -> the blanket arm, which ALWAYS rolls the transaction
             // back. It deliberately does NOT consult
             // rollsBackWholeTransaction(): the surgical 1205 semantics that
-            // predicate models are the owner-pending Q-A decision (design
-            // §Q-A), not a behavior this refactor may smuggle in.
+            // predicate models were the owner-pending Q-A decision (design
+            // §Q-A); ratified 2026-11-21 (DECISIONS.md entry 11): the
+            // else-arm deliberately does NOT consult it, as landed.
             $verdict = MysqlRetryPolicy::classify(
                 MysqlError::driverCode($e->errorInfo) ?? 0,
                 $this->pdo instanceof \PDO && $this->pdo->inTransaction(),

@@ -155,10 +155,12 @@ final class WebAuthnLegacyDecodeParityTest extends TestCase
     }
 
     /**
-     * The shared strict arm still diverges from the ratified law exactly where
-     * review r1 measured (both directions), so this seam stays un-delegated
-     * until the v0.57 modernization ruling. Non-parity here is the REASON,
-     * pinned with executed expectations (never hand-computed bytes).
+     * The shared NO-PAD strict arm still diverges from the ratified law exactly
+     * where review r1 measured (both directions) — that divergence is why the
+     * v0.57 modernization stays banked and why delegation (V059 row 7, at
+     * v0.59.0) rides the PADDED arm (decodePadded, this ratified body
+     * verbatim) instead. Non-parity here is the REASON, pinned with executed
+     * expectations (never hand-computed bytes).
      */
     public function test_sharedArmStillDiverges_whereTheRatifiedLawSits(): void
     {

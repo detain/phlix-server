@@ -257,14 +257,25 @@ final class SharedDelegationCensusTest extends TestCase
      *    one static forward here, and TokenSessionRepository's
      *    WriteResult::wroteNothing forward retired (20 -> 19). Net totals
      *    unmoved; truth table re-pinned test-side against the enum itself.
-     * Total 174 sites / 85 family-carrier rows (70 distinct files) + 1
+     *  - V059-SRV row 7 (same wave): the WebAuthn strict decode seam moved
+     *    onto Phlix\Shared\Security\Base64Url::decodePadded (F_BASE64URL
+     *    8 -> 9) — the ratified ee9f1c4c body landed VERBATIM into shared at
+     *    v0.59.0 (8799cd0 differential: srv body vs the kernel method,
+     *    deltas=0), so the local alphabet-pair mint is gone and its
+     *    RENT_B64_PAIR_MINTS entry retired the same commit (the rot leg
+     *    convicted it, teeth logs in the V059-SRV register). The throw-on
+     *    false/empty guard stays consumer-side message-for-message; the
+     *    ee9f1c4c acceptance corpus (WebAuthnLegacyDecodeParityTest +
+     *    tests/Unit/Auth/WebAuthn/) drives the seam through reflection and
+     *    ran UNMODIFIED.
+     * Total 175 sites / 85 family-carrier rows (70 distinct files) + 1
      * collaborator-carrier row (V059 shape N: TxLease @ PhlixMySQLConnection).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
      */
     private const FAMILY_FORWARD_SITES = [
-        self::F_BASE64URL => 8,
+        self::F_BASE64URL => 9,
         self::F_ED25519_PEM => 4,
         self::F_HMAC => 4,
         self::F_CREDENTIAL_DIGEST => 5,
@@ -315,7 +326,9 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_BASE64URL => [
             'Auth/JwtHandler.php' => ['encode', 'decode'],
             'Auth/SignedUrl.php' => ['encode'],
-            'Auth/WebAuthn/WebAuthnManager.php' => ['encode'],
+            // V059 row 7: the decode seam rides the strict PADDING arm — the
+            // ratified ee9f1c4c body landed verbatim in shared at v0.59.0.
+            'Auth/WebAuthn/WebAuthnManager.php' => ['encode', 'decodePadded'],
             'Hub/Ed25519KeyManager.php' => ['encode'],
             'Hub/HubClient.php' => ['decode'],
             'Hub/HubJwtValidator.php' => ['decode'],
@@ -548,10 +561,13 @@ final class SharedDelegationCensusTest extends TestCase
      * adoption to Base64Url::encode(random_bytes(32)) is a behavior-zero
      * one-liner named as a follow-up row in the SRV-CENSUS2 register — until
      * it lands, this entry proves the law has teeth there and never silently
-     * widens. WebAuthnManager mints the pair in its RATIFIED legacy strict
-     * decode (ee9f1c4c restore; permanent-v0.56 law, see its rationale). The
-     * rent test reddens in BOTH directions: an entry whose mint disappeared,
-     * and a mint that lacks its entry.
+     * widens. The rent test reddens in BOTH directions: an entry whose mint
+     * disappeared, and a mint that lacks its entry. (WebAuthnManager paid
+     * rent here while its ratified ee9f1c4c decode body minted the pair
+     * inline; V059 row 7 moved that seam onto the shared padding arm
+     * (Base64Url::decodePadded — the ratified body verbatim at v0.59.0), so
+     * the mint is gone and the entry was deleted the same commit — the
+     * rot leg convicted the stale allowlist exactly as designed.)
      *
      * @var array<string, string>
      */
@@ -559,13 +575,6 @@ final class SharedDelegationCensusTest extends TestCase
         'Auth/QuickConnectStateStore.php' =>
             'unadopted base64url verifier mint (32B) — adoption onto Base64Url::encode() '
             . 'is queued (SRV-CENSUS2 report); on landing, delete this entry (rent test enforces)',
-        'Auth/WebAuthn/WebAuthnManager.php' =>
-            'ratified legacy strict base64url decode (strtr+str_pad) RESTORED at ee9f1c4c '
-            . '(S1 r1 CRITICAL-1: the shared strict arm moves the malformed-shape policy BOTH '
-            . 'directions — 6,646 truncated-padding + 2,264 embedded-whitespace vectors; pinned '
-            . 'by tests/Unit/Security/WebAuthnLegacyDecodeParityTest.php; modernization banked '
-            . 'v0.57) — the decode arm mints the alphabet pair BY LAW, the encode arm still '
-            . 'delegates; this entry is permanent unless the v0.57 strictness ruling lands',
     ];
 
     /**

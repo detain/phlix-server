@@ -869,29 +869,26 @@ class WebAuthnManager
      * Strict base64url decode: wrong alphabet or padding garbage throws the
      * caller's ceremony-level error rather than smuggling in a mangled key.
      *
-     * NOT delegated to the shared {@see Base64Url} strict arm: an executed
-     * 234k-vector malformed-shape corpus (adversarial review r1 of the
-     * v0.56.0 adoption wave) proved the delegation moves the acceptance
-     * policy in BOTH directions. The legacy explicit `str_pad` before strict
-     * decode tolerates truncated-padding forms (length % 4 == 3 ending in a
-     * single '=', e.g. 'PQ=' — 6,646 vectors) that the shared no-pad arm
-     * rejects, and rejects embedded-whitespace forms (e.g. "p0\n" — 2,264
-     * vectors) that the shared arm accepts because strict base64_decode
-     * strips whitespace before validating. Canonical authenticator output
-     * (padded and unpadded) is identical either way (50k + 400k controls,
-     * zero diffs), so realistic wire bytes were never at stake — but the
-     * ratified parse semantics at this security seam are preserved here,
-     * byte-identical to the pre-adoption body, and pinned both directions by
-     * tests/Unit/Security/WebAuthnLegacyDecodeParityTest.php. The strictness
-     * MODERNIZATION (rejecting truncation, refusing embedded whitespace) is
-     * banked as a v0.57 proposal row, not shipped in a zero-behavior wave.
+     * V059 bank row 7: the ceremony now rides the shared strict PADDING arm
+     * ({@see Base64Url::decodePadded()}), landed at v0.59.0 as THIS body
+     * verbatim (strtr → explicit str_pad to a multiple of 4 → strict
+     * base64_decode) with PHP's `false` folded to `''` under that class'
+     * never-false law. The fold is observationally zero-delta here: the
+     * consumer guard has always treated `false` and `''` identically
+     * (`=== false || === ''`), and the ee9f1c4c-era parity corpus
+     * (tests/Unit/Security/WebAuthnLegacyDecodeParityTest.php, 234k
+     * malformed-shape vectors, both directions) stays the acceptance set —
+     * it drives the live seam through reflection, never by body identity.
+     * The NO-PAD strict arm ({@see Base64Url::decode()}) still moves the
+     * malformed-shape policy in BOTH directions ('PQ=' truncations it
+     * rejects, "p0\n" embeddings it accepts) — the ee9f1c4c refusal stands
+     * against delegating to THAT arm, and the strictness MODERNIZATION
+     * stays banked, unchanged.
      */
     private static function base64UrlDecode(string $encoded, string $errorMessage): string
     {
-        $normalized = strtr($encoded, '-_', '+/');
-        $padded = str_pad($normalized, (int) (ceil(strlen($normalized) / 4) * 4), '=');
-        $decoded = base64_decode($padded, true);
-        if ($decoded === false || $decoded === '') {
+        $decoded = Base64Url::decodePadded($encoded);
+        if ($decoded === '') {
             throw new \InvalidArgumentException($errorMessage);
         }
         return $decoded;

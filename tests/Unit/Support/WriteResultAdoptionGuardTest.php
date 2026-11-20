@@ -72,14 +72,15 @@ use RecursiveIteratorIterator;
  * client has no silent failure return).
 *
  * The denominator the guard prints is the exact count it examined:
- * **101 `INSERT`/`REPLACE` `->query()` call tokens** (95 with a literal first
- * argument, 6 resolved through a `$sql` variable — including the try/catch
- * retry arms of the two ScanJobRepository sites and of the Device-M1
- * casting_sessions register), of which **20 consume the result** (18 logical
- * sites; the retry arms share consumption; S331's `ensurePlaceholderArtist()`
- * added one, and CastingSessionStore's two INSERT arms feed the one
- * `wroteNothing` verdict the same shared-consumption way — re-measured from
- * the phpunit red by the device-M1 lane, 2026-10-02). The plan
+ * **103 `INSERT`/`REPLACE` `->query()` call tokens** (literal-first calls and
+ * `$sql`-variable statements alike — including the try/catch retry arms of the
+ * two ScanJobRepository sites, of the Device-M1 casting_sessions register and
+ * of MusicLibraryScanner's upsertTrack pair), of which **21 consume the
+ * result** (17 logical sites; four of the 21 tokens are try/retry arms sharing
+ * one consumption verdict — S331's `ensurePlaceholderArtist()` contributed one
+ * logical site, and the device-M1 lane's 2026-10-02 reading of 20 consumed
+ * (18 logical sites) was overtaken by the deferred-#54 re-pin 20→21 and the
+ * CP-029 total re-pin 101→103, each measured from its phpunit red). The plan
  * recorded 86/11; this scan is what a faithful token walk of the tree actually
  * finds, and it is pinned below so a change to the landscape reddens here
  * rather than silently drifting the inventory.
@@ -220,11 +221,12 @@ final class WriteResultAdoptionGuardTest extends TestCase
     private const EXPECTED_TOTAL_INSERT_CALLS = 103;
 
     /**
-     * The denominator, part 2: how many of those 99 consume their result.
-     * 18 tokens = 16 logical sites (the two ScanJobRepository sites each
-     * contribute a try arm and a retry arm; both arms feed one consumption).
-     * All 18 must be consumed through `WriteResult::wroteNothing()` /
-     * `statementWroteNothing()`.
+     * The denominator, part 2: how many of those 103 consume their result.
+     * 21 tokens = 17 logical sites (four sites — the two ScanJobRepository
+     * sites, CastingSessionStore's register and MusicLibraryScanner's
+     * upsertTrack — each contribute a try arm and a retry arm; both arms feed
+     * one consumption). All 21 must be consumed through
+     * `WriteResult::wroteNothing()` / `statementWroteNothing()`.
      * Re-pinned 15→17 by S518: both new sites above consume their result through
      * `WriteResult::wroteNothing()` — measured 17 from the phpunit red.
      * Re-pinned 17→18 by the auth-security lane: `WebAuthnChallengeStore::issue()`
@@ -331,7 +333,7 @@ final class WriteResultAdoptionGuardTest extends TestCase
 
     /**
      * The denominator is pinned so a scan that examined nothing cannot pass
-     * silently: 99 `INSERT`/`REPLACE` `->query()` call tokens, 18 of which
+     * silently: 103 `INSERT`/`REPLACE` `->query()` call tokens, 21 of which
      * consume the result.
      */
     public function testTheInsertConsumerInventoryDenominatorIsPinned(): void

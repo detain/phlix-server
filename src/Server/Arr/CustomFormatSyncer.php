@@ -17,6 +17,7 @@ use Phlix\Common\Uuid;
 use Phlix\Shared\Arr\RadarrClient;
 use Phlix\Shared\Arr\SyncResult;
 use Phlix\Shared\Arr\TrashGuidesProvider;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -357,11 +358,11 @@ class CustomFormatSyncer
         $id = $this->generateUuid();
 
         $this->db->query(
-            'INSERT INTO custom_format_sync '
+            UpsertSyntax::adapt('INSERT INTO custom_format_sync '
                 . '(id, sync_type, remote_id, remote_name, trash_version, synced_at) '
-                . 'VALUES (?, ?, ?, ?, ?, NOW()) '
-                . 'ON DUPLICATE KEY UPDATE remote_name = VALUES(remote_name), '
-                . 'trash_version = VALUES(trash_version), synced_at = NOW()',
+                . 'VALUES (?, ?, ?, ?, ?, NOW()) AS new_row '
+                . 'ON DUPLICATE KEY UPDATE remote_name = new_row.remote_name, '
+                . 'trash_version = new_row.trash_version, synced_at = NOW()'),
             [$id, $syncType, $remoteId, $remoteName, $version]
         );
     }

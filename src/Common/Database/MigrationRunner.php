@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Common\Database;
 
 use Phlix\Shared\Database\MysqlError;
+use Phlix\Shared\Database\UpsertSyntax;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
 use Throwable;
@@ -625,9 +626,9 @@ final class MigrationRunner
     {
         try {
             $connection->query(
-                'INSERT INTO ' . self::LEDGER_TABLE . ' (name, applied_at, checksum) '
-                . 'VALUES (?, ?, ?) '
-                . 'ON DUPLICATE KEY UPDATE applied_at = VALUES(applied_at), checksum = VALUES(checksum)',
+                UpsertSyntax::adapt('INSERT INTO ' . self::LEDGER_TABLE . ' (name, applied_at, checksum) '
+                . 'VALUES (?, ?, ?) AS new_row '
+                . 'ON DUPLICATE KEY UPDATE applied_at = new_row.applied_at, checksum = new_row.checksum'),
                 [$name, time(), $checksum]
             );
         } catch (Throwable $e) {

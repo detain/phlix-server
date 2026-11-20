@@ -207,7 +207,12 @@ final class SharedDelegationCensusTest extends TestCase
      *    row upsert, ChannelManager's channel-row upsert (the :413 added_at=NOW()
      *    site there is a refs=0 KEEP) and LiveTvManager's schedule upsert adopt the
      *    row-alias form behind adapt().
-     * Total 146 sites / 75 family-carrier rows (62 distinct files).
+     *  - srv-W2-UPSERT C8 (same lane, theming/access/server/common cluster):
+     *    UpsertSyntax 28 → 35 — ThemeMediaRepository, ProfileTagService,
+     *    StreamSessionService, CustomFormatSyncer, LastfmSessionRepository,
+     *    MigrationRunner's ledger stamp (self::LEDGER_TABLE-resolved concat) and
+     *    StreamManager's session-row upsert adopt the row-alias form behind adapt().
+     * Total 153 sites / 82 family-carrier rows (68 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -230,7 +235,7 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_DB_MYSQL_RETRY_POLICY => 1,
         self::F_DB_WRITE_RESULT => 20,
         self::F_DB_UUID => 2,
-        self::F_DB_UPSERT_SYNTAX => 28,
+        self::F_DB_UPSERT_SYNTAX => 35,
         self::F_SETTINGS_CODEC => 1,
         self::F_RELAY_LIVENESS_WINDOWS => 1,
         self::F_HUB_HOST_GRAMMAR => 1,
@@ -398,6 +403,13 @@ final class SharedDelegationCensusTest extends TestCase
             'LiveTv/GuideManager.php' => ['adapt'],
             'LiveTv/LiveTvManager.php' => ['adapt'],
             'LiveTv/TimeShift/DbTimeShiftSessionStore.php' => ['adapt'],
+            'Access/ProfileTagService.php' => ['adapt'],
+            'Access/StreamSessionService.php' => ['adapt'],
+            'Common/Database/MigrationRunner.php' => ['adapt'],
+            'Media/Streaming/StreamManager.php' => ['adapt'],
+            'Server/Arr/CustomFormatSyncer.php' => ['adapt'],
+            'Server/Integrations/Lastfm/LastfmSessionRepository.php' => ['adapt'],
+            'Theming/ThemeMediaRepository.php' => ['adapt'],
         ],
         self::F_SETTINGS_CODEC => [
             'Admin/SettingsRepository.php' => ['decode'],

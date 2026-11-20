@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Access;
 
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -160,8 +161,9 @@ final class ProfileTagService
 
         // Upsert: insert or update on duplicate key
         $this->db->query(
-            'INSERT INTO profile_tags (profile_id, tag, tag_type) VALUES (?, ?, ?)
-             ON DUPLICATE KEY UPDATE tag = VALUES(tag), tag_type = VALUES(tag_type)',
+            UpsertSyntax::adapt('INSERT INTO profile_tags (profile_id, tag, tag_type) VALUES (?, ?, ?)
+              AS new_row
+             ON DUPLICATE KEY UPDATE tag = new_row.tag, tag_type = new_row.tag_type'),
             [$profileId, $tag, $type],
         );
 

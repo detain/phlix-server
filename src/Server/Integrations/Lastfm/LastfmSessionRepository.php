@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Integrations\Lastfm;
 
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -79,10 +80,11 @@ class LastfmSessionRepository
     public function save(string $userId, string $sessionKey): void
     {
         $this->db->query(
-            'INSERT INTO lastfm_sessions (user_id, session_key, connected_at)
+            UpsertSyntax::adapt('INSERT INTO lastfm_sessions (user_id, session_key, connected_at)
              VALUES (?, ?, NOW())
-             ON DUPLICATE KEY UPDATE session_key = VALUES(session_key),
-                                     connected_at = VALUES(connected_at)',
+              AS new_row
+             ON DUPLICATE KEY UPDATE session_key = new_row.session_key,
+                                     connected_at = new_row.connected_at'),
             [$userId, $sessionKey]
         );
     }

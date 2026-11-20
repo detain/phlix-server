@@ -17,6 +17,7 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Uuid;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Streaming\Dash\DashStreamer;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -420,12 +421,13 @@ class StreamManager
     private function persistStreamState(StreamState $state): void
     {
         $this->db->query(
-            "INSERT INTO playback_state
+            UpsertSyntax::adapt("INSERT INTO playback_state
              (id, session_id, media_item_id, position_ticks, duration_ticks, playback_status)
              VALUES (?, ?, ?, ?, ?, ?)
+              AS new_row
              ON DUPLICATE KEY UPDATE
-             position_ticks = VALUES(position_ticks),
-             playback_status = VALUES(playback_status)",
+             position_ticks = new_row.position_ticks,
+             playback_status = new_row.playback_status"),
             [
                 $state->id,
                 $state->sessionId,

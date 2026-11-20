@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Theming;
 
 use Phlix\Common\Util\RowMap;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -57,7 +58,7 @@ class ThemeMediaRepository
         $videoFormat = $themeMedia->video?->format;
 
         $this->db->query(
-            "INSERT INTO theme_media (
+            UpsertSyntax::adapt("INSERT INTO theme_media (
                 library_id,
                 audio_path,
                 audio_url,
@@ -71,18 +72,19 @@ class ThemeMediaRepository
                 video_format,
                 scanned_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             AS new_row
             ON DUPLICATE KEY UPDATE
-                audio_path = VALUES(audio_path),
-                audio_url = VALUES(audio_url),
-                audio_duration = VALUES(audio_duration),
-                audio_format = VALUES(audio_format),
-                video_path = VALUES(video_path),
-                video_url = VALUES(video_url),
-                video_duration = VALUES(video_duration),
-                video_width = VALUES(video_width),
-                video_height = VALUES(video_height),
-                video_format = VALUES(video_format),
-                scanned_at = VALUES(scanned_at)",
+                audio_path = new_row.audio_path,
+                audio_url = new_row.audio_url,
+                audio_duration = new_row.audio_duration,
+                audio_format = new_row.audio_format,
+                video_path = new_row.video_path,
+                video_url = new_row.video_url,
+                video_duration = new_row.video_duration,
+                video_width = new_row.video_width,
+                video_height = new_row.video_height,
+                video_format = new_row.video_format,
+                scanned_at = new_row.scanned_at"),
             [
                 $themeMedia->libraryId,
                 $audioPath,

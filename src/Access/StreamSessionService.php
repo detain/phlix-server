@@ -15,6 +15,7 @@ use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Util\RowMap;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -640,11 +641,14 @@ final class StreamSessionService
      */
     public function updateStreamLimit(string $profileId, int $maxConcurrentStreams, ?int $maxTotalBandwidthKbps): bool
     {
-        $this->db->query(
+        $sql = UpsertSyntax::adapt(
             'INSERT INTO profile_stream_limits (profile_id, max_concurrent_streams, max_total_bandwidth_kbps)'
             . ' VALUES (?, ?, ?)'
-            . ' ON DUPLICATE KEY UPDATE max_concurrent_streams = VALUES(max_concurrent_streams),'
-            . ' max_total_bandwidth_kbps = VALUES(max_total_bandwidth_kbps)',
+            . '  AS new_row ON DUPLICATE KEY UPDATE max_concurrent_streams = new_row.max_concurrent_streams,'
+            . ' max_total_bandwidth_kbps = new_row.max_total_bandwidth_kbps'
+        );
+        $this->db->query(
+            $sql,
             [$profileId, $maxConcurrentStreams, $maxTotalBandwidthKbps],
         );
 

@@ -32,7 +32,7 @@ use RecursiveIteratorIterator;
  * Five legs, one classifier (census and canary share every detector, so
  * they can never drift apart — the SRV-MICRO r3 law, kept):
  *
- *  1. Exact per-family static-forward pins across src/ (68 sites, 11
+ *  1. Exact per-family static-forward pins across src/ (107 sites, 13
  *     families). S431 discipline: re-pin ONLY from a measured red after
  *     adjudicating every delta. An empty walk returns all-zeros and
  *     reddens — a dead scanner never reads as "law holds".
@@ -78,6 +78,8 @@ final class SharedDelegationCensusTest extends TestCase
     private const F_FRAME_CODEC = 'Phlix\Shared\Relay\FrameCodec';
     private const F_SYNCPLAY_DIALECT = 'Phlix\Shared\Relay\SyncPlayDialect';
     private const F_SUPPORT_JSON = 'Phlix\Shared\Support\Json';
+    private const F_DB_MYSQL_ERROR = 'Phlix\Shared\Database\MysqlError';
+    private const F_DB_WRITE_RESULT = 'Phlix\Shared\Database\WriteResult';
 
     /**
      * Exact static-forward site counts over src/ at tip 3dd624e0 (the
@@ -117,7 +119,14 @@ final class SharedDelegationCensusTest extends TestCase
      *    directions are enforced: entry without mint and mint without entry
      *    each redden — this is exactly the law that caught the live working
      *    tree while the revert was staged (three legs red, zero laundering).
-     * Total 68 sites / 26 family-carrier rows (22 distinct files).
+     *  - srv-W2/srv-W3a (v0.57 consumer wave, SRV-WAVE-AB2 lane): the
+     *    Shared\Database\MysqlError 19 and Shared\Database\WriteResult 20
+     *    pins are the RETIREMENT sides, not new
+     *    delegations: the in-repo twins were deleted at 2fd292a0/853e68a5 and the consumer
+     *    imports now name the vendor kernel directly. The unregistered-shared-import net
+     *    caught the imports (red at tip 853e68a5, 'imported that the census has never heard
+     *    of'); this registration is the cure, counts re-pinned from the measured walk.
+     * Total 107 sites / 45 family-carrier rows (40 distinct files).
      * Re-pin from measured red only.
      *
      * @var array<string, int>
@@ -134,6 +143,8 @@ final class SharedDelegationCensusTest extends TestCase
         self::F_FRAME_CODEC => 3,
         self::F_SYNCPLAY_DIALECT => 19,
         self::F_SUPPORT_JSON => 8,
+        self::F_DB_MYSQL_ERROR => 19,
+        self::F_DB_WRITE_RESULT => 20,
     ];
 
     /**
@@ -222,6 +233,29 @@ final class SharedDelegationCensusTest extends TestCase
             'Server/Http/Controllers/MediaMarkerController.php' => ['decodeInbound'],
             'Server/Http/Request.php' => ['decodeInbound', 'decodeInbound'],
             'Server/WebSocket/MessageHandler.php' => ['decodeInbound'],
+        ],
+        self::F_DB_MYSQL_ERROR => [
+            'Auth/AuthManager.php' => ['DUPLICATE_ENTRY_PHRASE', 'SQLSTATE_INTEGRITY', 'driverCode', 'isDuplicateKey'],
+            'Common/Database/MigrationRunner.php' => ['driverCode'],
+            'Common/Database/PhlixMySQLConnection.php' => ['CR_SERVER_GONE_ERROR', 'CR_SERVER_LOST', 'driverCode'],
+            'Common/Database/RetentionPrune.php' => ['driverCode', 'driverCode', 'isDeadlock'],
+            'Media/Library/ItemRepository.php' => ['DUPLICATE_ENTRY_PHRASE', 'SQLSTATE_INTEGRITY', 'driverCode', 'isDuplicateKey'],
+            'Media/Library/ScanJobRepository.php' => ['ER_LOCK_WAIT_TIMEOUT', 'driverCode', 'driverCode', 'isDeadlock'],
+        ],
+        self::F_DB_WRITE_RESULT => [
+            'Admin/NewsletterSender.php' => ['wroteNothing'],
+            'Auth/DbLoginRateLimitStore.php' => ['wroteNothing'],
+            'Auth/QuickConnectStateStore.php' => ['wroteNothing', 'wroteNothing', 'wroteNothing'],
+            'Auth/TokenSessionRepository.php' => ['wroteNothing'],
+            'Auth/WebAuthn/WebAuthnChallengeStore.php' => ['wroteNothing'],
+            'Casting/CastingSessionStore.php' => ['wroteNothing'],
+            'Media/Library/ScanJobRepository.php' => ['wroteNothing', 'wroteNothing'],
+            'Media/Music/MusicLibraryScanner.php' => ['wroteNothing'],
+            'Plugins/OAuth2/DbOAuth2StateStore.php' => ['wroteNothing', 'wroteNothing'],
+            'Plugins/Oidc/DbOidcStateStore.php' => ['wroteNothing', 'wroteNothing'],
+            'Server/Integrations/Lastfm/DbLastfmOAuthStateStore.php' => ['wroteNothing', 'wroteNothing'],
+            'Server/Integrations/Trakt/DbTraktOAuthStateStore.php' => ['wroteNothing', 'wroteNothing'],
+            'Stats/ClientHeartbeatStore.php' => ['wroteNothing'],
         ],
     ];
 

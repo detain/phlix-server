@@ -721,7 +721,7 @@ final class Messages
      *
      * @example
      * ```php
-     * $msg = Messages::error('GROUP_FULL', 'Cannot join: group is full');
+     * $msg = Messages::error('syncplay.group_full', 'Cannot join: group is full');
      * $msg = Messages::error('HANDLER_ERROR', 'Internal error', ['trace' => '...']);
      * ```
      */
